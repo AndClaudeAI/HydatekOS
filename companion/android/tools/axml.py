@@ -13,6 +13,7 @@ ANDROID = "http://schemas.android.com/apk/res/android"
 ATTR = {
     "theme": 0x01010000, "label": 0x01010001, "icon": 0x01010002, "name": 0x01010003,
     "permission": 0x01010006, "exported": 0x01010010, "launchMode": 0x0101001D,
+    "excludeFromRecents": 0x01010017,
     "scheme": 0x01010027, "host": 0x01010028, "minSdkVersion": 0x0101020C,
     "versionCode": 0x0101021B, "versionName": 0x0101021C, "maxSdkVersion": 0x01010271,
     "targetSdkVersion": 0x01010270, "allowBackup": 0x01010280, "usesCleartextTraffic": 0x010104EC,

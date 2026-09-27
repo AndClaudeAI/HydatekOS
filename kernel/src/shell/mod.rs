@@ -194,6 +194,7 @@ impl Shell {
         let msg = if sh.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
         sh.sys.toast("Welcome to HydatekOS", msg);
         sh.locked = sh.sys.lock_on_boot;
+        sh.lock.reset(&sh.sys);
         sh
     }
 
@@ -308,7 +309,7 @@ impl Shell {
     pub fn lock_now(&mut self) {
         self.locked = true;
         self.unlocking = None;
-        self.lock.reset();
+        self.lock.reset(&self.sys);
         self.menu = None;
         self.launcher = None;
         self.drag = None;
@@ -317,7 +318,8 @@ impl Shell {
 
     fn unlock(&mut self) {
         self.unlocking = Some(self.sys.ticks);
-        self.lock.reset();
+        self.lock.cancel_finger(&mut self.sys);
+        self.lock.reset(&self.sys);
         self.dirty = true;
     }
 
@@ -330,8 +332,10 @@ impl Shell {
                 self.unlocking = None;
                 self.locked = false;
             }
-        } else if self.locked && self.lock.animating(ticks) && ticks % 4 == 0 {
-            self.dirty = true;
+        } else if self.locked {
+            if self.lock.tick(&mut self.sys, ticks) || (self.lock.animating(ticks) && ticks % 4 == 0) {
+                self.dirty = true;
+            }
         }
         if !self.locked && self.sys.lock_idle > 0 && ticks > self.last_input + self.sys.lock_idle as u64 * 6000 {
             self.lock_now();
@@ -388,6 +392,13 @@ impl Shell {
             match r {
                 Req::Open(k) => self.open_app(k),
                 Req::Lock => self.lock_now(),
+                Req::PhoneUnlock(id, ok) => {
+                    if self.locked && self.unlocking.is_none() {
+                        if let lock::Outcome::Unlock = self.lock.phone_answer(&id, ok, &self.sys, self.sys.ticks) {
+                            self.unlock();
+                        }
+                    }
+                }
                 Req::OpenPath(p) => self.open_path(&p),
                 Req::Toast(t, b) => self.toast(&t, &b),
                 Req::SaveSettings => self.sys.save_settings(),
@@ -509,13 +520,13 @@ impl Shell {
             Ev::Down => {
                 self.dirty = true;
                 match self.hit(x, y) {
-                    Some(Action::Lock(a)) => self.lock.action(a, &self.sys, now),
+                    Some(Action::Lock(a)) => self.lock.action(a, &mut self.sys, now),
                     _ => return,
                 }
             }
             Ev::Key(k, _) => {
                 self.dirty = true;
-                self.lock.key(k, &self.sys, now)
+                self.lock.key(k, &mut self.sys, now)
             }
             _ => return,
         };

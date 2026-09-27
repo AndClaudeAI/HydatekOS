@@ -52,6 +52,7 @@ resources, and its screens are built in code.
 | `PhoneData.java` | Texts, call log, contacts, photo thumbnails |
 | `NotifListener.java` | Notification mirroring |
 | `MainActivity.java` | Pairing and permissions |
+| `UnlockActivity.java` | Fingerprint prompt when the PC asks to unlock |
 
 ## Testing status
 
@@ -59,9 +60,12 @@ resources, and its screens are built in code.
   `test/HlpTest.java`. It checks the RFC vectors and the shared interop vectors,
   and runs a live encrypted session with HydatekOS in QEMU, including a 3 MB
   file.
+- **Tested against HydatekOS in QEMU with a scripted phone:** fingerprint unlock
+  (`fake-phone.js` with `UNLOCK=approve|deny` and `FORGE=1`): an approval unlocks,
+  a denial or an approval for a different request doesn't.
 - **Checked statically:** the Android parts compile against the Android 14
   framework. The APK is signature-verified by apksig, and androguard parses its
   manifest and dex.
 - **Not yet run on a phone or emulator.** The build environment has no Android
-  emulator. The SMS, call, notification and photo code follows the platform
-  APIs, but still needs a device test.
+  emulator. The SMS, call, notification, photo and fingerprint (BiometricPrompt)
+  code follows the platform APIs, but still needs a device test.

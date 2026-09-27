@@ -8,14 +8,16 @@ VERSION_CODE, VERSION_NAME = 1, "0.1"
 # Framework resources (android.R): drawable/sym_action_chat, style/Theme.DeviceDefault.Light
 ICON = Ref(0x0108008E)
 THEME = Ref(0x0103012B)
+TRANSLUCENT = Ref(0x01030010)  # style/Theme.Translucent.NoTitleBar
 FGS_CONNECTED_DEVICE = Hex(0x10)
+SINGLE_TOP = 1
 SINGLE_TASK = 2
 
 PERMISSIONS = [
     "INTERNET", "ACCESS_NETWORK_STATE", "CHANGE_NETWORK_STATE", "FOREGROUND_SERVICE",
     "FOREGROUND_SERVICE_CONNECTED_DEVICE", "POST_NOTIFICATIONS", "READ_SMS", "SEND_SMS", "RECEIVE_SMS",
     "READ_CONTACTS", "READ_CALL_LOG", "READ_PHONE_STATE", "CALL_PHONE", "ANSWER_PHONE_CALLS",
-    "READ_MEDIA_IMAGES",
+    "READ_MEDIA_IMAGES", "USE_BIOMETRIC", "USE_FULL_SCREEN_INTENT",
 ]
 
 
@@ -49,6 +51,9 @@ manifest = E(
               E("category", {"android:name": "android.intent.category.BROWSABLE"}),
               E("data", {"android:scheme": "hydatek", "android:host": "pair"})),
         ),
+        E("activity", {"android:name": "org.hydatek.link.UnlockActivity", "android:exported": False,
+                       "android:theme": TRANSLUCENT, "android:excludeFromRecents": True,
+                       "android:launchMode": SINGLE_TOP}),
         E("service", {"android:name": "org.hydatek.link.LinkService", "android:exported": False,
                       "android:foregroundServiceType": FGS_CONNECTED_DEVICE}),
         E(

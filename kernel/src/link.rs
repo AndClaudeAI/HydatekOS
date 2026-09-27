@@ -67,6 +67,8 @@ pub enum Source {
 pub enum Event {
     Toast(String, String),
     SaveFile(String, Vec<u8>),
+    /// the phone answered an unlock request: (request id, approved)
+    Unlock(String, bool),
 }
 
 pub struct Link {
@@ -268,6 +270,22 @@ impl Link {
         true
     }
 
+    /// Ask the phone to confirm an unlock with its fingerprint sensor.
+    pub fn request_unlock(&mut self, id: &str) -> bool {
+        if self.source != Source::Phone || !self.online {
+            return false;
+        }
+        self.outbox.push(Wire::new("unlock_req").with("id", id).with("name", &self.desktop_name.clone()));
+        true
+    }
+
+    /// The PC unlocked another way or gave up: close the prompt on the phone.
+    pub fn cancel_unlock(&mut self, id: &str) {
+        if self.source == Source::Phone && self.online {
+            self.outbox.push(Wire::new("unlock_cancel").with("id", id));
+        }
+    }
+
     // ---- messages from a real phone ----------------------------------------
 
     /// A phone authenticated: start from a clean slate for its data.
@@ -384,6 +402,7 @@ impl Link {
                 self.shared.insert(0, Shared { from_phone: true, text: name.clone(), is_file: true });
                 ev.push(Event::SaveFile(name, w.blob.clone()));
             }
+            "unlock" => ev.push(Event::Unlock(w.get("id").to_string(), flag(w.get("ok")))),
             "clip" => {
                 let text = w.get("text").to_string();
                 ev.push(Event::Toast(String::from("From your phone"), text.clone()));

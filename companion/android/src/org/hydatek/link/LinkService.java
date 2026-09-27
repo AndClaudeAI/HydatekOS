@@ -47,7 +47,9 @@ public class LinkService extends Service implements LinkClient.Listener {
     static final String PREFS = "link";
     static final String CHANNEL = "link";
     static final String CHANNEL_EVENTS = "events";
+    static final String CHANNEL_UNLOCK = "unlock";
     static final int NOTE_ID = 1;
+    static final int UNLOCK_NOTE_ID = 2;
 
     static volatile LinkService instance;
     static volatile String status = "Not paired";
@@ -89,6 +91,13 @@ public class LinkService extends Service implements LinkClient.Listener {
         if (s != null && s.client != null) s.client.send(m);
     }
 
+    /** Answer the PC's fingerprint unlock request (from UnlockActivity). */
+    static void answerUnlock(String id, boolean ok) {
+        post(new Hlp.Msg("unlock").put("id", id).put("ok", ok ? 1 : 0));
+        LinkService s = instance;
+        if (s != null) s.getSystemService(NotificationManager.class).cancel(UNLOCK_NOTE_ID);
+    }
+
     /** Re-announce capabilities, e.g. after notification access was granted. */
     static void refreshDevice() {
         LinkService s = instance;
@@ -113,6 +122,7 @@ public class LinkService extends Service implements LinkClient.Listener {
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Connection", NotificationManager.IMPORTANCE_LOW));
         nm.createNotificationChannel(new NotificationChannel(CHANNEL_EVENTS, "From your PC", NotificationManager.IMPORTANCE_DEFAULT));
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL_UNLOCK, "Unlock requests", NotificationManager.IMPORTANCE_HIGH));
     }
 
     @Override
@@ -279,9 +289,53 @@ public class LinkService extends Service implements LinkClient.Listener {
                 }
             });
             event("Text from your PC (copied)", text);
+        } else if (op.equals("unlock_req")) {
+            askUnlock(m.get("id"), m.get("name"));
+        } else if (op.equals("unlock_cancel")) {
+            UnlockActivity.withdraw(m.get("id"));
+            getSystemService(NotificationManager.class).cancel(UNLOCK_NOTE_ID);
         } else if (op.equals("file")) {
             String saved = saveDownload(m.get("name"), m.blob);
             event("Received from your PC", saved == null ? "Couldn't save " + m.get("name") : saved + " is in Downloads");
+        }
+    }
+
+    /**
+     * The PC wants to unlock with this phone's fingerprint. Android only lets a
+     * background app open a screen from a notification, so post a heads-up
+     * notification (full-screen when the phone allows it) that opens the
+     * fingerprint prompt; if the app is on screen, open it directly.
+     */
+    private void askUnlock(String id, String pc) {
+        if (id == null || id.isEmpty()) return;
+        if (!UnlockActivity.supported(this)) {
+            post(new Hlp.Msg("unlock").put("id", id).put("ok", 0));
+            event("Phone Link", "Set up a fingerprint on this phone to unlock your PC with it");
+            return;
+        }
+        Intent i = new Intent(this, UnlockActivity.class)
+                .putExtra(UnlockActivity.EXTRA_ID, id)
+                .putExtra(UnlockActivity.EXTRA_PC, pc)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 2, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        String who = pc == null || pc.isEmpty() ? "your PC" : pc;
+        Notification n = new Notification.Builder(this, CHANNEL_UNLOCK)
+                .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+                .setContentTitle("Unlock " + who + "?")
+                .setContentText("Tap to confirm with your fingerprint")
+                .setContentIntent(pi)
+                .setFullScreenIntent(pi, true)
+                .setCategory(Notification.CATEGORY_CALL)
+                .setAutoCancel(true)
+                .setTimeoutAfter(60_000)
+                .build();
+        getSystemService(NotificationManager.class).notify(UNLOCK_NOTE_ID, n);
+        if (MainActivity.isVisible()) {
+            try {
+                startActivity(i);
+            } catch (RuntimeException ignored) {
+                // the notification is still there
+            }
         }
     }
 

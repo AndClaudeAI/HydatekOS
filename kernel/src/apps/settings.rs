@@ -31,14 +31,17 @@ pub struct Settings {
     sec: usize,
     /// Phone layout: a section page is open (otherwise the section list).
     page: bool,
+    /// what's being typed into the PIN / password field
     pin: String,
-    pin_focus: bool,
+    password: String,
+    /// focused field: C_PIN_FIELD, C_PW_FIELD or 0
+    focus: u32,
     pin_msg: String,
 }
 
 impl Settings {
     pub fn new() -> Settings {
-        Settings { sec: 0, page: false, pin: String::new(), pin_focus: false, pin_msg: String::new() }
+        Settings { sec: 0, page: false, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
     }
 }
 
@@ -49,6 +52,10 @@ const C_PIN_FIELD: u32 = 15;
 const C_PIN_SAVE: u32 = 16;
 const C_PIN_REMOVE: u32 = 17;
 const C_LOCK_NOW: u32 = 18;
+const C_PW_FIELD: u32 = 19;
+const C_PW_SAVE: u32 = 20;
+const C_PW_REMOVE: u32 = 21;
+const C_FINGER: u32 = 22;
 const IDLE_STEPS: [u32; 6] = [0, 2, 5, 10, 15, 30];
 
 fn row(ui: &mut Ui, r: Rect, y: i32, title: &str, sub: &str) {
@@ -217,23 +224,52 @@ impl App for Settings {
                 row(ui, inner, m.y + 62, "Lock when idle", "Lock after no keyboard or mouse input");
                 ui.button(Rect::new(m.r() - 128, m.y + 70, 112, 30), &idle, Action::App(inst, C_IDLE), false);
 
-                card(ui, Rect::new(m.x, m.y + 138, m.w, 150));
-                let inner = Rect::new(m.x + 16, m.y + 138, m.w - 32, 150);
-                let st = if sys.has_pin() { "A PIN is set" } else { "No PIN: any key or click unlocks" };
-                row(ui, inner, m.y + 150, "PIN", st);
-                let f = Rect::new(m.x + 16, m.y + 198, 150, 32);
-                let dots: String = self.pin.chars().map(|_| '•').collect();
-                ui.field(f, &dots, "4-8 digits", self.pin_focus, Action::App(inst, C_PIN_FIELD));
-                let label = if sys.has_pin() { "Change PIN" } else { "Set PIN" };
-                ui.button(Rect::new(f.r() + 8, f.y, 110, 32), label, Action::App(inst, C_PIN_SAVE), true);
-                if sys.has_pin() {
-                    ui.button(Rect::new(f.r() + 126, f.y, 90, 32), "Remove", Action::App(inst, C_PIN_REMOVE), false);
-                }
-                let note = if self.pin_msg.is_empty() { "Keeps people out of your session; it doesn't encrypt files." } else { self.pin_msg.as_str() };
-                let note = ui.fit(Face::Regular, 12, note, m.w - 32);
-                ui.text(m.x + 16, m.y + 262, Face::Regular, 12, &note, t.text2);
-                ui.button(Rect::new(m.x, m.y + 304, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
-                ui.text(m.x + 142, m.y + 324, Face::Regular, 12, "or press F12", t.text3);
+                // sign-in options: one row each; Set/Change opens the field in place
+                let top = m.y + 136;
+                card(ui, Rect::new(m.x, top, m.w, 166));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 166);
+                let focus = self.focus;
+                let secret = |ui: &mut Ui, y: i32, title: &str, status: &str, typed: &str, hint: &str, set: bool, codes: (u32, u32, u32)| {
+                    let right = inner.r();
+                    if focus == codes.0 {
+                        row(ui, inner, y, title, "");
+                        let f = Rect::new(right - 88 - 170, y + 9, 170, 32);
+                        let dots: String = typed.chars().map(|_| '•').collect();
+                        ui.field(f, &dots, hint, true, Action::App(inst, codes.0));
+                        ui.button(Rect::new(right - 80, y + 9, 80, 32), "Save", Action::App(inst, codes.1), true);
+                    } else {
+                        row(ui, inner, y, title, status);
+                        let rm = if set { 88 } else { 0 };
+                        ui.button(Rect::new(right - rm - 90, y + 9, 90, 32), if set { "Change" } else { "Set" }, Action::App(inst, codes.0), !set);
+                        if set {
+                            ui.button(Rect::new(right - 80, y + 9, 80, 32), "Remove", Action::App(inst, codes.2), false);
+                        }
+                    }
+                };
+                let pin_st = if sys.has_pin() { "Set" } else { "Not set" };
+                secret(ui, top + 8, "PIN", pin_st, &self.pin, "4-8 digits", sys.has_pin(), (C_PIN_FIELD, C_PIN_SAVE, C_PIN_REMOVE));
+                let pw_st = if sys.has_password() { "Set" } else { "Not set" };
+                secret(ui, top + 58, "Password", pw_st, &self.password, "6+ characters", sys.has_password(), (C_PW_FIELD, C_PW_SAVE, C_PW_REMOVE));
+                let fp_st = if !sys.secured() {
+                    String::from("Set a PIN or password first")
+                } else if !sys.lock_finger {
+                    String::from("Confirm on your paired Android phone")
+                } else if sys.finger_ready() {
+                    format!("{} is ready", sys.link.device)
+                } else {
+                    String::from("Needs a paired phone with a fingerprint")
+                };
+                row(ui, inner, top + 108, "Fingerprint (phone)", &fp_st);
+                ui.switch(sw_x, top + 114, sys.lock_finger, Action::App(inst, C_FINGER));
+                let note = if self.pin_msg.is_empty() {
+                    if sys.secured() { "Keeps people out of your session; it doesn't encrypt files." } else { "No PIN or password: any key or click unlocks." }
+                } else {
+                    self.pin_msg.as_str()
+                };
+                let note = ui.fit(Face::Regular, 12, note, m.w - 16);
+                ui.text(m.x + 8, top + 186, Face::Regular, 12, &note, t.text2);
+                ui.button(Rect::new(m.x, top + 202, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
+                ui.text(m.x + 142, top + 222, Face::Regular, 12, "or press F12", t.text3);
             }
             5 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
@@ -260,14 +296,14 @@ impl App for Settings {
     }
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
-        self.pin_focus = code == C_PIN_FIELD;
+        self.focus = if code == C_PIN_FIELD || code == C_PW_FIELD { code } else { 0 };
         match code {
             C_LOCK_BOOT => sys.lock_on_boot = !sys.lock_on_boot,
             C_IDLE => {
                 let i = IDLE_STEPS.iter().position(|v| *v == sys.lock_idle).unwrap_or(0);
                 sys.lock_idle = IDLE_STEPS[(i + 1) % IDLE_STEPS.len()];
             }
-            C_PIN_FIELD => return,
+            C_PIN_FIELD | C_PW_FIELD => return,
             C_PIN_SAVE => {
                 let pin = core::mem::take(&mut self.pin);
                 self.pin_msg = if sys.set_pin(Some(&pin)) {
@@ -280,6 +316,31 @@ impl App for Settings {
             C_PIN_REMOVE => {
                 sys.set_pin(None);
                 self.pin_msg = String::from("PIN removed.");
+                return;
+            }
+            C_PW_SAVE => {
+                let pw = core::mem::take(&mut self.password);
+                self.pin_msg = if sys.set_password(Some(&pw)) {
+                    String::from("Password saved. You can use it to unlock.")
+                } else {
+                    String::from("Use 6 to 64 characters.")
+                };
+                return;
+            }
+            C_PW_REMOVE => {
+                sys.set_password(None);
+                self.pin_msg = String::from("Password removed.");
+                return;
+            }
+            C_FINGER => {
+                let on = !sys.lock_finger;
+                self.pin_msg = if !sys.set_finger(on) {
+                    String::from("Set a PIN or password first: it's needed when the phone isn't around.")
+                } else if on {
+                    String::from("Fingerprint on. Choose it under Sign-in options on the lock screen.")
+                } else {
+                    String::from("Fingerprint unlock off.")
+                };
                 return;
             }
             C_LOCK_NOW => {
@@ -314,22 +375,24 @@ impl App for Settings {
     }
 
     fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
-        if !self.pin_focus {
-            return;
-        }
+        let (text, save, max) = match self.focus {
+            C_PIN_FIELD => (&mut self.pin, C_PIN_SAVE, 8),
+            C_PW_FIELD => (&mut self.password, C_PW_SAVE, 64),
+            _ => return,
+        };
         match k {
-            Key::Char(c) if c.is_ascii_digit() && self.pin.len() < 8 => self.pin.push(c),
+            Key::Char(c) if text.chars().count() < max && (save == C_PW_SAVE && !c.is_control() || c.is_ascii_digit()) => text.push(c),
             Key::Backspace => {
-                self.pin.pop();
+                text.pop();
             }
-            Key::Enter => self.action(C_PIN_SAVE, false, sys),
-            Key::Esc => self.pin_focus = false,
+            Key::Enter => self.action(save, false, sys),
+            Key::Esc => self.focus = 0,
             _ => {}
         }
     }
 
     fn animating(&self) -> bool {
-        self.pin_focus
+        self.focus != 0
     }
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {

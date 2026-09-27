@@ -1,6 +1,8 @@
 // A scripted phone for end-to-end tests: node fake-phone.js <pairing-url> [seconds]
 // Connects like the Android app, syncs sample data, then logs every command
-// the PC sends (and answers get_photo).
+// the PC sends (and answers get_photo). UNLOCK=approve|deny makes it answer
+// fingerprint unlock requests like a phone whose owner touched the sensor;
+// FORGE=1 also sends an approval with the wrong request id first.
 const H = require('../hlp.js');
 const url = new URL(process.argv[2]);
 const secs = Number(process.argv[3] || 60);
@@ -16,7 +18,7 @@ for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
   thumb[i] = sky ? 228 : 196 - y; thumb[i + 1] = sky ? 183 - y : 137 - y; thumb[i + 2] = sky ? 131 + x : 94;
 }
 
-const link = H.connect(ws, key, frag.get('d'), { name: 'Pixel Test', kind: 'android', caps: 'sms,notif,calls,photos,files,clip', battery: '64', charging: '1' }, {
+const link = H.connect(ws, key, frag.get('d'), { name: 'Pixel Test', kind: 'android', caps: 'sms,notif,calls,photos,files,clip' + (process.env.UNLOCK ? ',bio' : ''), battery: '64', charging: '1' }, {
   onStatus(t, ok) {
     log('status:', t);
     if (!ok) return;
@@ -48,6 +50,13 @@ const link = H.connect(ws, key, frag.get('d'), { name: 'Pixel Test', kind: 'andr
   },
   onMessage(m) {
     log('from PC:', m.op, JSON.stringify(m.fields), m.blob.length ? `+${m.blob.length} bytes sha256=${H.hex(H.sha256(m.blob)).slice(0, 16)}` : '');
+    if (m.op === 'unlock_req' && process.env.FORGE) {
+      // an approval for some other request must be ignored
+      link.send('unlock', { id: '0123456789abcdef', ok: '1' });
+    }
+    if (m.op === 'unlock_req' && process.env.UNLOCK) {
+      setTimeout(() => link.send('unlock', { id: m.fields.id, ok: process.env.UNLOCK === 'approve' ? '1' : '0' }), 2500);
+    }
     if (m.op === 'get_photo') link.send('file', { name: 'IMG_0042.jpg', size: '10' }, new Uint8Array([0xff, 0xd8, 1, 2, 3, 4, 5, 6, 0xff, 0xd9]));
   },
   onFatal(r) { log('fatal:', r); process.exit(2); },

@@ -386,6 +386,7 @@ impl LinkServer {
                                         sys.toast(&t, &b);
                                     }
                                 }
+                                Event::Unlock(id, ok) => sys.reqs.push(crate::sys::Req::PhoneUnlock(id, ok)),
                                 Event::SaveFile(name, bytes) => {
                                     let lower = name.to_ascii_lowercase();
                                     let img = [".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif"].iter().any(|e| lower.ends_with(e));

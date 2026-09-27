@@ -36,6 +36,10 @@ public class MainActivity extends Activity {
     private LinearLayout pairedBox, unpairedBox;
     private EditText linkField;
 
+    static boolean isVisible() {
+        return visible != null;
+    }
+
     static void statusChanged() {
         final MainActivity a = visible;
         if (a != null) {

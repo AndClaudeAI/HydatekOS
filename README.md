@@ -12,9 +12,9 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
 
-| Boot splash | Lock screen with PIN |
-|---|---|
-| ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) |
+| Boot splash | Lock screen: PIN, password, fingerprint | Fingerprint via your phone |
+|---|---|---|
+| ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
 
 | Pairing by QR code | Browser companion on the phone | Demo phone mirror |
 |---|---|---|
@@ -25,8 +25,11 @@ Windows, macOS or Linux.
 - **Boots on real x86-64 PCs** from a USB stick or the internal disk (UEFI, Secure Boot off).
 - **Boot splash and lock screen:** a HydatekOS splash with a progress bar while
   drivers, files and the network come up, then a fade into the lock screen (clock,
-  date, Up next, phone notifications). Set a 4–8 digit PIN in Settings › Lock screen;
-  the screen also locks after idle time, from the logo menu, or with **F12**.
+  date, Up next, phone notifications). Sign in with a **PIN** (keypad), a **password**,
+  or **your phone's fingerprint**: Phone Link asks the paired Android phone, which
+  shows its own fingerprint prompt. Switch between them under the keypad; set them up
+  in Settings › Lock screen. The screen also locks after idle time, from the logo
+  menu, or with **F12**.
 - **Desktop shell:** menu bar with working menus, clock and "Up next" widget, quick
   toggles, a dock with running-app indicators and tooltips, an app launcher with search,
   and notifications.
@@ -61,7 +64,9 @@ An operating system is a long project. Here's what's still missing; the plan is 
   it will look. The Android app has been built and statically checked, and its
   protocol code is tested against HydatekOS, but it hasn't run on a real phone yet
   ([details](companion/android/README.md)).
-- **No sound or camera drivers yet.**
+- **No sound, camera or fingerprint-reader drivers yet.** Fingerprint sign-in
+  works through a paired Android phone's sensor instead. There's no on-screen
+  keyboard either, so a password needs a physical keyboard.
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
 

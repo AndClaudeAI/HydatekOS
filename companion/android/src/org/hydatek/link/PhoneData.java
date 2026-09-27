@@ -51,6 +51,7 @@ final class PhoneData {
         if (canReadPhotos(c)) caps.add("photos");
         caps.add("files");
         caps.add("clip");
+        if (UnlockActivity.supported(c)) caps.add("bio");
         StringBuilder sb = new StringBuilder();
         for (String s : caps) sb.append(sb.length() == 0 ? "" : ",").append(s);
         return sb.toString();

@@ -18,6 +18,7 @@ network stack, the HTTP/WebSocket server, the cryptography and the UI.
 | Notifications, dismiss from the PC | — | ✅ (needs notification access) |
 | Call log, place and end calls | — | ✅ (audio stays on the phone) |
 | Battery | Chrome on Android | ✅ |
+| Unlock the PC with the phone's fingerprint | — | ✅ (Android 10+, fingerprint set up) |
 | Screen mirroring | — | Planned; the demo phone shows it today |
 
 Browsers can't read SMS, notifications or calls, which is why the Android app
@@ -84,7 +85,7 @@ binary data.
 
 | From | Op | Fields / data |
 |---|---|---|
-| phone | `device` | `name`, `kind` (`android`/`web`), `caps` (`sms,notif,calls,photos,files,clip`), `battery`, `charging`, `model` |
+| phone | `device` | `name`, `kind` (`android`/`web`), `caps` (`sms,notif,calls,photos,files,clip,bio`), `battery`, `charging`, `model` |
 | phone | `battery` | `level`, `charging` |
 | phone | `thread` | `id`, `name`, `number` |
 | phone | `msg` | `thread`, `name`, `number`, `me` (0/1), `time`, `text`, `live` (1 = new, show a notification) |
@@ -99,6 +100,8 @@ binary data.
 | PC | `dial` / `hangup` | `number` / — |
 | PC | `get_photo` | `id` (phone answers with `file`) |
 | PC | `notif_dismiss` | `id` |
+| PC | `unlock_req` / `unlock_cancel` | `id` (random, per request), `name` (PC name) / `id` |
+| phone | `unlock` | `id`, `ok` (1 = the owner's fingerprint matched) |
 | both | `ping` / `pong` | keep-alive (the PC pings every 15 s and drops peers silent for 60 s) |
 
 ## Security notes
@@ -110,6 +113,13 @@ binary data.
   *actively* tamper with your LAN could serve a modified page. **Pair only on
   networks you trust.** The Android app doesn't have this exposure; its code is
   installed once.
+- **Fingerprint unlock.** The PC sends `unlock_req` with a fresh random id; the
+  phone shows Android's fingerprint prompt (strong biometrics only) and answers
+  `unlock`. The PC accepts only an answer carrying the id of its pending request,
+  within 60 s, over the authenticated session, and only if fingerprint unlock is
+  on in Settings. It's opt-in and needs a PIN or password as a fallback. Anyone who
+  holds the paired, unlocked-by-fingerprint phone can unlock the PC; unpair a lost
+  phone.
 - HLP/1 uses a pre-shared key, not a Diffie–Hellman exchange, so it has no
   forward secrecy: someone who later learns `K` and recorded the traffic could
   decrypt it. Unpair to rotate `K`. Adding X25519 is planned for HLP/2.

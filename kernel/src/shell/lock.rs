@@ -1,5 +1,6 @@
-//! Lock screen: clock, date, "Up next", phone notifications and an optional
-//! PIN. It keeps people out of the session; it does not encrypt files.
+//! Lock screen: clock, date, "Up next", phone notifications and sign-in with a
+//! PIN, a password or the paired phone's fingerprint sensor. It keeps people
+//! out of the session; it does not encrypt files.
 
 use super::wallpaper;
 use crate::font::Face;
@@ -9,22 +10,41 @@ use crate::sys::Sys;
 use crate::ui::{Action, Key, Ui};
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 pub const TAP: u8 = 0;
 pub const DIGIT: u8 = 1; // DIGIT + n for n in 0..=9
 pub const BACK: u8 = 11;
 pub const ENTER: u8 = 12;
+pub const MODE_PIN: u8 = 20;
+pub const MODE_PASSWORD: u8 = 21;
+pub const MODE_FINGER: u8 = 22;
+pub const RETRY: u8 = 23;
+pub const FIELD: u8 = 24;
 
 const MAX_TRIES: u32 = 5;
 const WAIT_TICKS: u64 = 3000; // 30 s
+const FINGER_TICKS: u64 = 6000; // the phone has 60 s to answer
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Pin,
+    Password,
+    Finger,
+}
 
 #[derive(Default)]
 pub struct Lock {
+    pub mode: Mode,
     pub entry: String,
+    pub password: String,
     pub error: String,
     fails: u32,
     wait_until: u64,
     shake_from: u64,
+    /// pending fingerprint request: (id, tick sent)
+    finger: Option<(String, u64)>,
 }
 
 pub enum Outcome {
@@ -32,26 +52,36 @@ pub enum Outcome {
     Unlock,
 }
 
+fn methods(sys: &Sys) -> Vec<Mode> {
+    let mut m = Vec::new();
+    if sys.has_pin() {
+        m.push(Mode::Pin);
+    }
+    if sys.has_password() {
+        m.push(Mode::Password);
+    }
+    if sys.lock_finger && sys.secured() {
+        m.push(Mode::Finger);
+    }
+    m
+}
+
 impl Lock {
-    pub fn reset(&mut self) {
+    /// Clear what was typed; also called on every lock. Starts on the PIN if
+    /// there is one, otherwise on the password.
+    pub fn reset(&mut self, sys: &Sys) {
         self.entry.clear();
+        self.password.clear();
         self.error.clear();
+        self.finger = None;
+        self.mode = if sys.has_pin() { Mode::Pin } else { Mode::Password };
     }
 
     fn waiting(&self, now: u64) -> bool {
         now < self.wait_until
     }
 
-    fn submit(&mut self, sys: &Sys, now: u64) -> Outcome {
-        if self.waiting(now) || self.entry.is_empty() {
-            return Outcome::Stay;
-        }
-        if sys.check_pin(&self.entry) {
-            self.fails = 0;
-            self.reset();
-            return Outcome::Unlock;
-        }
-        self.entry.clear();
+    fn failed(&mut self, now: u64, what: &str) {
         self.fails += 1;
         self.shake_from = now;
         if self.fails >= MAX_TRIES {
@@ -59,9 +89,38 @@ impl Lock {
             self.wait_until = now + WAIT_TICKS;
             self.error = String::from("Too many attempts");
         } else {
-            self.error = String::from("Wrong PIN. Try again.");
+            self.error = format!("Wrong {}. Try again.", what);
+        }
+    }
+
+    fn submit(&mut self, sys: &Sys, now: u64) -> Outcome {
+        if self.waiting(now) {
+            return Outcome::Stay;
+        }
+        match self.mode {
+            Mode::Pin if !self.entry.is_empty() => {
+                if sys.check_pin(&self.entry) {
+                    return self.unlocked(sys);
+                }
+                self.entry.clear();
+                self.failed(now, "PIN");
+            }
+            Mode::Password if !self.password.is_empty() => {
+                if sys.check_password(&self.password) {
+                    return self.unlocked(sys);
+                }
+                self.password.clear();
+                self.failed(now, "password");
+            }
+            _ => {}
         }
         Outcome::Stay
+    }
+
+    fn unlocked(&mut self, sys: &Sys) -> Outcome {
+        self.fails = 0;
+        self.reset(sys);
+        Outcome::Unlock
     }
 
     fn digit(&mut self, d: char, now: u64) {
@@ -71,17 +130,82 @@ impl Lock {
         }
     }
 
+    fn set_mode(&mut self, m: Mode, sys: &mut Sys, now: u64) {
+        if !methods(sys).contains(&m) {
+            return;
+        }
+        if self.mode == Mode::Finger && m != Mode::Finger {
+            self.cancel_finger(sys);
+        }
+        self.mode = m;
+        self.error.clear();
+        if m == Mode::Finger && self.finger.is_none() {
+            self.ask_phone(sys, now);
+        }
+    }
+
+    /// Send a fingerprint request to the paired phone.
+    fn ask_phone(&mut self, sys: &mut Sys, now: u64) {
+        self.error.clear();
+        if !sys.finger_ready() {
+            return;
+        }
+        let mut id = [0u8; 8];
+        crate::rng::fill(&mut id);
+        let id = crate::crypto::hex(&id);
+        if sys.link.request_unlock(&id) {
+            self.finger = Some((id, now));
+        }
+    }
+
+    /// Withdraw a pending fingerprint request (the phone closes its prompt).
+    pub fn cancel_finger(&mut self, sys: &mut Sys) {
+        if let Some((id, _)) = self.finger.take() {
+            sys.link.cancel_unlock(&id);
+        }
+    }
+
+    /// The phone answered a fingerprint request.
+    pub fn phone_answer(&mut self, id: &str, ok: bool, sys: &Sys, now: u64) -> Outcome {
+        let Some((want, sent)) = &self.finger else { return Outcome::Stay };
+        if want != id || now > sent + FINGER_TICKS || !sys.lock_finger {
+            return Outcome::Stay;
+        }
+        self.finger = None;
+        if ok {
+            return self.unlocked(sys);
+        }
+        self.error = String::from("Not confirmed on your phone");
+        Outcome::Stay
+    }
+
+    /// Per-tick housekeeping: give up on a phone that doesn't answer.
+    pub fn tick(&mut self, sys: &mut Sys, now: u64) -> bool {
+        if let Some((_, sent)) = &self.finger {
+            if now > sent + FINGER_TICKS || !sys.link.online {
+                self.cancel_finger(sys);
+                self.error = String::from("Your phone didn't answer");
+                return true;
+            }
+        }
+        false
+    }
+
     /// A click or tap on the lock screen.
-    pub fn action(&mut self, a: u8, sys: &Sys, now: u64) -> Outcome {
-        if !sys.has_pin() {
+    pub fn action(&mut self, a: u8, sys: &mut Sys, now: u64) -> Outcome {
+        if !sys.secured() {
             return Outcome::Unlock;
         }
         match a {
+            MODE_PIN => self.set_mode(Mode::Pin, sys, now),
+            MODE_PASSWORD => self.set_mode(Mode::Password, sys, now),
+            MODE_FINGER => self.set_mode(Mode::Finger, sys, now),
+            RETRY => self.ask_phone(sys, now),
             BACK => {
                 self.entry.pop();
             }
             ENTER => return self.submit(sys, now),
-            d if (DIGIT..DIGIT + 10).contains(&d) => {
+            d if (DIGIT..DIGIT + 10).contains(&d) && self.mode == Mode::Pin => {
                 self.digit((b'0' + d - DIGIT) as char, now);
                 // unlock as soon as a correct PIN is complete (tap-friendly)
                 if self.entry.len() >= 4 && sys.check_pin(&self.entry) {
@@ -93,30 +217,63 @@ impl Lock {
         Outcome::Stay
     }
 
-    pub fn key(&mut self, k: Key, sys: &Sys, now: u64) -> Outcome {
-        if !sys.has_pin() {
+    pub fn key(&mut self, k: Key, sys: &mut Sys, now: u64) -> Outcome {
+        if !sys.secured() {
             return Outcome::Unlock;
         }
-        match k {
-            Key::Char(c) if c.is_ascii_digit() => {
-                self.digit(c, now);
-                if self.entry.len() >= 4 && sys.check_pin(&self.entry) {
-                    return self.submit(sys, now);
+        // typing picks a method: digits the PIN, anything else the password
+        // (once in the password, digits stay there)
+        if let Key::Char(c) = k {
+            if self.mode != Mode::Password {
+                let want = if c.is_ascii_digit() && sys.has_pin() { Mode::Pin } else { Mode::Password };
+                if self.mode != want && methods(sys).contains(&want) {
+                    self.set_mode(want, sys, now);
                 }
             }
-            Key::Backspace => {
-                self.entry.pop();
+        }
+        match self.mode {
+            Mode::Pin => match k {
+                Key::Char(c) if c.is_ascii_digit() => {
+                    self.digit(c, now);
+                    if self.entry.len() >= 4 && sys.check_pin(&self.entry) {
+                        return self.submit(sys, now);
+                    }
+                }
+                Key::Backspace => {
+                    self.entry.pop();
+                }
+                Key::Esc => self.entry.clear(),
+                Key::Enter => return self.submit(sys, now),
+                _ => {}
+            },
+            Mode::Password => match k {
+                Key::Char(c) if !c.is_control() => {
+                    if !self.waiting(now) && self.password.chars().count() < 64 {
+                        self.password.push(c);
+                        self.error.clear();
+                    }
+                }
+                Key::Backspace => {
+                    self.password.pop();
+                }
+                Key::Esc => self.password.clear(),
+                Key::Enter => return self.submit(sys, now),
+                _ => {}
+            },
+            Mode::Finger => {
+                if let Key::Enter = k {
+                    if self.finger.is_none() {
+                        self.ask_phone(sys, now);
+                    }
+                }
             }
-            Key::Esc => self.entry.clear(),
-            Key::Enter => return self.submit(sys, now),
-            _ => {}
         }
         Outcome::Stay
     }
 
-    /// Needs redrawing every tick (shake animation, lockout countdown)?
+    /// Needs redrawing every tick (shake, lockout countdown, caret, waiting)?
     pub fn animating(&self, now: u64) -> bool {
-        now < self.shake_from + 40 || self.waiting(now)
+        now < self.shake_from + 40 || self.waiting(now) || self.mode == Mode::Password || self.finger.is_some()
     }
 
     pub fn render(&self, ui: &mut Ui, r: Rect, sys: &Sys, now: u64) {
@@ -128,25 +285,33 @@ impl Lock {
         // status icons
         ui.icon(Icon::Battery, r.r() - u(40), r.y + u(14), u(18), t.text);
         ui.icon(Icon::Wifi, r.r() - u(66), r.y + u(14), u(16), if sys.net.ip.is_some() { t.text } else { t.text3 });
-        let pin = sys.has_pin();
-        let keypad = pin && (tall || r.h >= 600);
-        let key = if tall { u(64) } else { 52 };
-        let gap = if tall { u(18) } else { 14 };
+        let secured = sys.secured();
+        let methods = methods(sys);
+        let mode = if methods.contains(&self.mode) { self.mode } else { *methods.first().unwrap_or(&Mode::Pin) };
+        let keypad = mode == Mode::Pin && (tall || r.h >= 600);
+        let key = if tall { u(54) } else { 52 };
+        let gap = if tall { u(12) } else { 14 };
         let pad_h = if keypad { 4 * key + 3 * gap } else { 0 };
         // the clock shrinks a little when the keypad needs the room
         let cs = match (keypad, tall) {
-            (true, true) => u(100),
+            (true, true) => u(80),
             (true, false) if r.h < 760 => 100,
             _ => u(128),
         };
-        // one centred column: date, clock, Up next, then the PIN entry
+        // one centred column: date, clock, Up next, sign-in, sign-in options
         let head_h = u(20) + u(16) + cs * 3 / 4 + u(34) + u(86);
-        let pin_h = if pin { u(36) + u(28) + u(20) + pad_h } else { 0 };
+        let body_h = match mode {
+            _ if !secured => 0,
+            Mode::Pin => u(36) + u(28) + u(20) + pad_h,
+            Mode::Password => u(28) + u(48) + u(44),
+            Mode::Finger => u(28) + u(84) + u(84),
+        };
+        let opts_h = if secured && methods.len() > 1 { u(22) + u(44) } else { 0 };
         let cx = r.x + r.w / 2;
-        let top = if pin {
-            r.y + ((r.h - head_h - pin_h) / 2).max(u(44)) + u(20)
+        let top = if secured {
+            r.y + ((r.h - head_h - body_h - opts_h) / 2).max(u(40)) + u(20)
         } else {
-            r.y + ((r.h - head_h) / 2 - r.h / 10).max(u(44)) + u(20)
+            r.y + ((r.h - head_h) / 2 - r.h / 10).max(u(40)) + u(20)
         };
         let date = sys.date_long();
         let dw = ui.tw(Face::Regular, u(20), &date);
@@ -173,52 +338,109 @@ impl Lock {
         ui.text(card.x + u(76), card.y + u(52), Face::Semibold, u(16), &title, t.text);
         ui.text(card.x + u(76), card.y + u(71), Face::Regular, u(13), &sub, t.text2);
 
-        if !pin {
-            // phone notifications (titles only: bodies stay private while locked)
-            let mut ny = card.b() + u(14);
-            let unread = sys.link.unread();
-            let mut rows: alloc::vec::Vec<(Icon, String, String)> = alloc::vec::Vec::new();
-            if unread > 0 {
-                rows.push((Icon::Chat, String::from("Messages"), format!("{} unread conversation{}", unread, if unread == 1 { "" } else { "s" })));
-            }
-            for n in sys.link.notifs.iter().take(3 - rows.len().min(3)) {
-                rows.push((Icon::Bell, n.app.clone(), n.title.clone()));
-            }
-            let hy = r.b() - if tall { u(150) } else { 140 };
-            let max_rows = ((hy - u(40) - ny) / u(64)).clamp(0, 3) as usize;
-            for (ic, app, line) in rows.iter().take(max_rows) {
-                let row = Rect::new(card.x, ny, card_w, u(56));
-                ui.rrect(row, u(18), t.surface.with_alpha(215));
-                ui.icon(*ic, row.x + u(16), row.y + u(18), u(20), t.accent);
-                let a = ui.fit(Face::Semibold, u(12), app, row.w - u(70));
-                ui.text(row.x + u(50), row.y + u(24), Face::Semibold, u(12), &a, t.text);
-                let l = ui.fit(Face::Regular, u(13), line, row.w - u(70));
-                ui.text(row.x + u(50), row.y + u(42), Face::Regular, u(13), &l, t.text2);
-                ny += u(64);
-            }
-            // unlock hint
-            let hint = if tall { "Tap to unlock" } else { "Click or press any key to unlock" };
-            let fs = u(14);
-            let hw = ui.tw(Face::Medium, fs, hint);
-            let pill = Rect::new(cx - hw / 2 - u(20), hy - u(24), hw + u(40), u(36));
-            ui.rrect(pill, u(18), t.surface.with_alpha(220));
-            ui.text(cx - hw / 2, hy, Face::Medium, fs, hint, t.text);
+        if !secured {
+            self.render_open(ui, r, sys, card, tall);
             return;
         }
+        let body = card.b();
+        match mode {
+            Mode::Pin => self.render_pin(ui, r, cx, body, (keypad, key, gap), now),
+            Mode::Password => self.render_password(ui, r, cx, body, now),
+            Mode::Finger => self.render_finger(ui, r, cx, body, sys, now),
+        }
+        if opts_h > 0 {
+            // sign-in options: one round button per method
+            let size = u(44);
+            let sp = u(16);
+            let n = methods.len() as i32;
+            let y = body + body_h + u(22);
+            let x0 = cx - (n * size + (n - 1) * sp) / 2;
+            for (i, m) in methods.iter().enumerate() {
+                let (icon, a) = match m {
+                    Mode::Pin => (Icon::Keypad, MODE_PIN),
+                    Mode::Password => (Icon::Key, MODE_PASSWORD),
+                    Mode::Finger => (Icon::Fingerprint, MODE_FINGER),
+                };
+                let b = Rect::new(x0 + i as i32 * (size + sp), y, size, size);
+                let act = Action::Lock(a);
+                let on = *m == mode;
+                let bg = if on { t.accent } else if ui.hot(act) { t.surface } else { t.surface.with_alpha(205) };
+                ui.circle(b.x + size / 2, b.y + size / 2, size / 2, bg);
+                ui.icon_in(icon, b, u(20), if on { t.on_accent } else { t.text });
+                ui.zone(b, act);
+            }
+        }
+    }
 
-        // PIN entry below Up next: dots, message, keypad
-        let shake = if now < self.shake_from + 40 {
+    /// No PIN or password: notifications and a hint.
+    fn render_open(&self, ui: &mut Ui, r: Rect, sys: &Sys, card: Rect, tall: bool) {
+        let t = ui.t;
+        let u = |v: i32| if tall { v * r.w / 390 } else { v };
+        let cx = r.x + r.w / 2;
+        // phone notifications (titles only: bodies stay private while locked)
+        let mut ny = card.b() + u(14);
+        let unread = sys.link.unread();
+        let mut rows: Vec<(Icon, String, String)> = Vec::new();
+        if unread > 0 {
+            rows.push((Icon::Chat, String::from("Messages"), format!("{} unread conversation{}", unread, if unread == 1 { "" } else { "s" })));
+        }
+        for n in sys.link.notifs.iter().take(3 - rows.len().min(3)) {
+            rows.push((Icon::Bell, n.app.clone(), n.title.clone()));
+        }
+        let hy = r.b() - if tall { u(150) } else { 140 };
+        let max_rows = ((hy - u(40) - ny) / u(64)).clamp(0, 3) as usize;
+        for (ic, app, line) in rows.iter().take(max_rows) {
+            let row = Rect::new(card.x, ny, card.w, u(56));
+            ui.rrect(row, u(18), t.surface.with_alpha(215));
+            ui.icon(*ic, row.x + u(16), row.y + u(18), u(20), t.accent);
+            let a = ui.fit(Face::Semibold, u(12), app, row.w - u(70));
+            ui.text(row.x + u(50), row.y + u(24), Face::Semibold, u(12), &a, t.text);
+            let l = ui.fit(Face::Regular, u(13), line, row.w - u(70));
+            ui.text(row.x + u(50), row.y + u(42), Face::Regular, u(13), &l, t.text2);
+            ny += u(64);
+        }
+        let hint = if tall { "Tap to unlock" } else { "Click or press any key to unlock" };
+        let fs = u(14);
+        let hw = ui.tw(Face::Medium, fs, hint);
+        let pill = Rect::new(cx - hw / 2 - u(20), hy - u(24), hw + u(40), u(36));
+        ui.rrect(pill, u(18), t.surface.with_alpha(220));
+        ui.text(cx - hw / 2, hy, Face::Medium, fs, hint, t.text);
+    }
+
+    fn shake(&self, now: u64) -> i32 {
+        if now < self.shake_from + 40 {
             let k = (now - self.shake_from) as i32;
             sin_q14(k * 90) * (40 - k) / 40 * 10 / 16384
         } else {
             0
+        }
+    }
+
+    /// The status line under the entry: lockout countdown, error or prompt.
+    fn message(&self, ui: &mut Ui, cx: i32, y: i32, size: i32, prompt: &str, now: u64) {
+        let t = ui.t;
+        let msg = if self.waiting(now) {
+            format!("Too many attempts. Try again in {} s", (self.wait_until - now + 99) / 100)
+        } else if !self.error.is_empty() {
+            self.error.clone()
+        } else {
+            String::from(prompt)
         };
-        let dots_y = card.b() + u(36);
+        let col = if self.error.is_empty() && !self.waiting(now) { t.text2 } else { t.danger };
+        let mw = ui.tw(Face::Medium, size, &msg);
+        ui.text(cx - mw / 2, y, Face::Medium, size, &msg, col);
+    }
+
+    fn render_pin(&self, ui: &mut Ui, r: Rect, cx: i32, body: i32, (keypad, key, gap): (bool, i32, i32), now: u64) {
+        let t = ui.t;
+        let tall = r.h > r.w;
+        let u = |v: i32| if tall { v * r.w / 390 } else { v };
+        let dots_y = body + u(36);
         let msg_y = dots_y + u(28);
         let n = self.entry.len() as i32;
         let slots = n.max(4);
         let (dr, dp) = (u(7), u(22));
-        let dx = cx - (slots * dp - (dp - 2 * dr)) / 2 + shake;
+        let dx = cx - (slots * dp - (dp - 2 * dr)) / 2 + self.shake(now);
         for i in 0..slots {
             let (px, py) = (dx + i * dp + dr, dots_y);
             if i < n {
@@ -228,27 +450,16 @@ impl Lock {
                 ui.circle(px, py, dr - u(2), t.surface);
             }
         }
-        let msg = if self.waiting(now) {
-            format!("Too many attempts. Try again in {} s", (self.wait_until - now + 99) / 100)
-        } else if !self.error.is_empty() {
-            self.error.clone()
-        } else if keypad {
-            String::from("Enter your PIN")
-        } else {
-            String::from("Type your PIN and press Enter")
-        };
-        let col = if self.error.is_empty() && !self.waiting(now) { t.text2 } else { t.danger };
-        let mw = ui.tw(Face::Medium, u(13), &msg);
-        ui.text(cx - mw / 2, msg_y, Face::Medium, u(13), &msg, col);
+        self.message(ui, cx, msg_y, u(13), if keypad { "Enter your PIN" } else { "Type your PIN and press Enter" }, now);
         if !keypad {
             return;
         }
-        let base = msg_y + u(20) - 14;
+        let base = msg_y + u(20);
         let labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", ""];
         let x0 = cx - (3 * key + 2 * gap) / 2;
         for (i, l) in labels.iter().enumerate() {
             let (col, row) = (i as i32 % 3, i as i32 / 3);
-            let b = Rect::new(x0 + col * (key + gap), base + 14 + row * (key + gap), key, key);
+            let b = Rect::new(x0 + col * (key + gap), base + row * (key + gap), key, key);
             let a = match i {
                 9 => Action::Lock(BACK),
                 11 => Action::Lock(ENTER),
@@ -264,6 +475,82 @@ impl Lock {
                 }
             }
             ui.zone(b, a);
+        }
+    }
+
+    fn render_password(&self, ui: &mut Ui, r: Rect, cx: i32, body: i32, now: u64) {
+        let t = ui.t;
+        let tall = r.h > r.w;
+        let u = |v: i32| if tall { v * r.w / 390 } else { v };
+        let w = if tall { r.w - u(96) } else { 320 };
+        let h = u(48);
+        let f = Rect::new(cx - w / 2 + self.shake(now), body + u(28), w, h);
+        ui.rrect(f, h / 2, t.surface.with_alpha(235));
+        ui.stroke(f, h / 2, 1, t.accent.with_alpha(160));
+        ui.zone(f, Action::Lock(FIELD));
+        // masked characters as dots
+        let go = Rect::new(f.r() - h + u(6), f.y + u(6), h - u(12), h - u(12));
+        let inner = Rect::new(f.x + u(20), f.y, go.x - f.x - u(28), h);
+        let n = self.password.chars().count() as i32;
+        let (dr, dp) = (u(4), u(14));
+        let caret = (now / 50) % 2 == 0;
+        if n == 0 {
+            ui.text_in(inner, Face::Regular, u(14), "Password", t.text3, 0);
+            if caret {
+                ui.rect(Rect::new(inner.x, f.y + u(14), 1, h - u(28)), t.text);
+            }
+        } else {
+            let shown = n.min((inner.w / dp).max(1));
+            for i in 0..shown {
+                ui.circle(inner.x + dr + i * dp, f.y + h / 2, dr, t.text);
+            }
+            if caret {
+                ui.rect(Rect::new(inner.x + shown * dp + u(2), f.y + u(14), 1, h - u(28)), t.text);
+            }
+        }
+        let a = Action::Lock(ENTER);
+        ui.circle(go.x + go.w / 2, go.y + go.h / 2, go.w / 2, if ui.hot(a) { t.accent.mix(t.text, 30) } else { t.accent });
+        ui.icon_in(Icon::ChevronRight, go, go.w / 2, t.on_accent);
+        ui.zone(go, a);
+        self.message(ui, cx, f.b() + u(30), u(13), "Enter your password", now);
+    }
+
+    fn render_finger(&self, ui: &mut Ui, r: Rect, cx: i32, body: i32, sys: &Sys, now: u64) {
+        let t = ui.t;
+        let tall = r.h > r.w;
+        let u = |v: i32| if tall { v * r.w / 390 } else { v };
+        let size = u(84);
+        let cy = body + u(28) + size / 2;
+        let pending = self.finger.is_some();
+        // pulse while waiting for the phone
+        if pending {
+            let halo = u(4) + sin_q14((now % 120) as i32 * 1024 / 120).abs() * u(8) / 16384;
+            ui.circle(cx, cy, size / 2 + halo, t.accent.with_alpha(60));
+        }
+        ui.circle(cx, cy, size / 2, t.surface.with_alpha(235));
+        ui.icon_in(Icon::Fingerprint, Rect::new(cx - size / 2, cy - size / 2, size, size), u(44), if pending { t.accent } else { t.text });
+        let phone = if sys.link.device.is_empty() { String::from("your phone") } else { sys.link.device.clone() };
+        let (line1, line2) = if pending {
+            (String::from("Check your phone"), format!("Touch the fingerprint sensor on {}", phone))
+        } else if !self.error.is_empty() {
+            (self.error.clone(), String::from("Tap the fingerprint to try again"))
+        } else if !sys.link.online || sys.link.is_demo() {
+            (String::from("Your phone isn't connected"), String::from("Open HydatekOS Link on your phone"))
+        } else if !sys.finger_ready() {
+            (format!("{} can't confirm fingerprints", phone), String::from("Set up a fingerprint on the phone first"))
+        } else {
+            (String::from("Unlock with your phone"), String::from("Tap the fingerprint to send a request"))
+        };
+        let col = if self.error.is_empty() || pending { t.text } else { t.danger };
+        let y1 = cy + size / 2 + u(30);
+        let l1 = ui.fit(Face::Semibold, u(15), &line1, r.w - u(48));
+        let w1 = ui.tw(Face::Semibold, u(15), &l1);
+        ui.text(cx - w1 / 2, y1, Face::Semibold, u(15), &l1, col);
+        let l2 = ui.fit(Face::Regular, u(13), &line2, r.w - u(48));
+        let w2 = ui.tw(Face::Regular, u(13), &l2);
+        ui.text(cx - w2 / 2, y1 + u(22), Face::Regular, u(13), &l2, t.text2);
+        if !pending {
+            ui.zone(Rect::new(cx - size / 2, cy - size / 2, size, size), Action::Lock(RETRY));
         }
     }
 }

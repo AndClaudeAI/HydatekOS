@@ -17,6 +17,8 @@ pub enum Req {
     Toast(String, String),
     SaveSettings,
     Lock,
+    /// the phone answered a fingerprint unlock request: (request id, approved)
+    PhoneUnlock(String, bool),
 }
 
 #[derive(Clone)]
@@ -67,8 +69,11 @@ pub struct Sys {
     pub lock_on_boot: bool,
     /// minutes of inactivity before locking; 0 = never
     pub lock_idle: u32,
-    /// (salt, stretched hash) of the lock-screen PIN
+    /// (salt, stretched hash) of the lock-screen PIN and password
     lock_pin: Option<([u8; 16], [u8; 32])>,
+    lock_pw: Option<([u8; 16], [u8; 32])>,
+    /// the paired phone's fingerprint sensor may unlock (needs a PIN or password)
+    pub lock_finger: bool,
     pub reqs: Vec<Req>,
     pub screen: (i32, i32, i32),
     pub firmware: String,
@@ -114,6 +119,8 @@ impl Sys {
             lock_on_boot: true,
             lock_idle: 10,
             lock_pin: None,
+            lock_pw: None,
+            lock_finger: false,
             reqs: Vec::new(),
             screen: (0, 0, 1),
             firmware: String::new(),
@@ -122,7 +129,7 @@ impl Sys {
         };
         s.load_settings();
         s.load_link();
-        s.load_pin();
+        s.load_lock();
         s.load_events();
         s
     }
@@ -171,47 +178,33 @@ impl Sys {
         self.fs.write("/system/settings.txt", s.as_bytes());
     }
 
-    // ---- lock-screen PIN ------------------------------------------------------
+    // ---- lock-screen sign-in: PIN, password, phone fingerprint ----------------
     //
-    // Stored as salt + a stretched SHA-256 hash in /system/lock.txt. It keeps
-    // people out of a running session; anyone with the disk can still read
-    // files, since they aren't encrypted.
+    // PIN and password are stored as salt + a stretched SHA-256 hash in
+    // /system/lock.txt. They keep people out of a running session; anyone with
+    // the disk can still read files, since they aren't encrypted.
 
-    fn pin_hash(salt: &[u8; 16], pin: &str) -> [u8; 32] {
+    fn secret_hash(salt: &[u8; 16], secret: &str) -> [u8; 32] {
         let mut h = [0u8; 32];
         for _ in 0..20_000 {
             let mut s = crate::crypto::Sha256::new();
             s.update(salt);
-            s.update(pin.as_bytes());
+            s.update(secret.as_bytes());
             s.update(&h);
             h = s.finish();
         }
         h
     }
 
-    fn load_pin(&mut self) {
-        let Some(data) = self.fs.read("/system/lock.txt") else { return };
-        let text = String::from_utf8_lossy(&data).to_string();
-        let (mut salt, mut hash) = (None, None);
-        for line in text.lines() {
-            match line.split_once('=') {
-                Some(("salt", v)) => salt = crate::crypto::base64_decode(v).filter(|b| b.len() == 16),
-                Some(("hash", v)) => hash = crate::crypto::base64_decode(v).filter(|b| b.len() == 32),
-                _ => {}
-            }
-        }
-        if let (Some(s), Some(h)) = (salt, hash) {
-            self.lock_pin = Some((s.try_into().unwrap(), h.try_into().unwrap()));
-        }
+    fn new_secret(secret: &str) -> ([u8; 16], [u8; 32]) {
+        let mut salt = [0u8; 16];
+        crate::rng::fill(&mut salt);
+        (salt, Self::secret_hash(&salt, secret))
     }
 
-    pub fn has_pin(&self) -> bool {
-        self.lock_pin.is_some()
-    }
-
-    pub fn check_pin(&self, pin: &str) -> bool {
-        let Some((salt, hash)) = &self.lock_pin else { return true };
-        let h = Self::pin_hash(salt, pin);
+    fn matches(cred: &Option<([u8; 16], [u8; 32])>, secret: &str) -> bool {
+        let Some((salt, hash)) = cred else { return false };
+        let h = Self::secret_hash(salt, secret);
         let mut diff = 0u8;
         for i in 0..32 {
             diff |= h[i] ^ hash[i];
@@ -219,25 +212,122 @@ impl Sys {
         diff == 0
     }
 
+    fn load_lock(&mut self) {
+        let Some(data) = self.fs.read("/system/lock.txt") else { return };
+        let text = String::from_utf8_lossy(&data).to_string();
+        let mut v: [Option<Vec<u8>>; 4] = Default::default();
+        for line in text.lines() {
+            let Some((k, val)) = line.split_once('=') else { continue };
+            // "salt"/"hash" are the PIN (the original format)
+            let (i, len) = match k {
+                "salt" => (0, 16),
+                "hash" => (1, 32),
+                "pw_salt" => (2, 16),
+                "pw_hash" => (3, 32),
+                "finger" => {
+                    self.lock_finger = val == "1";
+                    continue;
+                }
+                _ => continue,
+            };
+            v[i] = crate::crypto::base64_decode(val).filter(|b| b.len() == len);
+        }
+        let pair = |a: &Option<Vec<u8>>, b: &Option<Vec<u8>>| match (a, b) {
+            (Some(s), Some(h)) => Some((s.as_slice().try_into().unwrap(), h.as_slice().try_into().unwrap())),
+            _ => None,
+        };
+        self.lock_pin = pair(&v[0], &v[1]);
+        self.lock_pw = pair(&v[2], &v[3]);
+        if !self.secured() {
+            self.lock_finger = false;
+        }
+    }
+
+    fn save_lock(&mut self) {
+        if !self.secured() {
+            self.lock_finger = false;
+            self.fs.remove("/system/lock.txt");
+            return;
+        }
+        let b = crate::crypto::base64;
+        let mut s = String::new();
+        if let Some((salt, hash)) = &self.lock_pin {
+            s += &format!("salt={}\nhash={}\n", b(salt), b(hash));
+        }
+        if let Some((salt, hash)) = &self.lock_pw {
+            s += &format!("pw_salt={}\npw_hash={}\n", b(salt), b(hash));
+        }
+        s += &format!("finger={}\n", self.lock_finger as u8);
+        self.fs.write("/system/lock.txt", s.as_bytes());
+    }
+
+    pub fn has_pin(&self) -> bool {
+        self.lock_pin.is_some()
+    }
+
+    pub fn has_password(&self) -> bool {
+        self.lock_pw.is_some()
+    }
+
+    /// A PIN or password is required to unlock.
+    pub fn secured(&self) -> bool {
+        self.lock_pin.is_some() || self.lock_pw.is_some()
+    }
+
+    pub fn check_pin(&self, pin: &str) -> bool {
+        Self::matches(&self.lock_pin, pin)
+    }
+
+    pub fn check_password(&self, pw: &str) -> bool {
+        Self::matches(&self.lock_pw, pw)
+    }
+
+    pub fn pin_ok(pin: &str) -> bool {
+        (4..=8).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    pub fn password_ok(pw: &str) -> bool {
+        let n = pw.chars().count();
+        (6..=64).contains(&n) && !pw.chars().any(|c| c.is_control())
+    }
+
     /// Set (Some) or remove (None) the PIN. Digits only, 4-8 long.
     pub fn set_pin(&mut self, pin: Option<&str>) -> bool {
         match pin {
-            Some(p) if (4..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) => {
-                let mut salt = [0u8; 16];
-                crate::rng::fill(&mut salt);
-                let hash = Self::pin_hash(&salt, p);
-                self.lock_pin = Some((salt, hash));
-                let s = format!("salt={}\nhash={}\n", crate::crypto::base64(&salt), crate::crypto::base64(&hash));
-                self.fs.write("/system/lock.txt", s.as_bytes());
-                true
-            }
-            Some(_) => false,
-            None => {
-                self.lock_pin = None;
-                self.fs.remove("/system/lock.txt");
-                true
-            }
+            Some(p) if Self::pin_ok(p) => self.lock_pin = Some(Self::new_secret(p)),
+            Some(_) => return false,
+            None => self.lock_pin = None,
         }
+        self.save_lock();
+        true
+    }
+
+    /// Set (Some) or remove (None) the password: 6-64 characters.
+    pub fn set_password(&mut self, pw: Option<&str>) -> bool {
+        match pw {
+            Some(p) if Self::password_ok(p) => self.lock_pw = Some(Self::new_secret(p)),
+            Some(_) => return false,
+            None => self.lock_pw = None,
+        }
+        self.save_lock();
+        true
+    }
+
+    /// Allow unlocking with the paired phone's fingerprint sensor. Needs a PIN
+    /// or password to fall back on.
+    pub fn set_finger(&mut self, on: bool) -> bool {
+        if on && !self.secured() {
+            return false;
+        }
+        self.lock_finger = on;
+        self.save_lock();
+        true
+    }
+
+    /// Fingerprint unlock can be offered right now: allowed, and a real paired
+    /// phone with a fingerprint sensor is connected.
+    pub fn finger_ready(&self) -> bool {
+        self.lock_finger && !self.link.is_demo() && self.link.online && self.link.caps.iter().any(|c| c == "bio")
     }
 
     /// Pairing secret and the last paired phone (`/system/link.txt`).

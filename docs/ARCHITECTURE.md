@@ -34,9 +34,12 @@
 - `shell/splash.rs` draws the boot splash (logo, progress bar, status line) straight
   to the screen while `main.rs` brings the system up; it then crossfades into the
   first frame of the session.
-- `shell/lock.rs` is the lock screen. The PIN is stored as a salted, iterated
-  SHA-256 hash in `/system/lock.txt`; five wrong tries lock input for 30 s. The lock
-  keeps people out of the session; it doesn't encrypt files on the disk.
+- `shell/lock.rs` is the lock screen. The PIN and password are stored as salted,
+  iterated SHA-256 hashes in `/system/lock.txt`; five wrong tries lock input for
+  30 s. Fingerprint sign-in is delegated to the paired phone over Phone Link
+  (`unlock_req` → the phone's BiometricPrompt → `unlock`), because HydatekOS has no
+  fingerprint-reader drivers. The lock keeps people out of the session; it doesn't
+  encrypt files on the disk.
 - The main loop waits on a 10 ms periodic timer event, so the CPU idles between frames.
   Each tick it polls input, advances the shell, and redraws only when something changed.
   Moving the pointer only re-blits the two small rectangles under the old and new cursor.
