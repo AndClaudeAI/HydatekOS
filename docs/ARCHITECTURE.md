@@ -4,8 +4,9 @@
  UEFI firmware ── loads \EFI\BOOT\BOOTX64.EFI (the HydatekOS kernel)
         │
         ▼
- main.rs  boot: disable watchdog → claim heap → pick display mode → mount disk
-        │       → connect drivers → start shell → 100 Hz event loop
+ main.rs  boot: disable watchdog → claim heap → pick display mode → splash
+        │       → connect drivers → mount disk → start network → start shell
+        │       → crossfade to lock screen → 100 Hz event loop
         ▼
  ┌────────────────────────────── shell/ ──────────────────────────────┐
  │ desktop: menu bar · widgets · window manager · dock · launcher ·   │
@@ -30,6 +31,12 @@
 - `heap.rs` is HydatekOS's allocator. It's a first-fit, address-ordered free list with
   coalescing, fed by one large page allocation (up to 1 GB) taken at boot. Every
   `Vec`/`String` in the system comes from it.
+- `shell/splash.rs` draws the boot splash (logo, progress bar, status line) straight
+  to the screen while `main.rs` brings the system up; it then crossfades into the
+  first frame of the session.
+- `shell/lock.rs` is the lock screen. The PIN is stored as a salted, iterated
+  SHA-256 hash in `/system/lock.txt`; five wrong tries lock input for 30 s. The lock
+  keeps people out of the session; it doesn't encrypt files on the disk.
 - The main loop waits on a 10 ms periodic timer event, so the CPU idles between frames.
   Each tick it polls input, advances the shell, and redraws only when something changed.
   Moving the pointer only re-blits the two small rectangles under the old and new cursor.

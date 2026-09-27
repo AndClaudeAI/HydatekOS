@@ -79,8 +79,9 @@ impl Color {
     }
 }
 
+/// Blend two 0x00RRGGBB pixels: `a` from 0 (all `dst`) to 256 (all `src`).
 #[inline(always)]
-fn lerp(dst: u32, src: u32, a: u32) -> u32 {
+pub fn lerp(dst: u32, src: u32, a: u32) -> u32 {
     // a in 0..=256
     let rb = ((src & 0xff00ff).wrapping_sub(dst & 0xff00ff)).wrapping_mul(a) >> 8;
     let g = ((src & 0x00ff00).wrapping_sub(dst & 0x00ff00)).wrapping_mul(a) >> 8;

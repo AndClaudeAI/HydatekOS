@@ -2,7 +2,9 @@
 //! notifications) and the mobile shell, plus event routing.
 
 pub mod cursor;
+pub mod lock;
 pub mod mobile;
+pub mod splash;
 pub mod wallpaper;
 
 use crate::apps::{self, App, AppKind, DESKTOP_APPS, HEADER};
@@ -21,6 +23,15 @@ use alloc::vec::Vec;
 use mobile::Mobile;
 
 const BAR_H: i32 = 28;
+
+/// The HydatekOS mark: an arch in a rounded square, `size` points wide.
+pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
+    let k = |v: i32| v * size / 18;
+    ui.rrect(Rect::new(x, y, size, size), k(5).max(2), bg);
+    ui.rrect(Rect::new(x + k(5), y + k(4), k(8), k(11)), k(4), fg);
+    ui.rrect(Rect::new(x + k(7), y + k(7), k(4), k(9)), k(2), bg);
+    ui.rect(Rect::new(x + k(7), y + k(11), k(4), k(15) - k(11) + 1), bg);
+}
 const LOCAL_INST: u32 = 1_000_000;
 const PHONE_INST: u32 = 1_000_001;
 const DOCK_APPS: [AppKind; 8] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Music, AppKind::Settings];
@@ -54,6 +65,7 @@ enum Cmd {
     App(u32),
     CloseWin,
     MinWin,
+    Lock,
     Dark,
     MobileShell,
     Launcher,
@@ -138,6 +150,11 @@ pub struct Shell {
     pub s: i32,
     pub dirty: bool,
     last_anim: u64,
+    pub locked: bool,
+    lock: lock::Lock,
+    /// tick when the unlock slide-away started
+    unlocking: Option<u64>,
+    last_input: u64,
 }
 
 impl Shell {
@@ -165,6 +182,10 @@ impl Shell {
             s,
             dirty: true,
             last_anim: 0,
+            locked: false,
+            lock: lock::Lock::default(),
+            unlocking: None,
+            last_input: 0,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -172,6 +193,7 @@ impl Shell {
         }
         let msg = if sh.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
         sh.sys.toast("Welcome to HydatekOS", msg);
+        sh.locked = sh.sys.lock_on_boot;
         sh
     }
 
@@ -283,9 +305,37 @@ impl Shell {
 
     // ---- requests and ticks -------------------------------------------------
 
+    pub fn lock_now(&mut self) {
+        self.locked = true;
+        self.unlocking = None;
+        self.lock.reset();
+        self.menu = None;
+        self.launcher = None;
+        self.drag = None;
+        self.dirty = true;
+    }
+
+    fn unlock(&mut self) {
+        self.unlocking = Some(self.sys.ticks);
+        self.lock.reset();
+        self.dirty = true;
+    }
+
     /// Advance one tick (10 ms). Returns true if the screen needs redrawing.
     pub fn tick(&mut self, ticks: u64) -> bool {
         self.sys.ticks = ticks;
+        if let Some(start) = self.unlocking {
+            self.dirty = true;
+            if ticks >= start + 28 {
+                self.unlocking = None;
+                self.locked = false;
+            }
+        } else if self.locked && self.lock.animating(ticks) && ticks % 4 == 0 {
+            self.dirty = true;
+        }
+        if !self.locked && self.sys.lock_idle > 0 && ticks > self.last_input + self.sys.lock_idle as u64 * 6000 {
+            self.lock_now();
+        }
         if ticks % 50 == 0 {
             let t = efi::now();
             if t.minute != self.sys.now.minute || t.hour != self.sys.now.hour {
@@ -337,6 +387,7 @@ impl Shell {
             self.dirty = true;
             match r {
                 Req::Open(k) => self.open_app(k),
+                Req::Lock => self.lock_now(),
                 Req::OpenPath(p) => self.open_path(&p),
                 Req::Toast(t, b) => self.toast(&t, &b),
                 Req::SaveSettings => self.sys.save_settings(),
@@ -378,6 +429,10 @@ impl Shell {
     pub fn event(&mut self, ev: Ev, px: i32, py: i32) {
         let (x, y) = (px / self.s, py / self.s);
         self.mouse = (x, y);
+        self.last_input = self.sys.ticks;
+        if self.locked {
+            return self.lock_event(ev, x, y);
+        }
         match ev {
             Ev::Move => {
                 if let Some(d) = self.drag {
@@ -437,6 +492,38 @@ impl Shell {
         }
     }
 
+    fn lock_event(&mut self, ev: Ev, x: i32, y: i32) {
+        if self.unlocking.is_some() {
+            return;
+        }
+        let now = self.sys.ticks;
+        let outcome = match ev {
+            Ev::Move => {
+                let h = self.hit(x, y);
+                if h != self.hover {
+                    self.hover = h;
+                    self.dirty = true;
+                }
+                return;
+            }
+            Ev::Down => {
+                self.dirty = true;
+                match self.hit(x, y) {
+                    Some(Action::Lock(a)) => self.lock.action(a, &self.sys, now),
+                    _ => return,
+                }
+            }
+            Ev::Key(k, _) => {
+                self.dirty = true;
+                self.lock.key(k, &self.sys, now)
+            }
+            _ => return,
+        };
+        if let lock::Outcome::Unlock = outcome {
+            self.unlock();
+        }
+    }
+
     fn drag_to(&mut self, d: Drag, x: i32, y: i32) {
         let (w, h) = (self.w, self.h);
         match d {
@@ -475,6 +562,7 @@ impl Shell {
             _ => {}
         }
         match a {
+            Action::Lock(_) => {}
             Action::Background | Action::Swallow => {
                 self.launcher = None;
             }
@@ -615,6 +703,7 @@ impl Shell {
             }
             Cmd::Restart => self.sys.reqs.push(Req::Reboot),
             Cmd::Shutdown => self.sys.reqs.push(Req::Shutdown),
+            Cmd::Lock => self.lock_now(),
             Cmd::None => {}
         }
     }
@@ -648,6 +737,9 @@ impl Shell {
             }
             return;
         }
+        if k == Key::F(12) {
+            return self.lock_now();
+        }
         if !self.mobile_mode() {
             match (k, ctrl) {
                 (Key::Char('w'), true) => return self.run_cmd(Cmd::CloseWin),
@@ -668,6 +760,28 @@ impl Shell {
     // ---- rendering ----------------------------------------------------------
 
     pub fn render(&mut self, canvas: &mut Canvas, ticks: u64) {
+        let full = Rect::new(0, 0, self.w, self.h);
+        if self.locked && self.unlocking.is_none() {
+            let mut ui = Ui::new(canvas, self.s, self.theme(), self.hover, ticks);
+            self.lock.render(&mut ui, full, &self.sys, ticks);
+            self.zones = core::mem::take(&mut ui.zones);
+            return;
+        }
+        self.render_session(canvas, ticks);
+        if let Some(start) = self.unlocking {
+            // slide the lock screen up and away (ease-out cubic)
+            let p = ((ticks - start) as i32 * 1000 / 28).clamp(0, 1000);
+            let inv = 1000 - p;
+            let eased = 1000 - inv * inv / 1000 * inv / 1000;
+            let off = self.h * eased / 1000;
+            let mut ui = Ui::new(canvas, self.s, self.theme(), None, ticks);
+            let old = ui.set_clip(Rect::new(0, 0, self.w, self.h - off));
+            self.lock.render(&mut ui, Rect::new(0, -off, self.w, self.h), &self.sys, ticks);
+            ui.set_clip(old);
+        }
+    }
+
+    fn render_session(&mut self, canvas: &mut Canvas, ticks: u64) {
         let t = self.theme();
         let s = self.s;
         let (w, h) = (self.w, self.h);
@@ -858,10 +972,7 @@ impl Shell {
         if ui.hot(la) || self.menu == Some(0) {
             ui.rrect(Rect::new(6, 3, 26, 22), 6, t.hover);
         }
-        ui.rrect(lr, 5, t.accent);
-        ui.rrect(Rect::new(lr.x + 5, lr.y + 4, 8, 11), 4, t.on_accent);
-        ui.rrect(Rect::new(lr.x + 7, lr.y + 7, 4, 9), 2, t.accent);
-        ui.rect(Rect::new(lr.x + 7, lr.y + 11, 4, 5), t.accent);
+        logo(ui, lr.x, lr.y, lr.w, t.accent, t.on_accent);
         ui.zone(Rect::new(6, 3, 26, 22), la);
         let mut x = 38;
         x += ui.text(x, 19, Face::Semibold, 13, "HydatekOS", t.text) + 18;
@@ -966,6 +1077,8 @@ impl Shell {
                 items.push(("-".to_string(), Cmd::None));
                 items.push(("Restart".to_string(), Cmd::Restart));
                 items.push(("Shut Down".to_string(), Cmd::Shutdown));
+                items.push(("-".to_string(), Cmd::None));
+                items.push(("Lock Screen   F12".to_string(), Cmd::Lock));
             }
             1 => {
                 if focused.is_some() {

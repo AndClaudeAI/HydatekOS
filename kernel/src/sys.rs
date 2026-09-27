@@ -16,6 +16,7 @@ pub enum Req {
     Reboot,
     Toast(String, String),
     SaveSettings,
+    Lock,
 }
 
 #[derive(Clone)]
@@ -63,6 +64,11 @@ pub struct Sys {
     pub link: Link,
     pub net: NetStatus,
     pub rng_source: &'static str,
+    pub lock_on_boot: bool,
+    /// minutes of inactivity before locking; 0 = never
+    pub lock_idle: u32,
+    /// (salt, stretched hash) of the lock-screen PIN
+    lock_pin: Option<([u8; 16], [u8; 32])>,
     pub reqs: Vec<Req>,
     pub screen: (i32, i32, i32),
     pub firmware: String,
@@ -105,6 +111,9 @@ impl Sys {
             link: Link::new(),
             net: NetStatus::default(),
             rng_source: "",
+            lock_on_boot: true,
+            lock_idle: 10,
+            lock_pin: None,
             reqs: Vec::new(),
             screen: (0, 0, 1),
             firmware: String::new(),
@@ -113,6 +122,7 @@ impl Sys {
         };
         s.load_settings();
         s.load_link();
+        s.load_pin();
         s.load_events();
         s
     }
@@ -137,6 +147,8 @@ impl Sys {
                 "mobile" => self.mobile_shell = b,
                 "pointer" => self.pointer_speed = v.parse().unwrap_or(3),
                 "demo" if b => self.link.demo(),
+                "lockboot" => self.lock_on_boot = b,
+                "lockidle" => self.lock_idle = v.parse().unwrap_or(10),
                 _ => {}
             }
         }
@@ -144,10 +156,88 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\n",
-            self.dark as u8, self.accent, self.wifi as u8, self.bt as u8, self.focus as u8, self.mobile_shell as u8, self.pointer_speed, self.link.is_demo() as u8
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\n",
+            self.dark as u8,
+            self.accent,
+            self.wifi as u8,
+            self.bt as u8,
+            self.focus as u8,
+            self.mobile_shell as u8,
+            self.pointer_speed,
+            self.link.is_demo() as u8,
+            self.lock_on_boot as u8,
+            self.lock_idle
         );
         self.fs.write("/system/settings.txt", s.as_bytes());
+    }
+
+    // ---- lock-screen PIN ------------------------------------------------------
+    //
+    // Stored as salt + a stretched SHA-256 hash in /system/lock.txt. It keeps
+    // people out of a running session; anyone with the disk can still read
+    // files, since they aren't encrypted.
+
+    fn pin_hash(salt: &[u8; 16], pin: &str) -> [u8; 32] {
+        let mut h = [0u8; 32];
+        for _ in 0..20_000 {
+            let mut s = crate::crypto::Sha256::new();
+            s.update(salt);
+            s.update(pin.as_bytes());
+            s.update(&h);
+            h = s.finish();
+        }
+        h
+    }
+
+    fn load_pin(&mut self) {
+        let Some(data) = self.fs.read("/system/lock.txt") else { return };
+        let text = String::from_utf8_lossy(&data).to_string();
+        let (mut salt, mut hash) = (None, None);
+        for line in text.lines() {
+            match line.split_once('=') {
+                Some(("salt", v)) => salt = crate::crypto::base64_decode(v).filter(|b| b.len() == 16),
+                Some(("hash", v)) => hash = crate::crypto::base64_decode(v).filter(|b| b.len() == 32),
+                _ => {}
+            }
+        }
+        if let (Some(s), Some(h)) = (salt, hash) {
+            self.lock_pin = Some((s.try_into().unwrap(), h.try_into().unwrap()));
+        }
+    }
+
+    pub fn has_pin(&self) -> bool {
+        self.lock_pin.is_some()
+    }
+
+    pub fn check_pin(&self, pin: &str) -> bool {
+        let Some((salt, hash)) = &self.lock_pin else { return true };
+        let h = Self::pin_hash(salt, pin);
+        let mut diff = 0u8;
+        for i in 0..32 {
+            diff |= h[i] ^ hash[i];
+        }
+        diff == 0
+    }
+
+    /// Set (Some) or remove (None) the PIN. Digits only, 4-8 long.
+    pub fn set_pin(&mut self, pin: Option<&str>) -> bool {
+        match pin {
+            Some(p) if (4..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) => {
+                let mut salt = [0u8; 16];
+                crate::rng::fill(&mut salt);
+                let hash = Self::pin_hash(&salt, p);
+                self.lock_pin = Some((salt, hash));
+                let s = format!("salt={}\nhash={}\n", crate::crypto::base64(&salt), crate::crypto::base64(&hash));
+                self.fs.write("/system/lock.txt", s.as_bytes());
+                true
+            }
+            Some(_) => false,
+            None => {
+                self.lock_pin = None;
+                self.fs.remove("/system/lock.txt");
+                true
+            }
+        }
     }
 
     /// Pairing secret and the last paired phone (`/system/link.txt`).

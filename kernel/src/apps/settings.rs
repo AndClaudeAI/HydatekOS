@@ -5,13 +5,13 @@ use crate::font::Face;
 use crate::gfx::{Color, Rect};
 use crate::sys::{Req, Sys};
 use crate::theme::ACCENTS;
-use crate::ui::{Action, Ui};
+use crate::ui::{Action, Key, Ui};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-const SECTIONS: [&str; 6] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Display", "About"];
+const SECTIONS: [&str; 7] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -31,15 +31,25 @@ pub struct Settings {
     sec: usize,
     /// Phone layout: a section page is open (otherwise the section list).
     page: bool,
+    pin: String,
+    pin_focus: bool,
+    pin_msg: String,
 }
 
 impl Settings {
     pub fn new() -> Settings {
-        Settings { sec: 0, page: false }
+        Settings { sec: 0, page: false, pin: String::new(), pin_focus: false, pin_msg: String::new() }
     }
 }
 
 const C_BACK: u32 = 12;
+const C_LOCK_BOOT: u32 = 13;
+const C_IDLE: u32 = 14;
+const C_PIN_FIELD: u32 = 15;
+const C_PIN_SAVE: u32 = 16;
+const C_PIN_REMOVE: u32 = 17;
+const C_LOCK_NOW: u32 = 18;
+const IDLE_STEPS: [u32; 6] = [0, 2, 5, 10, 15, 30];
 
 fn row(ui: &mut Ui, r: Rect, y: i32, title: &str, sub: &str) {
     let t = ui.t;
@@ -199,6 +209,33 @@ impl App for Settings {
                 }
             }
             4 => {
+                card(ui, Rect::new(m.x, m.y, m.w, 124));
+                let inner = Rect::new(m.x + 16, m.y, m.w - 32, 124);
+                row(ui, inner, m.y + 12, "Show at startup", "Lock the screen when HydatekOS starts");
+                ui.switch(sw_x, m.y + 18, sys.lock_on_boot, Action::App(inst, C_LOCK_BOOT));
+                let idle = if sys.lock_idle == 0 { String::from("Never") } else { alloc::format!("After {} min", sys.lock_idle) };
+                row(ui, inner, m.y + 62, "Lock when idle", "Lock after no keyboard or mouse input");
+                ui.button(Rect::new(m.r() - 128, m.y + 70, 112, 30), &idle, Action::App(inst, C_IDLE), false);
+
+                card(ui, Rect::new(m.x, m.y + 138, m.w, 150));
+                let inner = Rect::new(m.x + 16, m.y + 138, m.w - 32, 150);
+                let st = if sys.has_pin() { "A PIN is set" } else { "No PIN: any key or click unlocks" };
+                row(ui, inner, m.y + 150, "PIN", st);
+                let f = Rect::new(m.x + 16, m.y + 198, 150, 32);
+                let dots: String = self.pin.chars().map(|_| '•').collect();
+                ui.field(f, &dots, "4-8 digits", self.pin_focus, Action::App(inst, C_PIN_FIELD));
+                let label = if sys.has_pin() { "Change PIN" } else { "Set PIN" };
+                ui.button(Rect::new(f.r() + 8, f.y, 110, 32), label, Action::App(inst, C_PIN_SAVE), true);
+                if sys.has_pin() {
+                    ui.button(Rect::new(f.r() + 126, f.y, 90, 32), "Remove", Action::App(inst, C_PIN_REMOVE), false);
+                }
+                let note = if self.pin_msg.is_empty() { "Keeps people out of your session; it doesn't encrypt files." } else { self.pin_msg.as_str() };
+                let note = ui.fit(Face::Regular, 12, note, m.w - 32);
+                ui.text(m.x + 16, m.y + 262, Face::Regular, 12, &note, t.text2);
+                ui.button(Rect::new(m.x, m.y + 304, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
+                ui.text(m.x + 142, m.y + 324, Face::Regular, 12, "or press F12", t.text3);
+            }
+            5 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
@@ -223,7 +260,32 @@ impl App for Settings {
     }
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
+        self.pin_focus = code == C_PIN_FIELD;
         match code {
+            C_LOCK_BOOT => sys.lock_on_boot = !sys.lock_on_boot,
+            C_IDLE => {
+                let i = IDLE_STEPS.iter().position(|v| *v == sys.lock_idle).unwrap_or(0);
+                sys.lock_idle = IDLE_STEPS[(i + 1) % IDLE_STEPS.len()];
+            }
+            C_PIN_FIELD => return,
+            C_PIN_SAVE => {
+                let pin = core::mem::take(&mut self.pin);
+                self.pin_msg = if sys.set_pin(Some(&pin)) {
+                    String::from("PIN saved. You'll need it to unlock.")
+                } else {
+                    String::from("Use 4 to 8 digits.")
+                };
+                return;
+            }
+            C_PIN_REMOVE => {
+                sys.set_pin(None);
+                self.pin_msg = String::from("PIN removed.");
+                return;
+            }
+            C_LOCK_NOW => {
+                sys.reqs.push(Req::Lock);
+                return;
+            }
             C_DARK => sys.dark = !sys.dark,
             C_MOBILE => sys.mobile_shell = !sys.mobile_shell,
             C_WIFI => sys.wifi = !sys.wifi,
@@ -249,6 +311,25 @@ impl App for Settings {
         if code < C_SECTION || code >= C_ACCENT {
             sys.reqs.push(Req::SaveSettings);
         }
+    }
+
+    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+        if !self.pin_focus {
+            return;
+        }
+        match k {
+            Key::Char(c) if c.is_ascii_digit() && self.pin.len() < 8 => self.pin.push(c),
+            Key::Backspace => {
+                self.pin.pop();
+            }
+            Key::Enter => self.action(C_PIN_SAVE, false, sys),
+            Key::Esc => self.pin_focus = false,
+            _ => {}
+        }
+    }
+
+    fn animating(&self) -> bool {
+        self.pin_focus
     }
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {

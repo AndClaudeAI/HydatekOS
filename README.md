@@ -12,6 +12,10 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
 
+| Boot splash | Lock screen with PIN |
+|---|---|
+| ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) |
+
 | Pairing by QR code | Browser companion on the phone | Demo phone mirror |
 |---|---|---|
 | ![Pairing](docs/screenshots/phone-link-pairing.png) | ![Web companion](docs/screenshots/web-companion.png) | ![Mirror](docs/screenshots/phone-link.png) |
@@ -19,6 +23,10 @@ Windows, macOS or Linux.
 ## What works today (milestone 1, "Dune")
 
 - **Boots on real x86-64 PCs** from a USB stick or the internal disk (UEFI, Secure Boot off).
+- **Boot splash and lock screen:** a HydatekOS splash with a progress bar while
+  drivers, files and the network come up, then a fade into the lock screen (clock,
+  date, Up next, phone notifications). Set a 4–8 digit PIN in Settings › Lock screen;
+  the screen also locks after idle time, from the logo menu, or with **F12**.
 - **Desktop shell:** menu bar with working menus, clock and "Up next" widget, quick
   toggles, a dock with running-app indicators and tooltips, an app launcher with search,
   and notifications.
@@ -96,6 +104,7 @@ covers putting HydatekOS on the internal disk next to another OS.
 | Close the front window | **Ctrl+W** or the orange button |
 | Save a note | **Ctrl+S** |
 | Rename / delete a file | **F2** / **Delete** (File menu has the same actions) |
+| Lock the screen | **F12**, the logo menu, or `lock` in Terminal |
 | Shell commands | Open Terminal and type `help` |
 | Restart / shut down | HydatekOS logo menu, or Settings › About |
 

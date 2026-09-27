@@ -74,8 +74,10 @@ impl Display {
             let info = &*mode.info;
             let (cw, ch) = (info.hres as i32, info.vres as i32);
             log!("display: current mode {} {}x{} of {}", mode.mode, cw, ch, mode.max_mode);
-            // Keep the firmware's (usually native) mode unless it is tiny.
-            if cw < 1024 || ch < 640 {
+            // Keep the firmware's (usually native) mode unless it is tiny, and
+            // keep its orientation: portrait tablets and phones stay portrait.
+            let portrait = ch > cw;
+            if (cw as i64) * (ch as i64) < 1024 * 640 {
                 let mut best: Option<(u32, i64)> = None;
                 for m in 0..mode.max_mode {
                     let mut size = 0usize;
@@ -84,7 +86,7 @@ impl Display {
                         continue;
                     }
                     let (w, h) = ((*inf).hres as i64, (*inf).vres as i64);
-                    if (*inf).pixel_format > 2 || w > 1920 || h > 1200 {
+                    if (*inf).pixel_format > 2 || (h > w) != portrait || w.max(h) > 1920 || w.min(h) > 1200 {
                         continue;
                     }
                     if best.map(|b| w * h > b.1).unwrap_or(true) {
@@ -107,6 +109,22 @@ impl Display {
         }
         unsafe {
             ((*self.gop).blt)(self.gop, c.px.as_ptr(), 2, r.x as usize, r.y as usize, r.x as usize, r.y as usize, r.w as usize, r.h as usize, c.w as usize * 4);
+        }
+    }
+
+    /// Cross-fade the whole screen from `from` to `to`.
+    fn crossfade(&self, from: &Canvas, to: &Canvas, scratch: &mut Vec<u32>) {
+        scratch.clear();
+        scratch.resize(from.px.len(), 0);
+        for step in 1..=10u32 {
+            let a = step * 256 / 10;
+            for (i, px) in scratch.iter_mut().enumerate() {
+                *px = gfx::lerp(from.px[i], to.px[i], a);
+            }
+            unsafe {
+                ((*self.gop).blt)(self.gop, scratch.as_ptr(), 2, 0, 0, 0, 0, from.w as usize, from.h as usize, from.w as usize * 4);
+            }
+            efi::stall_us(12_000);
         }
     }
 
@@ -171,13 +189,19 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
 
     // Logical points: desktops at ~1280+ wide, phones/tablets in portrait at ~400-540.
     let scale = if disp.h > disp.w { (disp.w / 400).max(1) } else if disp.w >= 2560 && disp.h >= 1440 { 2 } else { 1 };
+    let full = Rect::new(0, 0, disp.w, disp.h);
+    let mut splash = shell::splash::Splash::new(disp.w, disp.h, scale);
+    disp.present(splash.step(8, "Starting"), full);
     let rng_source = rng::init();
     log!("rng: {}", rng_source);
+    disp.present(splash.step(20, "Connecting devices"), full);
     efi::connect_all();
+    disp.present(splash.step(45, "Loading your files"), full);
     let vfs = fs::Vfs::mount();
     log!("storage: persistent={}", vfs.persistent);
     let mut sys = sys::Sys::new(vfs, efi::now());
     sys.rng_source = rng_source;
+    disp.present(splash.step(65, "Starting network"), full);
     let mut net = net::Net::up();
     let mut server = net.as_mut().map(linksrv::LinkServer::new);
     if let Some(n) = net.as_ref() {
@@ -185,6 +209,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     }
     sys.firmware = efi::firmware_vendor();
     sys.mem_total = efi::total_memory();
+    disp.present(splash.step(85, "Preparing your desktop"), full);
     let (lw, lh) = (disp.w / scale, disp.h / scale);
     let mut sh = shell::Shell::new(sys, lw, lh, scale);
     let mut back = Canvas::new(disp.w, disp.h);
@@ -201,6 +226,11 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut ticks: u64 = 0;
     let mut events = Vec::new();
     let (mut cx, mut cy) = (input.x, input.y);
+    // Fade from the splash into the first frame (the lock screen or desktop).
+    disp.present(splash.step(100, "Ready"), full);
+    sh.render(&mut back, 0);
+    disp.crossfade(&splash.frame, &back, &mut scratch);
+    drop(splash);
     let mut first = true;
     loop {
         // Wake on the 10 ms tick, or as soon as a network packet arrives.

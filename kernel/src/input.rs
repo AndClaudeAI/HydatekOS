@@ -206,6 +206,8 @@ fn map_key(k: efi::InputKey, ctrl: bool) -> Option<(Key, bool)> {
         0x09 => Key::PageUp,
         0x0a => Key::PageDown,
         0x0b..=0x14 => Key::F((k.scan_code - 0x0a) as u8),
+        0x15 => Key::F(11),
+        0x16 => Key::F(12),
         0x17 => Key::Esc,
         0 => match k.unicode_char {
             0 => return None,

@@ -30,6 +30,8 @@ pub enum Action {
     /// The scaled mirror of the linked phone's screen.
     /// A scaled mobile screen: 0 = this device's mobile shell, 1 = linked phone.
     Mirror(u8),
+    /// Lock screen: tap, keypad digit, backspace or enter (see shell::lock)
+    Lock(u8),
     Swallow,
 }
 

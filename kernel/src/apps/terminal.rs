@@ -31,6 +31,7 @@ const HELP: &[&str] = &[
     "  uname             system name           neofetch        system summary",
     "  theme dark|light  switch palette        clear           clear the screen",
     "  reboot            restart               shutdown        power off",
+    "  lock              lock the screen",
 ];
 
 impl Terminal {
@@ -240,6 +241,7 @@ impl Terminal {
                     }
                 }
             }
+            "lock" => sys.reqs.push(Req::Lock),
             "reboot" => sys.reqs.push(Req::Reboot),
             "shutdown" | "poweroff" => sys.reqs.push(Req::Shutdown),
             _ => self.print(&format!("hsh: {}: command not found", cmd)),
