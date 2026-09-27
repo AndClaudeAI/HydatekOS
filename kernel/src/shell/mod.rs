@@ -34,7 +34,7 @@ pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
 }
 const LOCAL_INST: u32 = 1_000_000;
 const PHONE_INST: u32 = 1_000_001;
-const DOCK_APPS: [AppKind; 8] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Music, AppKind::Settings];
+const DOCK_APPS: [AppKind; 9] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Music, AppKind::Settings];
 const MENUS: [&str; 4] = ["File", "Edit", "View", "Go"];
 /// The linked phone renders at its native size and is scaled into Phone Link.
 const PHONE_W: i32 = 390;
@@ -50,6 +50,8 @@ struct Win {
 
 #[derive(Clone, Copy)]
 enum Drag {
+    /// the pointer was pressed on an app's zone: it gets the moves
+    App(u32),
     Move(u32, i32, i32),
     Resize(u32, i32, i32, Rect),
 }
@@ -419,6 +421,8 @@ impl Shell {
         } else if p.ends_with(".img") {
             self.toast("Files", "Image preview arrives with the image codecs in milestone 2");
             return;
+        } else if p.to_ascii_lowercase().ends_with(".docx") {
+            AppKind::Scripts
         } else {
             AppKind::Notes
         };
@@ -538,6 +542,7 @@ impl Shell {
     fn drag_to(&mut self, d: Drag, x: i32, y: i32) {
         let (w, h) = (self.w, self.h);
         match d {
+            Drag::App(inst) => self.with_app(inst, |a, _| a.drag(x, y)),
             Drag::Move(id, ox, oy) => {
                 if let Some(i) = self.win_idx(id) {
                     let win = &mut self.wins[i];
@@ -648,6 +653,10 @@ impl Shell {
                     a.mouse(mx, my);
                     a.action(code, double, sys);
                 });
+                // desktop windows get the pointer moves until release (text selection)
+                if self.win_idx(inst).is_some() && (mx, my) == (x, y) {
+                    self.drag = Some(Drag::App(inst));
+                }
             }
             Action::Menu(i) => {
                 self.menu = if self.menu == Some(i) { None } else { Some(i) };

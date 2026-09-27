@@ -15,6 +15,7 @@ Pack layout (little endian):
 
 Usage: python3 tools/fontgen.py   (writes kernel/assets/fonts.bin)
 """
+import math
 import os
 import struct
 from PIL import Image, ImageDraw, ImageFont
@@ -34,12 +35,20 @@ FALLBACK = {0: "dejavu-sans.ttf", 1: "dejavu-sans.ttf", 2: "dejavu-sans-bold.ttf
 
 # face_id -> (file, charset, logical sizes). Must match kernel/src/font.rs
 FACES = {
-    0: ("figtree-400.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20]),
+    0: ("figtree-400.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28]),
     1: ("figtree-500.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 18, 20, 24]),
-    2: ("figtree-600.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 24, 28, 36]),
+    2: ("figtree-600.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 36]),
     3: ("bodoni-moda-500.ttf", DIGITS, [48, 64, 96]),
     4: ("dejavu-sans-mono.ttf", TEXT, [12, 13, 14]),
+    # Figtree ships no italics: 5 and 6 are slanted (oblique) renderings of
+    # the regular and semibold weights, for documents.
+    5: ("figtree-400.ttf", TEXT, [11, 13, 15, 18, 22, 28]),
+    6: ("figtree-600.ttf", TEXT, [11, 13, 15, 18, 22, 28, 36]),
 }
+OBLIQUE = {5, 6}
+SLANT = 0.2
+FALLBACK[5] = FALLBACK[0]
+FALLBACK[6] = FALLBACK[2]
 SCALES = [1, 2]
 
 
@@ -72,6 +81,13 @@ def render_face(face_id, path, chars, px):
         if w and h:
             img = Image.new("L", (w, h), 0)
             ImageDraw.Draw(img).text((-l, -t), ch, font=font_for, fill=255, anchor="ls")
+            if face_id in OBLIQUE:
+                # shear: rows above the baseline move right, below move left
+                o = int(math.ceil(max(b, 0) * SLANT))
+                nw = w + int(math.ceil(h * SLANT)) + 1
+                img = img.transform((nw, h), Image.AFFINE, (1, SLANT, -o + t * SLANT, 0, 1, 0), resample=Image.BILINEAR)
+                l -= o
+                w = nw
             buf = img.tobytes()
         else:
             w = h = 0

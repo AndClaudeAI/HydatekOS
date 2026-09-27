@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run HydatekOS's automated tests that don't need a running VM:
-#   kernel crypto/QR/HLP (Rust, on the host), web companion crypto (Node),
+#   kernel crypto/QR/HLP and Hyda Scripts documents (.docx, zip, inflate) (Rust,
+#   on the host), web companion crypto (Node),
 #   Android protocol code (JVM). All three check the same interop vectors.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

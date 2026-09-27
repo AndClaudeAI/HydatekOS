@@ -13,6 +13,9 @@ pub enum Face {
     Semibold = 2,
     Display = 3,
     Mono = 4,
+    /// slanted renderings of Regular and Semibold (documents)
+    Italic = 5,
+    SemiboldItalic = 6,
 }
 
 #[derive(Clone, Copy)]

@@ -52,7 +52,9 @@ The UEFI target is soft-float, so the rasteriser is integer-only:
   masks, one per radius. **Shadows** use a 9-slice of a blurred mask cached per
   (radius, blur).
 - **Text** uses glyph atlases pre-rasterised at build time (`tools/fontgen.py`) at every
-  size and scale the UI needs, blended with subpixel pen positioning.
+  size and scale the UI needs, blended with subpixel pen positioning. Glyphs a font
+  lacks (₦, ₹, ₵) come from DejaVu Sans, and the italic faces are the regular and
+  semibold weights slanted at build time.
 - **Icons** are vector line drawings on a 24-unit grid (polylines, arcs, ellipses and
   fills). They're rasterised by capsule-distance tests with 4x4 supersampling and
   cached per pixel size.
@@ -85,6 +87,18 @@ shell, or the mirrored phone. Below 540 points wide they switch to **compact pho
 layouts** (sidebars become chips or back-navigable lists). Apps talk to the system
 through `Sys`, and to the shell through requests like `Req::Open`, `Req::OpenPath` and
 `Req::Toast`.
+
+## Documents (`doc.rs`, `zip.rs`, `apps/scripts.rs`)
+
+Hyda Scripts, the Hyda Workspace word processor, keeps a document as paragraphs
+(style, alignment, characters, one formatting byte per character). `doc.rs` does the
+editing operations and converts to and from Word (`.docx`: Office Open XML written
+by hand, read with a small XML tokenizer), plain text and Markdown. `zip.rs` writes
+stored zip archives and reads stored or deflated ones with its own inflate.
+`apps/scripts.rs` lays paragraphs out on A4 pages, draws them, and handles the caret,
+selection (the shell forwards pointer drags to apps via `App::drag`, and
+`input::shift()` reports Shift), undo, and the clipboard (`Sys::clipboard`). More in
+[HYDA_WORKSPACE.md](HYDA_WORKSPACE.md).
 
 ## Storage (`fs.rs`)
 

@@ -8,6 +8,14 @@ use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTe
 use crate::ui::Key;
 use alloc::vec::Vec;
 
+static SHIFT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Shift was held for the most recent key (for Shift+arrow selection). Only
+/// firmware with the extended text input protocol reports it.
+pub fn shift() -> bool {
+    SHIFT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 pub enum Ev {
     Move,
     Down,
@@ -187,6 +195,7 @@ impl Input {
                 }
             };
             let ctrl_state = shift & efi::SHIFT_STATE_VALID != 0 && shift & (efi::LEFT_CONTROL | efi::RIGHT_CONTROL) != 0;
+            SHIFT.store(shift & efi::SHIFT_STATE_VALID != 0 && shift & (efi::LEFT_SHIFT | efi::RIGHT_SHIFT) != 0, core::sync::atomic::Ordering::Relaxed);
             if let Some((k, ctrl)) = map_key(key, ctrl_state) {
                 out.push(Ev::Key(k, ctrl));
             }

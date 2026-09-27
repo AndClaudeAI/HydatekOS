@@ -75,6 +75,8 @@ pub struct Sys {
     /// the paired phone's fingerprint sensor may unlock (needs a PIN or password)
     pub lock_finger: bool,
     pub reqs: Vec<Req>,
+    /// text copied with Cut/Copy (shared by apps)
+    pub clipboard: String,
     pub screen: (i32, i32, i32),
     pub firmware: String,
     pub mem_total: u64,
@@ -122,6 +124,7 @@ impl Sys {
             lock_pw: None,
             lock_finger: false,
             reqs: Vec::new(),
+            clipboard: String::new(),
             screen: (0, 0, 1),
             firmware: String::new(),
             mem_total: 0,

@@ -21,6 +21,7 @@ mod hlp;
 mod icons;
 mod input;
 mod crypto;
+mod doc;
 mod link;
 mod linksrv;
 mod net;
@@ -31,6 +32,7 @@ mod shell;
 mod sys;
 mod theme;
 mod ui;
+mod zip;
 
 use alloc::vec;
 use alloc::vec::Vec;

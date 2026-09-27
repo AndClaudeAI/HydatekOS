@@ -6,6 +6,13 @@ pub mod crypto;
 pub mod qr;
 #[path = "../../kernel/src/hlp.rs"]
 pub mod hlp;
+#[path = "../../kernel/src/zip.rs"]
+pub mod zip;
+#[path = "../../kernel/src/doc.rs"]
+pub mod doc;
+
+#[cfg(test)]
+mod doc_tests;
 
 #[cfg(test)]
 mod tests {

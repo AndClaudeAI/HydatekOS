@@ -17,6 +17,7 @@ pub mod music;
 pub mod notes;
 pub mod phone;
 pub mod phonelink;
+pub mod scripts;
 pub mod settings;
 pub mod terminal;
 
@@ -34,15 +35,17 @@ pub enum AppKind {
     PhoneLink,
     Phone,
     Camera,
+    Scripts,
 }
 
-pub const DESKTOP_APPS: [AppKind; 10] = [
+pub const DESKTOP_APPS: [AppKind; 11] = [
     AppKind::Files,
     AppKind::Browser,
     AppKind::Messages,
     AppKind::Mail,
     AppKind::Calendar,
     AppKind::Notes,
+    AppKind::Scripts,
     AppKind::Music,
     AppKind::Settings,
     AppKind::Terminal,
@@ -64,6 +67,7 @@ impl AppKind {
             AppKind::PhoneLink => "Phone Link",
             AppKind::Phone => "Phone",
             AppKind::Camera => "Camera",
+            AppKind::Scripts => "Hyda Scripts",
         }
     }
     pub fn icon(self) -> Icon {
@@ -80,6 +84,7 @@ impl AppKind {
             AppKind::PhoneLink => Icon::Link,
             AppKind::Phone => Icon::Phone,
             AppKind::Camera => Icon::Camera,
+            AppKind::Scripts => Icon::Scripts,
         }
     }
     /// Accent-coloured icon (as on the mobile home screen)?
@@ -95,6 +100,7 @@ impl AppKind {
             AppKind::PhoneLink => (760, 500),
             AppKind::Calendar => (700, 460),
             AppKind::Music => (560, 400),
+            AppKind::Scripts => (900, 600),
             _ => (660, 430),
         }
     }
@@ -117,6 +123,9 @@ pub trait App {
     fn scroll(&mut self, _dy: i32) {}
     /// Pointer position (logical) at the time of the next `action` call.
     fn mouse(&mut self, _x: i32, _y: i32) {}
+    /// The pointer moved while the button, pressed on one of this app's
+    /// zones, is still down.
+    fn drag(&mut self, _x: i32, _y: i32) {}
     /// Menu bar entries: (menu index 0..3 = File/Edit/View/Go) -> items.
     fn menu(&self, _idx: usize) -> Vec<(&'static str, u32)> {
         Vec::new()
@@ -146,6 +155,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
         AppKind::Music => Box::new(music::Music::new()),
         AppKind::Phone => Box::new(phone::Phone::new()),
         AppKind::Camera => Box::new(phone::Camera),
+        AppKind::Scripts => Box::new(scripts::Scripts::new()),
     }
 }
 
