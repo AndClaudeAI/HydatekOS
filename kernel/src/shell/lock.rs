@@ -128,13 +128,36 @@ impl Lock {
         // status icons
         ui.icon(Icon::Battery, r.r() - u(40), r.y + u(14), u(18), t.text);
         ui.icon(Icon::Wifi, r.r() - u(66), r.y + u(14), u(16), if sys.net.ip.is_some() { t.text } else { t.text3 });
-        // clock
-        let (x, top) = if tall { (r.x + u(24), r.y + u(90)) } else { (r.x + r.w / 10, r.y + r.h * 22 / 100) };
-        ui.text(x + 4, top, Face::Regular, u(20), &sys.date_long(), t.text2);
-        ui.text(x, top + u(112), Face::Display, u(128), &sys.clock(), t.text);
+        let pin = sys.has_pin();
+        let keypad = pin && (tall || r.h >= 600);
+        let key = if tall { u(64) } else { 52 };
+        let gap = if tall { u(18) } else { 14 };
+        let pad_h = if keypad { 4 * key + 3 * gap } else { 0 };
+        // the clock shrinks a little when the keypad needs the room
+        let cs = match (keypad, tall) {
+            (true, true) => u(100),
+            (true, false) if r.h < 760 => 100,
+            _ => u(128),
+        };
+        // one centred column: date, clock, Up next, then the PIN entry
+        let head_h = u(20) + u(16) + cs * 3 / 4 + u(34) + u(86);
+        let pin_h = if pin { u(36) + u(28) + u(20) + pad_h } else { 0 };
+        let cx = r.x + r.w / 2;
+        let top = if pin {
+            r.y + ((r.h - head_h - pin_h) / 2).max(u(44)) + u(20)
+        } else {
+            r.y + ((r.h - head_h) / 2 - r.h / 10).max(u(44)) + u(20)
+        };
+        let date = sys.date_long();
+        let dw = ui.tw(Face::Regular, u(20), &date);
+        ui.text(cx - dw / 2, top, Face::Regular, u(20), &date, t.text2);
+        let clock = sys.clock();
+        let clock_base = top + u(16) + cs * 3 / 4;
+        let cw = ui.tw(Face::Display, cs, &clock);
+        ui.text(cx - cw / 2, clock_base, Face::Display, cs, &clock, t.text);
         // up next
-        let card_w = if tall { r.w - u(48) } else { 380 };
-        let card = Rect::new(x, top + u(146), card_w, u(86));
+        let card_w = if tall { r.w - u(48) } else { 420 };
+        let card = Rect::new(cx - card_w / 2, clock_base + u(34), card_w, u(86));
         ui.rrect(card, u(24), t.surface.with_alpha(235));
         let ic = Rect::new(card.x + u(18), card.y + u(21), u(44), u(44));
         ui.rrect(ic, u(12), t.accent);
@@ -150,85 +173,77 @@ impl Lock {
         ui.text(card.x + u(76), card.y + u(52), Face::Semibold, u(16), &title, t.text);
         ui.text(card.x + u(76), card.y + u(71), Face::Regular, u(13), &sub, t.text2);
 
-        // phone notifications (titles only: bodies stay private while locked)
-        let mut ny = card.b() + u(14);
-        let nx = x;
-        let nw = card_w;
-        let unread = sys.link.unread();
-        let mut rows: alloc::vec::Vec<(Icon, String, String)> = alloc::vec::Vec::new();
-        if unread > 0 {
-            rows.push((Icon::Chat, String::from("Messages"), format!("{} unread conversation{}", unread, if unread == 1 { "" } else { "s" })));
-        }
-        for n in sys.link.notifs.iter().take(3 - rows.len().min(3)) {
-            rows.push((Icon::Bell, n.app.clone(), n.title.clone()));
-        }
-        let max_rows = ((r.b() - ny - if tall { u(360) } else { 40 }) / u(64)).clamp(0, 3) as usize;
-        for (ic, app, line) in rows.iter().take(max_rows) {
-            let row = Rect::new(nx, ny, nw, u(56));
-            ui.rrect(row, u(18), t.surface.with_alpha(215));
-            ui.icon(*ic, row.x + u(16), row.y + u(18), u(20), t.accent);
-            let a = ui.fit(Face::Semibold, u(12), app, row.w - u(70));
-            ui.text(row.x + u(50), row.y + u(24), Face::Semibold, u(12), &a, t.text);
-            let l = ui.fit(Face::Regular, u(13), line, row.w - u(70));
-            ui.text(row.x + u(50), row.y + u(42), Face::Regular, u(13), &l, t.text2);
-            ny += u(64);
-        }
-
-        // unlock area
-        let cx = r.x + r.w / 2;
-        if !sys.has_pin() {
+        if !pin {
+            // phone notifications (titles only: bodies stay private while locked)
+            let mut ny = card.b() + u(14);
+            let unread = sys.link.unread();
+            let mut rows: alloc::vec::Vec<(Icon, String, String)> = alloc::vec::Vec::new();
+            if unread > 0 {
+                rows.push((Icon::Chat, String::from("Messages"), format!("{} unread conversation{}", unread, if unread == 1 { "" } else { "s" })));
+            }
+            for n in sys.link.notifs.iter().take(3 - rows.len().min(3)) {
+                rows.push((Icon::Bell, n.app.clone(), n.title.clone()));
+            }
+            let hy = r.b() - if tall { u(150) } else { 140 };
+            let max_rows = ((hy - u(40) - ny) / u(64)).clamp(0, 3) as usize;
+            for (ic, app, line) in rows.iter().take(max_rows) {
+                let row = Rect::new(card.x, ny, card_w, u(56));
+                ui.rrect(row, u(18), t.surface.with_alpha(215));
+                ui.icon(*ic, row.x + u(16), row.y + u(18), u(20), t.accent);
+                let a = ui.fit(Face::Semibold, u(12), app, row.w - u(70));
+                ui.text(row.x + u(50), row.y + u(24), Face::Semibold, u(12), &a, t.text);
+                let l = ui.fit(Face::Regular, u(13), line, row.w - u(70));
+                ui.text(row.x + u(50), row.y + u(42), Face::Regular, u(13), &l, t.text2);
+                ny += u(64);
+            }
+            // unlock hint
             let hint = if tall { "Tap to unlock" } else { "Click or press any key to unlock" };
             let fs = u(14);
             let hw = ui.tw(Face::Medium, fs, hint);
-            let hy = r.b() - if tall { u(150) } else { 140 };
             let pill = Rect::new(cx - hw / 2 - u(20), hy - u(24), hw + u(40), u(36));
             ui.rrect(pill, u(18), t.surface.with_alpha(220));
             ui.text(cx - hw / 2, hy, Face::Medium, fs, hint, t.text);
             return;
         }
-        // PIN entry: dots, message, keypad
+
+        // PIN entry below Up next: dots, message, keypad
         let shake = if now < self.shake_from + 40 {
             let k = (now - self.shake_from) as i32;
             sin_q14(k * 90) * (40 - k) / 40 * 10 / 16384
         } else {
             0
         };
-        let keypad = tall || r.h >= 600;
-        let key = if tall { u(64) } else { 52 };
-        let gap = if tall { u(18) } else { 14 };
-        let pad_h = if keypad { 4 * key + 3 * gap } else { 0 };
-        // phones: bottom centre; desktops: right-hand column, vertically centred
-        let cx = if tall { cx } else { r.r() - r.w / 10 - 150 };
-        let base = if tall { r.b() - pad_h - u(120) } else { r.y + (r.h - pad_h) / 2 + 40 };
-        let panel = Rect::new(cx - 150, base - 70, 300, pad_h + 110);
-        if !tall {
-            ui.rrect(panel, 26, t.surface.with_alpha(200));
-        }
+        let dots_y = card.b() + u(36);
+        let msg_y = dots_y + u(28);
         let n = self.entry.len() as i32;
         let slots = n.max(4);
-        let dx = cx - (slots * 22 - 8) / 2 + shake;
+        let (dr, dp) = (u(7), u(22));
+        let dx = cx - (slots * dp - (dp - 2 * dr)) / 2 + shake;
         for i in 0..slots {
-            let (px, py) = (dx + i * 22 + 7, base - 34);
+            let (px, py) = (dx + i * dp + dr, dots_y);
             if i < n {
-                ui.circle(px, py, 7, t.text);
+                ui.circle(px, py, dr, t.text);
             } else {
-                ui.circle(px, py, 7, t.text.with_alpha(60));
-                ui.circle(px, py, 5, t.surface);
+                ui.circle(px, py, dr, t.text.with_alpha(60));
+                ui.circle(px, py, dr - u(2), t.surface);
             }
         }
         let msg = if self.waiting(now) {
             format!("Too many attempts. Try again in {} s", (self.wait_until - now + 99) / 100)
         } else if !self.error.is_empty() {
             self.error.clone()
-        } else {
+        } else if keypad {
             String::from("Enter your PIN")
+        } else {
+            String::from("Type your PIN and press Enter")
         };
         let col = if self.error.is_empty() && !self.waiting(now) { t.text2 } else { t.danger };
-        let mw = ui.tw(Face::Medium, 13, &msg);
-        ui.text(cx - mw / 2, base - 4, Face::Medium, 13, &msg, col);
+        let mw = ui.tw(Face::Medium, u(13), &msg);
+        ui.text(cx - mw / 2, msg_y, Face::Medium, u(13), &msg, col);
         if !keypad {
             return;
         }
+        let base = msg_y + u(20) - 14;
         let labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", ""];
         let x0 = cx - (3 * key + 2 * gap) / 2;
         for (i, l) in labels.iter().enumerate() {
@@ -239,7 +254,7 @@ impl Lock {
                 11 => Action::Lock(ENTER),
                 _ => Action::Lock(DIGIT + l.as_bytes()[0] - b'0'),
             };
-            let bg = if ui.hot(a) { t.surface } else { t.surface.with_alpha(170) };
+            let bg = if ui.hot(a) { t.surface } else { t.surface.with_alpha(205) };
             ui.circle(b.x + key / 2, b.y + key / 2, key / 2, bg);
             match i {
                 9 => ui.icon_in(Icon::ChevronLeft, b, key * 3 / 8, t.text),
