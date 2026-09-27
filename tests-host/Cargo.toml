@@ -1,0 +1,10 @@
+[package]
+name = "hydatek-host-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Host-side tests for the kernel's portable modules (crypto, QR, protocol
+# framing). The kernel sources are included by path, unchanged.
+
+[dependencies]

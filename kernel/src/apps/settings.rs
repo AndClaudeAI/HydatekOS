@@ -7,10 +7,11 @@ use crate::sys::{Req, Sys};
 use crate::theme::ACCENTS;
 use crate::ui::{Action, Ui};
 use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-const SECTIONS: [&str; 6] = ["Appearance", "Wi-Fi", "Bluetooth", "Phone Link", "Display", "About"];
+const SECTIONS: [&str; 6] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -137,36 +138,64 @@ impl App for Settings {
                 row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
                 ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
             }
-            1 | 2 => {
-                let (on, code, what) = if self.sec == 1 { (sys.wifi, C_WIFI, "Wi-Fi") } else { (sys.bt, C_BT, "Bluetooth") };
+            1 => {
+                let n = &sys.net;
+                card(ui, Rect::new(m.x, m.y, m.w, 210));
+                let (status, sub) = match (n.present, n.ip) {
+                    (false, _) => ("No network adapter", String::from("Plug in Ethernet; Wi-Fi drivers are on the roadmap")),
+                    (true, None) if !n.link_up => ("Cable unplugged", n.name.clone()),
+                    (true, None) => ("Connecting...", n.name.clone()),
+                    (true, Some(_)) => ("Connected", n.name.clone()),
+                };
+                row(ui, Rect::new(m.x + 16, m.y, m.w - 32, 64), m.y + 12, status, &sub);
+                let ip = n.ip.map(crate::net::ip_str).unwrap_or_else(|| String::from("-"));
+                kv(ui, m.x + 16, m.y + 84, m.w - 32, "IP address", &ip);
+                kv(ui, m.x + 16, m.y + 108, m.w - 32, "Router", &if n.ip.is_some() { crate::net::ip_str(n.gw) } else { String::from("-") });
+                kv(ui, m.x + 16, m.y + 132, m.w - 32, "DNS", &if n.ip.is_some() { crate::net::ip_str(n.dns) } else { String::from("-") });
+                kv(ui, m.x + 16, m.y + 156, m.w - 32, "Name", &if n.host.is_empty() { String::from("-") } else { alloc::format!("{}.local", n.host) });
+                kv(ui, m.x + 16, m.y + 180, m.w - 32, "Packets in / out", &alloc::format!("{} / {}", n.rx, n.tx));
+                card(ui, Rect::new(m.x, m.y + 224, m.w, 64));
+                row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", "Wi-Fi adapter drivers are not included yet; use Ethernet");
+                ui.switch(sw_x, m.y + 244, sys.wifi, Action::App(inst, C_WIFI));
+            }
+            2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 64));
-                row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, what, if on { "On" } else { "Off" });
-                ui.switch(sw_x, m.y + 20, on, Action::App(inst, code));
+                row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, "Bluetooth", if sys.bt { "On" } else { "Off" });
+                ui.switch(sw_x, m.y + 20, sys.bt, Action::App(inst, C_BT));
                 card(ui, Rect::new(m.x, m.y + 78, m.w, 120));
                 ui.text(m.x + 16, m.y + 104, Face::Semibold, 13, "No adapter driver yet", t.text);
-                let lines = if self.sec == 1 {
-                    ["HydatekOS milestone 1 has no network stack. Drivers for", "virtio-net, Intel e1000 and common Wi-Fi chipsets, plus", "TCP/IP, are scheduled for milestone 3 (see docs/ROADMAP.md)."]
-                } else {
-                    ["Bluetooth needs a USB (xHCI) host driver and an HCI stack,", "planned for milestone 4. Phone Link will use it for", "proximity pairing and calls."]
-                };
+                let lines = ["Bluetooth needs a USB (xHCI) host driver and an HCI stack,", "planned for milestone 4. Phone Link already works over", "your home network."];
                 for (i, l) in lines.iter().enumerate() {
                     let l = ui.fit(Face::Regular, 13, l, m.w - 32);
                     ui.text(m.x + 16, m.y + 128 + i as i32 * 20, Face::Regular, 13, &l, t.text2);
                 }
             }
             3 => {
+                let l = &sys.link;
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
-                let st = if sys.link.paired { "Connected" } else { "Not paired" };
-                row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, &sys.link.device, st);
-                if sys.link.paired {
-                    kv(ui, m.x + 16, m.y + 78, m.w - 32, "Battery", &format!("{}%", sys.link.battery));
-                    kv(ui, m.x + 16, m.y + 102, m.w - 32, "Unread conversations", &format!("{}", sys.link.unread()));
+                let st = match l.source {
+                    crate::link::Source::None => "Not paired",
+                    crate::link::Source::Demo => "Demo phone",
+                    _ if l.online => "Connected",
+                    _ => "Paired, offline",
+                };
+                let name = if l.device.is_empty() { "No phone" } else { l.device.as_str() };
+                row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, name, st);
+                if l.paired {
+                    kv(ui, m.x + 16, m.y + 78, m.w - 32, "Battery", &format!("{}%", l.battery));
+                    let kind = match l.kind.as_str() {
+                        "android" => "HydatekOS Link for Android",
+                        "web" => "Browser companion",
+                        "demo" => "Simulated",
+                        _ => "-",
+                    };
+                    kv(ui, m.x + 16, m.y + 102, m.w - 32, "Connection", kind);
                 } else {
-                    ui.text(m.x + 16, m.y + 84, Face::Regular, 13, "Open Phone Link to pair a phone.", t.text2);
+                    ui.text(m.x + 16, m.y + 84, Face::Regular, 13, "Open Phone Link and scan the code with your phone.", t.text2);
                 }
                 ui.button(Rect::new(m.x, m.y + 146, 150, 32), "Open Phone Link", Action::App(inst, C_OPEN_LINK), true);
-                if sys.link.paired {
-                    ui.button(Rect::new(m.x + 160, m.y + 146, 100, 32), "Unpair", Action::App(inst, C_UNPAIR), false);
+                if l.paired {
+                    ui.button(Rect::new(m.x + 160, m.y + 146, 110, 32), "Unpair", Action::App(inst, C_UNPAIR), false);
                 }
             }
             4 => {
@@ -203,7 +232,7 @@ impl App for Settings {
             C_PTR_DOWN => sys.pointer_speed = (sys.pointer_speed - 1).max(1),
             C_PTR_UP => sys.pointer_speed = (sys.pointer_speed + 1).min(9),
             C_OPEN_LINK => sys.reqs.push(Req::Open(AppKind::PhoneLink)),
-            C_UNPAIR => sys.link.paired = false,
+            C_UNPAIR => sys.unpair(),
             C_BACK => {
                 self.page = false;
                 return;

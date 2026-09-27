@@ -17,10 +17,16 @@ mod font;
 mod fs;
 mod gfx;
 mod heap;
+mod hlp;
 mod icons;
 mod input;
+mod crypto;
 mod link;
+mod linksrv;
+mod net;
 mod ps2;
+mod qr;
+mod rng;
 mod shell;
 mod sys;
 mod theme;
@@ -165,9 +171,18 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
 
     // Logical points: desktops at ~1280+ wide, phones/tablets in portrait at ~400-540.
     let scale = if disp.h > disp.w { (disp.w / 400).max(1) } else if disp.w >= 2560 && disp.h >= 1440 { 2 } else { 1 };
+    let rng_source = rng::init();
+    log!("rng: {}", rng_source);
+    efi::connect_all();
     let vfs = fs::Vfs::mount();
     log!("storage: persistent={}", vfs.persistent);
     let mut sys = sys::Sys::new(vfs, efi::now());
+    sys.rng_source = rng_source;
+    let mut net = net::Net::up();
+    let mut server = net.as_mut().map(linksrv::LinkServer::new);
+    if let Some(n) = net.as_ref() {
+        sys.link.desktop_name = n.hostname.clone();
+    }
     sys.firmware = efi::firmware_vendor();
     sys.mem_total = efi::total_memory();
     let (lw, lh) = (disp.w / scale, disp.h / scale);
@@ -175,7 +190,6 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
-    efi::connect_all();
     let mut input = input::Input::new(disp.w, disp.h);
     log!("input: {} pointer device(s)", input.pointer_count());
 
@@ -189,8 +203,19 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let (mut cx, mut cy) = (input.x, input.y);
     let mut first = true;
     loop {
+        // Wake on the 10 ms tick, or as soon as a network packet arrives.
         let mut idx = 0usize;
-        (efi::bs().wait_for_event)(1, &timer, &mut idx);
+        let waits = [timer, net.as_ref().map(|n| n.wait_event()).unwrap_or(timer)];
+        (efi::bs().wait_for_event)(if net.is_some() { 2 } else { 1 }, waits.as_ptr(), &mut idx);
+        if idx == 1 {
+            if let (Some(n), Some(srv)) = (net.as_mut(), server.as_mut()) {
+                n.poll(ticks * 10);
+                if srv.poll(n, &mut sh.sys) {
+                    sh.dirty = true;
+                }
+            }
+            continue;
+        }
         ticks += 1;
         events.clear();
         input.poll(sh.sys.pointer_speed, &mut events);
@@ -198,6 +223,30 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             sh.event(ev, input.x, input.y);
         }
         sh.tick(ticks);
+        if let (Some(n), Some(srv)) = (net.as_mut(), server.as_mut()) {
+            n.poll(ticks * 10);
+            if srv.poll(n, &mut sh.sys) {
+                sh.dirty = true;
+            }
+            if ticks % 50 == 0 {
+                let ip = if n.configured() { Some(n.ip) } else { None };
+                let s = &mut sh.sys.net;
+                if s.ip != ip || s.link_up != n.link_up() || !s.present {
+                    sh.dirty = true;
+                }
+                *s = sys::NetStatus {
+                    present: true,
+                    name: n.if_name.clone(),
+                    ip,
+                    gw: n.gw,
+                    dns: n.dns,
+                    link_up: n.link_up(),
+                    host: n.hostname.clone(),
+                    rx: n.rx_packets,
+                    tx: n.tx_packets,
+                };
+            }
+        }
         if sh.dirty || first {
             sh.dirty = false;
             first = false;

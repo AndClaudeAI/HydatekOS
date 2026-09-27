@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F0E9DE">
+<title>HydatekOS Link</title>
+<style>
+  :root {
+    --bg: #F0E9DE; --surface: #F9F6F0; --tile: #F1E6D9; --chip: #EAE3D7;
+    --text: #1E1B2C; --text2: #5E5866; --text3: #8C8590; --accent: #B5581B; --on-accent: #fff;
+    --line: #E8E0D4; --ok: #4F9A55; --sun: #E4B783; --dune: #2B2A48;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1F1D29; --surface: #23202C; --tile: #322D38; --chip: #322E3B; --text: #F3EDE4;
+      --text2: #B8B0A6; --text3: #837C78; --accent: #D9793A; --on-accent: #1A1712; --line: #34303D; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+  main { max-width: 520px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; gap: 12px; margin: 8px 0 18px; }
+  .logo { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); position: relative; flex: none; }
+  .logo::before { content: ""; position: absolute; left: 10px; top: 8px; width: 16px; height: 22px; border-radius: 8px 8px 0 0; background: var(--on-accent); }
+  .logo::after { content: ""; position: absolute; left: 14px; top: 13px; width: 8px; height: 17px; border-radius: 4px 4px 0 0; background: var(--accent); }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--text2); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .card { background: var(--surface); border-radius: 20px; padding: 18px; margin: 12px 0; }
+  .card h2 { font-size: 16px; margin: 0 0 4px; }
+  .card p { margin: 0 0 12px; color: var(--text2); font-size: 14px; }
+  .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 6px; }
+  button, .btn { appearance: none; border: 0; border-radius: 12px; padding: 12px 16px; font: 600 15px system-ui, sans-serif;
+    background: var(--accent); color: var(--on-accent); cursor: pointer; display: inline-block; text-decoration: none; }
+  button.secondary, .btn.secondary { background: var(--chip); color: var(--text); }
+  button:disabled { opacity: 0.5; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  textarea, input[type=text] { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    border-radius: 12px; padding: 12px; font: inherit; resize: vertical; }
+  textarea { min-height: 80px; margin-bottom: 10px; }
+  input[type=file] { display: none; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .list li:first-child { border-top: 0; }
+  .list .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .list small { color: var(--text3); display: block; }
+  .muted { color: var(--text3); font-size: 13px; }
+  .progress { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; margin-top: 10px; display: none; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .hidden { display: none !important; }
+  .hero { text-align: center; padding: 28px 18px; }
+  .hero .big { font-size: 44px; margin-bottom: 6px; }
+  code { background: var(--chip); padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true"></div>
+    <div>
+      <h1>HydatekOS Link</h1>
+      <div class="status"><span class="dot" id="dot"></span><span id="status">Starting…</span></div>
+    </div>
+  </header>
+
+  <section class="card hero hidden" id="unpaired">
+    <div class="big">▢</div>
+    <h2>Scan the code on your PC</h2>
+    <p>On your HydatekOS PC, open <b>Phone Link</b> and scan the code with this phone's camera.
+       The link it opens pairs this phone automatically.</p>
+  </section>
+
+  <div id="paired" class="hidden">
+    <section class="card">
+      <div class="label">SEND TO YOUR PC</div>
+      <h2>Photos and files</h2>
+      <p>They're saved in Pictures or Downloads on your PC.</p>
+      <div class="row">
+        <label class="btn" for="photos">Choose photos</label>
+        <label class="btn secondary" for="files">Choose files</label>
+      </div>
+      <input type="file" id="photos" accept="image/*" multiple>
+      <input type="file" id="files" multiple>
+      <div class="progress" id="progress"><div></div></div>
+      <div class="muted" id="sendinfo"></div>
+    </section>
+
+    <section class="card">
+      <h2>Text</h2>
+      <textarea id="clip" placeholder="Type or paste text to send to your PC"></textarea>
+      <button id="sendclip">Send text</button>
+    </section>
+
+    <section class="card">
+      <div class="label">FROM YOUR PC</div>
+      <ul class="list" id="inbox"><li class="muted">Nothing yet. Send files from Files › Send to Phone on your PC.</li></ul>
+    </section>
+
+    <section class="card" id="android">
+      <div class="label">TEXTS · NOTIFICATIONS · CALLS</div>
+      <h2>Get the Android app</h2>
+      <p>Browsers can't read texts, notifications or calls. The HydatekOS Link app for Android adds them to Phone Link on your PC.</p>
+      <div class="row">
+        <a class="btn" href="/app.apk" id="apk">Download the app</a>
+        <a class="btn secondary" id="openapp" href="#">Pair the app</a>
+      </div>
+      <p class="muted" style="margin-top:12px">After installing, tap <b>Pair the app</b>. Android may ask you to allow installs from your browser.</p>
+    </section>
+
+    <section class="card">
+      <h2>This phone</h2>
+      <p>Shown on your PC as:</p>
+      <input type="text" id="devname" maxlength="40">
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" id="forget">Forget this PC</button>
+      </div>
+      <p class="muted" style="margin-top:12px">Traffic between this page and your PC is encrypted with the key from the pairing code.
+        Only pair on networks you trust: the page itself is delivered over plain HTTP.</p>
+    </section>
+  </div>
+</main>
+<script src="/hlp.js"></script>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
+};
+
+// Pairing data arrives in the URL fragment (never sent to the server).
+const frag = new URLSearchParams(location.hash.slice(1));
+if (frag.get('k') && frag.get('d')) {
+  store.set('hlp.key', frag.get('k'));
+  store.set('hlp.pair', frag.get('d'));
+  store.set('hlp.pairUrl', location.href);
+  history.replaceState(null, '', location.pathname);
+}
+const keyB64 = store.get('hlp.key');
+const pairId = store.get('hlp.pair');
+
+const ua = navigator.userAgent;
+const isAndroid = /Android/i.test(ua);
+const defaultName = isAndroid ? 'Android phone' : /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : 'Web browser';
+$('devname').value = store.get('hlp.name') || defaultName;
+if (!isAndroid) $('android').classList.add('hidden');
+$('openapp').href = 'hydatek://pair?u=' + encodeURIComponent(store.get('hlp.pairUrl') || '');
+
+function setStatus(text, ok) {
+  $('status').textContent = text;
+  $('dot').classList.toggle('ok', !!ok);
+}
+
+let link = null;
+let retry = 1000;
+let battery = null;
+const photos = new Map(); // id -> File, for full-size requests from the PC
+
+function deviceInfo() {
+  const d = { name: $('devname').value.trim() || defaultName, kind: 'web', caps: 'photos,files,clip', model: ua.slice(0, 120) };
+  if (battery) { d.battery = String(Math.round(battery.level * 100)); d.charging = battery.charging ? '1' : '0'; }
+  return d;
+}
+
+function connect() {
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/hlp';
+  setStatus('Connecting…', false);
+  link = HLP.connect(url, HLP.unb64url(keyB64), pairId, deviceInfo(), {
+    onStatus(t, ok) { setStatus(t, ok); if (ok) retry = 1000; },
+    onMessage: handle,
+    onFatal(reason) { setStatus(reason, false); retry = 0; },
+    onClose() {
+      if (retry === 0) return;
+      setStatus('Offline. Reconnecting…', false);
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 15000);
+    },
+  });
+}
+
+function addInbox(html) {
+  const ul = $('inbox');
+  if (ul.firstElementChild && ul.firstElementChild.classList.contains('muted')) ul.innerHTML = '';
+  const li = document.createElement('li');
+  li.innerHTML = html;
+  ul.prepend(li);
+  return li;
+}
+const escHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function handle(m) {
+  const f = m.fields;
+  if (m.op === 'file') {
+    const blob = new Blob([m.blob]);
+    const url = URL.createObjectURL(blob);
+    const li = addInbox('<span class="grow">' + escHtml(f.name || 'file') + '<small>' + Math.ceil(m.blob.length / 1024) + ' KB</small></span>');
+    const a = document.createElement('a');
+    a.className = 'btn secondary'; a.textContent = 'Save'; a.href = url; a.download = f.name || 'file';
+    li.append(a);
+  } else if (m.op === 'clip') {
+    const li = addInbox('<span class="grow">' + escHtml(f.text || '') + '<small>Text</small></span>');
+    const b = document.createElement('button');
+    b.className = 'secondary'; b.textContent = 'Copy';
+    b.onclick = () => navigator.clipboard ? navigator.clipboard.writeText(f.text).then(() => (b.textContent = 'Copied')) : null;
+    li.append(b);
+  } else if (m.op === 'get_photo') {
+    const file = photos.get(f.id);
+    if (file) sendFile(file);
+  }
+}
+
+async function thumbnail(file) {
+  const bmp = await createImageBitmap(file);
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const s = Math.min(bmp.width, bmp.height);
+  g.drawImage(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s, 0, 0, 64, 64);
+  const d = g.getImageData(0, 0, 64, 64).data;
+  const rgb = new Uint8Array(64 * 64 * 3);
+  for (let i = 0, j = 0; i < d.length; i += 4) { rgb[j++] = d[i]; rgb[j++] = d[i + 1]; rgb[j++] = d[i + 2]; }
+  return { rgb, w: bmp.width, h: bmp.height };
+}
+
+async function waitDrain() {
+  while (link && link.buffered > 1 << 20) await new Promise((r) => setTimeout(r, 50));
+}
+
+async function sendFile(file) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  await waitDrain();
+  return link.send('file', { name: file.name || 'file', size: String(data.length), mime: file.type || '' }, data);
+}
+
+async function sendAll(files, asPhotos) {
+  if (!link || !link.ready) { $('sendinfo').textContent = 'Not connected to your PC.'; return; }
+  const bar = $('progress');
+  bar.style.display = 'block';
+  let done = 0;
+  for (const file of files) {
+    $('sendinfo').textContent = 'Sending ' + file.name + '…';
+    if (asPhotos) {
+      try {
+        const t = await thumbnail(file);
+        const id = file.name + ':' + file.size + ':' + file.lastModified;
+        photos.set(id, file);
+        link.send('photo', { id, name: file.name, w: String(t.w), h: String(t.h), size: String(file.size) }, t.rgb);
+      } catch (e) { /* not decodable here; still send the file */ }
+    }
+    await sendFile(file);
+    done++;
+    bar.firstElementChild.style.width = (100 * done / files.length) + '%';
+  }
+  await waitDrain();
+  $('sendinfo').textContent = 'Sent ' + done + ' item' + (done === 1 ? '' : 's') + '.';
+  setTimeout(() => { bar.style.display = 'none'; bar.firstElementChild.style.width = '0'; }, 800);
+}
+
+$('photos').onchange = (e) => { sendAll(Array.from(e.target.files), true); e.target.value = ''; };
+$('files').onchange = (e) => { sendAll(Array.from(e.target.files), false); e.target.value = ''; };
+$('sendclip').onclick = () => {
+  const t = $('clip').value.trim();
+  if (!t) return;
+  if (link && link.send('clip', { text: t })) { $('clip').value = ''; setStatus('Text sent', true); }
+};
+$('devname').onchange = () => {
+  store.set('hlp.name', $('devname').value.trim());
+  if (link) link.send('device', deviceInfo());
+};
+$('forget').onclick = () => {
+  ['hlp.key', 'hlp.pair', 'hlp.pairUrl'].forEach(store.del);
+  retry = 0;
+  if (link) link.close();
+  location.reload();
+};
+
+if (!keyB64 || !pairId) {
+  $('unpaired').classList.remove('hidden');
+  setStatus('Not paired', false);
+} else {
+  $('paired').classList.remove('hidden');
+  if (navigator.getBattery) {
+    navigator.getBattery().then((b) => {
+      battery = b;
+      const up = () => link && link.send('battery', { level: String(Math.round(b.level * 100)), charging: b.charging ? '1' : '0' });
+      b.onlevelchange = up; b.onchargingchange = up; up();
+    }).catch(() => {});
+  }
+  connect();
+}
+</script>
+</body>
+</html>

@@ -35,6 +35,20 @@ impl CalEvent {
     }
 }
 
+/// Network status shown in Settings and Phone Link.
+#[derive(Default, Clone)]
+pub struct NetStatus {
+    pub present: bool,
+    pub name: String,
+    pub ip: Option<[u8; 4]>,
+    pub gw: [u8; 4],
+    pub dns: [u8; 4],
+    pub link_up: bool,
+    pub host: String,
+    pub rx: u64,
+    pub tx: u64,
+}
+
 pub struct Sys {
     pub dark: bool,
     pub accent: usize,
@@ -47,6 +61,8 @@ pub struct Sys {
     pub now: Time,
     pub events: Vec<CalEvent>,
     pub link: Link,
+    pub net: NetStatus,
+    pub rng_source: &'static str,
     pub reqs: Vec<Req>,
     pub screen: (i32, i32, i32),
     pub firmware: String,
@@ -87,6 +103,8 @@ impl Sys {
             now,
             events: Vec::new(),
             link: Link::new(),
+            net: NetStatus::default(),
+            rng_source: "",
             reqs: Vec::new(),
             screen: (0, 0, 1),
             firmware: String::new(),
@@ -94,6 +112,7 @@ impl Sys {
             ticks: 0,
         };
         s.load_settings();
+        s.load_link();
         s.load_events();
         s
     }
@@ -117,7 +136,7 @@ impl Sys {
                 "focus" => self.focus = b,
                 "mobile" => self.mobile_shell = b,
                 "pointer" => self.pointer_speed = v.parse().unwrap_or(3),
-                "paired" => self.link.paired = b,
+                "demo" if b => self.link.demo(),
                 _ => {}
             }
         }
@@ -125,10 +144,66 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\npaired={}\n",
-            self.dark as u8, self.accent, self.wifi as u8, self.bt as u8, self.focus as u8, self.mobile_shell as u8, self.pointer_speed, self.link.paired as u8
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\n",
+            self.dark as u8, self.accent, self.wifi as u8, self.bt as u8, self.focus as u8, self.mobile_shell as u8, self.pointer_speed, self.link.is_demo() as u8
         );
         self.fs.write("/system/settings.txt", s.as_bytes());
+    }
+
+    /// Pairing secret and the last paired phone (`/system/link.txt`).
+    fn load_link(&mut self) {
+        let mut have_key = false;
+        if let Some(data) = self.fs.read("/system/link.txt") {
+            let text = String::from_utf8_lossy(&data).to_string();
+            let mut phone = false;
+            for line in text.lines() {
+                let Some((k, v)) = line.split_once('=') else { continue };
+                match k {
+                    "key" => {
+                        if let Some(b) = crate::crypto::base64_decode(v).filter(|b| b.len() == 32) {
+                            self.link.key.copy_from_slice(&b);
+                            have_key = true;
+                        }
+                    }
+                    "id" => self.link.pair_id = v.to_string(),
+                    "phone" => phone = v == "1",
+                    "device" => self.link.device = v.to_string(),
+                    "kind" => self.link.kind = v.to_string(),
+                    "caps" => self.link.caps = v.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect(),
+                    _ => {}
+                }
+            }
+            if phone && !self.link.is_demo() {
+                self.link.source = crate::link::Source::Phone;
+                self.link.paired = true;
+            }
+        }
+        if !have_key || self.link.pair_id.is_empty() {
+            self.link.new_key();
+            self.save_link();
+        }
+    }
+
+    pub fn save_link(&mut self) {
+        let l = &self.link;
+        let s = format!(
+            "key={}\nid={}\nphone={}\ndevice={}\nkind={}\ncaps={}\n",
+            crate::crypto::base64(&l.key),
+            l.pair_id,
+            (l.source == crate::link::Source::Phone) as u8,
+            l.device.replace('\n', " "),
+            l.kind,
+            l.caps.join(",")
+        );
+        self.fs.write("/system/link.txt", s.as_bytes());
+    }
+
+    /// Forget the paired phone and issue a new pairing code.
+    pub fn unpair(&mut self) {
+        self.link.forget();
+        self.link.new_key();
+        self.save_link();
+        self.save_settings();
     }
 
     fn load_events(&mut self) {

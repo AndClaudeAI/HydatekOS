@@ -156,13 +156,14 @@ impl Messages {
 }
 
 /// Placeholder shown when no phone is paired.
-pub fn not_paired(ui: &mut Ui, r: Rect, inst: u32, code: u32) {
+pub fn not_paired(ui: &mut Ui, r: Rect, inst: u32, code: u32, title: &str, sub: &str) {
     let t = ui.t;
     let c = Rect::new(r.x + (r.w - 320) / 2, r.y + (r.h - 190) / 2, 320, 190);
     ui.rrect(Rect::new(c.x + 132, c.y, 56, 56), 16, t.tile);
     ui.icon_in(Icon::Link, Rect::new(c.x + 132, c.y, 56, 56), 26, t.accent);
-    ui.text_in(Rect::new(c.x, c.y + 70, c.w, 24), Face::Semibold, 16, "Link your phone", t.text, 1);
-    ui.text_in(Rect::new(c.x, c.y + 96, c.w, 20), Face::Regular, 13, "Messages from your phone appear here", t.text2, 1);
+    ui.text_in(Rect::new(c.x, c.y + 70, c.w, 24), Face::Semibold, 16, title, t.text, 1);
+    let sub = ui.fit(Face::Regular, 13, sub, r.w - 40);
+    ui.text_in(Rect::new(r.x, c.y + 96, r.w, 20), Face::Regular, 13, &sub, t.text2, 1);
     ui.button(Rect::new(c.x + 90, c.y + 130, 140, 34), "Open Phone Link", Action::App(inst, code), true);
 }
 
@@ -177,7 +178,10 @@ impl App for Messages {
         ui.rect(Rect::new(r.x, r.y + HEADER, r.w, 1), t.line);
         let body = Rect::new(r.x, r.y + HEADER + 1, r.w, r.h - HEADER - 1);
         if !sys.link.paired {
-            return not_paired(ui, body, inst, M_PAIR);
+            return not_paired(ui, body, inst, M_PAIR, "Link your phone", "Messages from your phone appear here");
+        }
+        if !sys.link.has("sms") {
+            return not_paired(ui, body, inst, M_PAIR, "Texts need the Android app", "Install HydatekOS Link on your phone to read and reply here");
         }
         self.view.render(ui, body, sys, inst, 0);
     }

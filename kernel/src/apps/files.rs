@@ -33,6 +33,7 @@ pub const C_RENAME: u32 = 13;
 pub const C_EMPTY_BIN: u32 = 14;
 pub const C_RESTORE: u32 = 15;
 pub const C_OPEN: u32 = 16;
+pub const C_SEND_PHONE: u32 = 17;
 const C_PLACE: u32 = 100;
 const C_ITEM: u32 = 1000;
 
@@ -103,7 +104,7 @@ impl Files {
     fn refresh(&mut self, sys: &Sys) {
         self.items = if self.path == "phone:" {
             if sys.link.paired {
-                sys.link.photos.iter().map(|p| (format!("{}.img", p.0), false, 2_400_000)).collect()
+                sys.link.photos.iter().map(|p| (p.name.clone(), false, 0)).collect()
             } else {
                 vec![]
             }
@@ -126,9 +127,13 @@ impl Files {
         let Some(it) = self.items.get(i).cloned() else { return };
         if self.path == "phone:" {
             // Copy the photo from the phone to Pictures.
-            let dst = sys.fs.unique("/home/Pictures", display_name(&it.0), ".img");
-            sys.fs.write(&dst, b"HYDATEK-IMAGE");
-            sys.toast("Phone Link", &format!("Saved {} to Pictures", display_name(&it.0)));
+            if sys.link.request_photo(i) {
+                sys.toast("Phone Link", "Copying the photo from your phone...");
+            } else {
+                let dst = sys.fs.unique("/home/Pictures", display_name(&it.0), ".img");
+                sys.fs.write(&dst, b"HYDATEK-IMAGE");
+                sys.toast("Phone Link", &format!("Saved {} to Pictures", display_name(&it.0)));
+            }
             return;
         }
         let p = join(&self.path, &it.0);
@@ -349,6 +354,20 @@ impl App for Files {
                     self.open(i, sys);
                 }
             }
+            C_SEND_PHONE => {
+                match self.selected_path() {
+                    Some(p) if !sys.fs.is_dir(&p) => {
+                        let data = sys.fs.read(&p).unwrap_or_default();
+                        let name = basename(&p).to_string();
+                        if sys.link.send_file(&name, data) {
+                            sys.toast("Phone Link", &format!("Sending {} to your phone", name));
+                        } else {
+                            sys.toast("Phone Link", "Connect your phone in Phone Link first");
+                        }
+                    }
+                    _ => sys.toast("Files", "Select a file to send"),
+                }
+            }
             C_EMPTY_BIN => {
                 for (n, _, _) in sys.fs.list("/trash") {
                     sys.fs.remove(&join("/trash", &n));
@@ -446,7 +465,7 @@ impl App for Files {
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
             0 => {
-                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename", C_RENAME), ("Move to Bin", C_DELETE)];
+                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename", C_RENAME), ("Send to Phone", C_SEND_PHONE), ("Move to Bin", C_DELETE)];
                 if self.path == "/trash" {
                     v = vec![("Restore", C_RESTORE), ("Delete Permanently", C_DELETE), ("Empty Bin", C_EMPTY_BIN)];
                 }

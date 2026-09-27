@@ -191,6 +191,38 @@ impl<'a> Ui<'a> {
         lines
     }
 
+    /// Draw a raw RGB image (w x h, 3 bytes per pixel) scaled into `r`,
+    /// with bilinear filtering when enlarging.
+    pub fn image_rgb(&mut self, r: Rect, w: i32, h: i32, rgb: &[u8], radius: i32) {
+        if rgb.len() < (w * h * 3) as usize || w < 2 || h < 2 {
+            return;
+        }
+        let pr = r.scale(self.s);
+        let (dw, dh) = (pr.w.max(w), pr.h.max(h));
+        let mut c = Canvas::new(dw, dh);
+        let px = |x: i32, y: i32, k: usize| rgb[((y * w + x) * 3) as usize + k] as i32;
+        for y in 0..dh {
+            // source position in 1/256 pixels, sampling pixel centres
+            let sy = ((y * 2 + 1) * h * 128 / dh - 128).clamp(0, (h - 1) * 256);
+            let (y0, fy) = (sy >> 8, sy & 255);
+            let y1 = (y0 + 1).min(h - 1);
+            for x in 0..dw {
+                let sx = ((x * 2 + 1) * w * 128 / dw - 128).clamp(0, (w - 1) * 256);
+                let (x0, fx) = (sx >> 8, sx & 255);
+                let x1 = (x0 + 1).min(w - 1);
+                let mut out = 0u32;
+                for k in 0..3 {
+                    let top = px(x0, y0, k) * (256 - fx) + px(x1, y0, k) * fx;
+                    let bot = px(x0, y1, k) * (256 - fx) + px(x1, y1, k) * fx;
+                    let v = (top * (256 - fy) + bot * fy) >> 16;
+                    out = out << 8 | v.clamp(0, 255) as u32;
+                }
+                c.px[(y * dw + x) as usize] = out;
+            }
+        }
+        self.c.blit_scaled(&c, pr, radius * self.s);
+    }
+
     // ---- common widgets -------------------------------------------------
 
     /// Pill/rounded button; returns true if hovered.

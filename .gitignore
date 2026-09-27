@@ -1,3 +1,6 @@
 /build/
 /kernel/target/
 __pycache__/
+/tests-host/target/
+/companion/android/build/
+node_modules/
