@@ -23,8 +23,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONTS = os.path.join(ROOT, "assets", "fonts")
 OUT = os.path.join(ROOT, "kernel", "assets", "fonts.bin")
 
-TEXT = [chr(c) for c in range(32, 127)] + list("·–—•…°©’‘“”×‹›←→✓")
+# Special characters for the on-screen keyboard (currencies incl. the Naira).
+SPECIAL = "₦€£¥¢₹₵§¶®™±÷¿¡«»µ¬¤¦"
+TEXT = [chr(c) for c in range(32, 127)] + list("·–—•…°©’‘“”×‹›←→✓" + SPECIAL)
 DIGITS = list("0123456789: ")
+
+# Glyphs a face lacks (Figtree has no ₦, ₹ or ₵) come from DejaVu Sans,
+# scaled so its capitals match the face's cap height.
+FALLBACK = {0: "dejavu-sans.ttf", 1: "dejavu-sans.ttf", 2: "dejavu-sans-bold.ttf"}
 
 # face_id -> (file, charset, logical sizes). Must match kernel/src/font.rs
 FACES = {
@@ -37,17 +43,35 @@ FACES = {
 SCALES = [1, 2]
 
 
+def cap_height(font):
+    l, t, r, b = font.getbbox("H", anchor="ls")
+    return b - t
+
+
 def render_face(face_id, path, chars, px):
+    from fontTools.ttLib import TTFont
     font = ImageFont.truetype(path, px)
     ascent, descent = font.getmetrics()
+    cmap = TTFont(path).getBestCmap()
+    fb = None
+    if face_id in FALLBACK:
+        fpath = os.path.join(FONTS, FALLBACK[face_id])
+        probe = ImageFont.truetype(fpath, px)
+        fb = ImageFont.truetype(fpath, max(1, round(px * cap_height(font) / max(1, cap_height(probe)))))
     glyphs, data = [], bytearray()
     for ch in chars:
-        adv = font.getlength(ch)
-        l, t, r, b = font.getbbox(ch, anchor="ls")
+        if ord(ch) in cmap:
+            font_for = font
+        elif fb is not None:
+            font_for = fb
+        else:
+            continue
+        adv = font_for.getlength(ch)
+        l, t, r, b = font_for.getbbox(ch, anchor="ls")
         w, h = max(0, r - l), max(0, b - t)
         if w and h:
             img = Image.new("L", (w, h), 0)
-            ImageDraw.Draw(img).text((-l, -t), ch, font=font, fill=255, anchor="ls")
+            ImageDraw.Draw(img).text((-l, -t), ch, font=font_for, fill=255, anchor="ls")
             buf = img.tobytes()
         else:
             w = h = 0

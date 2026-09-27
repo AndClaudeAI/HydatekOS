@@ -28,13 +28,16 @@ pub const KB_PAGE: u8 = 32; // letters <-> symbols ("123" / "ABC")
 pub const KB_MORE: u8 = 33; // 123 <-> #+=
 pub const KB_SPACE: u8 = 34;
 pub const KB_BACK: u8 = 35;
+pub const KB_SPECIAL: u8 = 36; // special characters (currencies, ©, ±, …) on and off
 pub const KB_CHAR: u8 = 100; // + row * 16 + column
 
-/// Keyboard pages: letters, then two symbol pages that cover printable ASCII.
-const PAGES: [[&str; 3]; 3] = [
+/// Keyboard pages: letters, two symbol pages that cover printable ASCII, and
+/// special characters (currencies first, the Naira leading).
+const PAGES: [[&str; 3]; 4] = [
     ["qwertyuiop", "asdfghjkl", "zxcvbnm"],
     ["1234567890", "-/:;()$&@\"", ".,?!'"],
     ["[]{}#%^*+=", "_\\|~<>`", ".,?!'"],
+    ["₦€£¥¢₹₵§¶©", "®™°±×÷¿¡«»", "•…µ¬¦¤"],
 ];
 
 const MAX_TRIES: u32 = 5;
@@ -185,6 +188,7 @@ impl Lock {
                 self.shift_at = now;
             }
             KB_PAGE => self.page = if self.page == 0 { 1 } else { 0 },
+            KB_SPECIAL => self.page = if self.page == 3 { 1 } else { 3 },
             KB_MORE => self.page = if self.page == 1 { 2 } else { 1 },
             KB_SPACE => self.type_char(' ', now),
             KB_BACK => {
@@ -283,7 +287,7 @@ impl Lock {
                 // the field opens the keyboard; the keyboard button toggles it
                 self.osk = if a == FIELD { true } else { !self.osk };
             }
-            a if (KB_SHIFT..=KB_BACK).contains(&a) || a >= KB_CHAR => {
+            a if (KB_SHIFT..=KB_SPECIAL).contains(&a) || a >= KB_CHAR => {
                 if self.mode == Mode::Password && self.osk {
                     return self.osk_key(a, now);
                 }
@@ -500,11 +504,14 @@ impl Lock {
             keys.push((Rect::new(start + ci as i32 * (cw + gap), y3, cw, kh), KB_CHAR + (32 + ci) as u8, Cap::Char(ch)));
         }
         keys.push((Rect::new(panel.r() - pad - wide, y3, wide, kh), KB_BACK, Cap::Icon(Icon::Backspace)));
-        // row 4: page switch, space, unlock
+        // row 4: page switch, special characters, space, unlock
         let y4 = row_y(3);
         let side = kw * 2 + gap;
+        let sp = kw * 3 / 2;
         keys.push((Rect::new(x0, y4, side, kh), KB_PAGE, Cap::Text(if self.page == 0 { "123" } else { "ABC" })));
-        keys.push((Rect::new(x0 + side + gap, y4, pw - 2 * pad - 2 * side - 2 * gap, kh), KB_SPACE, Cap::Text("space")));
+        keys.push((Rect::new(x0 + side + gap, y4, sp, kh), KB_SPECIAL, Cap::Text("₦€£")));
+        let sx = x0 + side + sp + 2 * gap;
+        keys.push((Rect::new(sx, y4, panel.r() - pad - side - gap - sx, kh), KB_SPACE, Cap::Text("space")));
         keys.push((Rect::new(panel.r() - pad - side, y4, side, kh), ENTER, Cap::Icon(Icon::ChevronRight)));
         (panel, keys)
     }
@@ -518,7 +525,7 @@ impl Lock {
         for (b, code, cap) in keys {
             let a = Action::Lock(*code);
             let special = !matches!(cap, Cap::Char(_)) || *code == KB_SPACE;
-            let on = *code == KB_SHIFT && self.shift > 0;
+            let on = (*code == KB_SHIFT && self.shift > 0) || (*code == KB_SPECIAL && self.page == 3);
             let (mut kbg, fg) = if *code == ENTER {
                 (t.accent, t.on_accent)
             } else if on {

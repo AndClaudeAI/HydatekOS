@@ -16,7 +16,7 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
 
-<img src="docs/screenshots/lock-keyboard.png" width="240" alt="Password with the on-screen keyboard on a portrait screen">
+<img src="docs/screenshots/lock-keyboard.png" width="240" alt="The on-screen keyboard's special characters page, with the Naira sign">
 
 | Pairing by QR code | Browser companion on the phone | Demo phone mirror |
 |---|---|---|
@@ -30,7 +30,8 @@ Windows, macOS or Linux.
   date, Up next, phone notifications). Sign in with a **PIN** (keypad), a **password**,
   or **your phone's fingerprint**: Phone Link asks the paired Android phone, which
   shows its own fingerprint prompt. The password has an **on-screen keyboard**
-  (letters, numbers, all symbols, shift and caps lock): it opens by itself on
+  (letters, numbers, all symbols, shift and caps lock, and a **₦€£** page of special
+  characters: ₦ € £ ¥ ¢ ₹ ₵ § ¶ © ® ™ ° ± × ÷ ¿ ¡ « » • … µ ¬ ¦ ¤): it opens by itself on
   portrait touch screens, and from the keyboard button in the field on desktops. Switch between them under the keypad; set them up
   in Settings › Lock screen. The screen also locks after idle time, from the logo
   menu, or with **F12**.
@@ -139,7 +140,7 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
 companion/web/     browser companion for phones (served by HydatekOS)
 companion/android/ HydatekOS Link for Android (built without the Android SDK)
 tests-host/        host-side tests of kernel modules
-assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans Mono) + licences
+assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans and Sans Mono) + licences
 tools/             image builder, QEMU runner, GPT writer, font generator
 docs/              architecture, install guide, Phone Link protocol, roadmap
 ```
@@ -149,4 +150,4 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Licences
 
 The fonts are distributed under their own licences in `assets/fonts/` (SIL OFL 1.1 for
-Figtree and Bodoni Moda, the Bitstream Vera/DejaVu licence for DejaVu Sans Mono).
+Figtree and Bodoni Moda, the Bitstream Vera/DejaVu licence for DejaVu Sans and DejaVu Sans Mono).
