@@ -97,6 +97,21 @@ HydatekOS drives the i8042 auxiliary port itself (`ps2.rs`), including the Intel
 wheel. It only consumes bytes flagged as AUX, so the firmware keyboard driver keeps
 working.
 
-## Phone Link (`link.rs`, `apps/phonelink.rs`, `apps/messages.rs`)
+## Networking (`net/`)
 
-See [PHONE_LINK.md](PHONE_LINK.md).
+- `snp.rs` claims the firmware's network card (UEFI Simple Network Protocol) and
+  moves raw Ethernet frames. Everything above that is HydatekOS code.
+- `mod.rs` implements Ethernet, ARP (cache plus queued packets), IPv4 (no
+  fragmentation), ICMP echo, UDP and a DHCP client with renewal.
+- `tcp.rs` is a server-side TCP. It has passive open, cumulative ACKs,
+  out-of-order reassembly, go-back-N retransmission with exponential backoff,
+  flow control, zero-window probing and orderly close.
+- `mdns.rs` answers `hydatek-xxxx.local` and advertises `_hydatek-link._tcp`.
+
+The main loop wakes on the 10 ms tick, or as soon as the card signals a packet.
+
+## Phone Link (`link.rs`, `hlp.rs`, `linksrv.rs`, `apps/phonelink.rs`)
+
+`linksrv.rs` serves HTTP and WebSocket on port 7743. It runs the encrypted HLP
+session, feeds the `Link` model, and turns the UI's queued commands (reply to a
+text, dial, send a file) into messages. See [PHONE_LINK.md](PHONE_LINK.md).

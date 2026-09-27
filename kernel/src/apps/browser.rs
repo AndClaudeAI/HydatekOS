@@ -1,5 +1,5 @@
 //! Browser: renders built-in hydatek:// pages. Web pages need the network
-//! stack (milestone 3); the address bar reports that honestly.
+//! support (DNS, TLS, HTML) in a later milestone; the address bar says so.
 
 use super::{App, AppKind, LineEdit, HEADER};
 use crate::font::Face;
@@ -44,7 +44,7 @@ fn page(url: &str) -> Vec<String> {
             "# Roadmap",
             "- M1 (now): desktop + mobile shells, apps, persistent files, Phone Link UI",
             "- M2: own interrupts, timers, PS/2 and USB HID drivers, exit boot services",
-            "- M3: network stack (virtio-net, e1000, TCP/IP, DHCP, DNS), real web pages",
+            "- M3 (in progress): TCP/IP and Phone Link done; DNS, TLS and web pages next",
             "- M4: audio (Intel HDA), Bluetooth, native Phone Link transport",
             "- M5: installer to internal NVMe/SATA, users and permissions",
             "",
@@ -74,7 +74,7 @@ fn page(url: &str) -> Vec<String> {
         return vec![
             "# Can't reach this page".to_string(),
             format!("HydatekOS can't open {} yet.", url),
-            "The network stack (drivers + TCP/IP) arrives in milestone 3.".to_string(),
+            "HydatekOS has TCP/IP, but no DNS, TLS or HTML engine yet (milestone 3).".to_string(),
             "".to_string(),
             "[hydatek://start] Go to the start page".to_string(),
         ];

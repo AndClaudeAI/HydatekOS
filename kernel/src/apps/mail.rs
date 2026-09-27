@@ -1,4 +1,4 @@
-//! Mail: local mailbox (accounts arrive with the network stack).
+//! Mail: local mailbox (IMAP/SMTP accounts arrive with TLS in milestone 3).
 
 use super::{App, AppKind, HEADER};
 use crate::font::Face;
@@ -17,14 +17,14 @@ const MAILS: [(&str, &str, &str, &[&str]); 3] = [
         "— The Hydatek team",
     ]),
     ("Phone Link", "Your phone, on your desktop", "Yesterday", &[
-        "Pair HydatekOS Mobile to read and reply to texts, see notifications, copy photos and mirror your phone's screen.",
+        "Scan the code in Phone Link with your phone to share photos, files and text. Install the Android app from the page that opens to read and reply to texts, see notifications and make calls.",
         "",
         "Open Phone Link from the dock to get started.",
     ]),
     ("Hydatek Team", "What's next: the roadmap", "Mon", &[
         "Milestone 2: own interrupt/timer handling and PS/2 + USB input.",
-        "Milestone 3: networking (virtio-net, e1000, TCP/IP) and Mail sync.",
-        "Milestone 4: audio, Bluetooth and a native Phone Link transport.",
+        "Milestone 3: networking. TCP/IP and Phone Link are done; DNS, TLS and Mail sync are next.",
+        "Milestone 4: audio, Bluetooth and Phone Link calls over Bluetooth.",
         "",
         "See docs/ROADMAP.md in the source tree.",
     ]),
@@ -73,7 +73,7 @@ impl App for Mail {
             ui.zone(row, a);
             y += 66;
         }
-        ui.text(r.x + 18, r.b() - 16, Face::Regular, 11, "Accounts sync with networking (M3)", t.text3);
+        ui.text(r.x + 18, r.b() - 16, Face::Regular, 11, "Accounts need TLS (milestone 3)", t.text3);
         }
         if list_w >= r.w {
             return;

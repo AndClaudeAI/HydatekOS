@@ -4,12 +4,17 @@ A calm desktop **and** mobile operating system, written from scratch.
 
 HydatekOS boots straight from a PC's UEFI firmware. The kernel, memory allocator,
 graphics compositor, window manager, font and icon renderers, file system layer,
-PS/2 mouse driver and every app are HydatekOS code: Rust, `no_std`, zero
-third-party crates. It isn't a skin on Windows, macOS or Linux.
+PS/2 mouse driver, TCP/IP network stack, cryptography and every app are
+HydatekOS code: Rust, `no_std`, zero third-party crates. It isn't a skin on
+Windows, macOS or Linux.
 
-| Desktop | Phone Link (live phone mirror) | Mobile shell |
+| Desktop | Phone Link with a phone | Mobile shell |
 |---|---|---|
-| ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
+| ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
+
+| Pairing by QR code | Browser companion on the phone | Demo phone mirror |
+|---|---|---|
+| ![Pairing](docs/screenshots/phone-link-pairing.png) | ![Web companion](docs/screenshots/web-companion.png) | ![Mirror](docs/screenshots/phone-link.png) |
 
 ## What works today (milestone 1, "Dune")
 
@@ -22,9 +27,14 @@ third-party crates. It isn't a skin on Windows, macOS or Linux.
 - **Mobile shell:** the phone home screen from the design (clock, Up next card, app grid,
   dock) with full-screen apps and a home indicator. It's used automatically on portrait
   screens and can be switched on from **View › Mobile Shell** or Settings.
-- **Phone Link** (like Windows "Link to Windows"): pair a phone and get its messages
-  (read and reply), notifications, photos (copy to Pictures), call log and a **live,
-  interactive mirror of the phone's screen**.
+- **Networking:** HydatekOS's own TCP/IP stack (ARP, IPv4, ICMP, UDP, DHCP, TCP,
+  mDNS) over the firmware's Ethernet driver. See Settings › Network.
+- **Phone Link with real phones** (like Windows "Link to Windows"). Scan a QR code
+  to pair. Any phone's browser can exchange photos, files and text with the PC.
+  The **HydatekOS Link Android app** adds texts (read and reply), notifications,
+  the call log and placing calls. Everything is end-to-end encrypted
+  (ChaCha20-Poly1305). A demo phone with a live screen mirror lets you try it
+  without a device. Details: [docs/PHONE_LINK.md](docs/PHONE_LINK.md).
 - **Apps:** Files, Notes, Settings, Calendar, Terminal (`hsh`), Phone Link, Messages,
   Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
@@ -36,12 +46,13 @@ third-party crates. It isn't a skin on Windows, macOS or Linux.
 An operating system is a long project. Here's what's still missing; the plan is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- **No network stack or Wi-Fi/Bluetooth drivers yet.** Browser shows built-in
-  `hydatek://` pages, and Mail holds local messages.
-- **Phone Link runs against a virtual HydatekOS Mobile device** that lives inside the
-  OS. The desktop side and the protocol ([docs/PHONE_LINK.md](docs/PHONE_LINK.md)) are
-  in place. Pairing a real handset needs the network drivers above and a companion
-  phone app.
+- **Wired Ethernet only, through the firmware's driver.** There are no Wi-Fi or
+  Bluetooth drivers yet, no DNS resolver or TLS, and so no web browsing: Browser
+  shows built-in `hydatek://` pages and Mail holds local messages.
+- **Phone Link can't mirror a real phone's screen yet.** The demo phone shows how
+  it will look. The Android app has been built and statically checked, and its
+  protocol code is tested against HydatekOS, but it hasn't run on a real phone yet
+  ([details](companion/android/README.md)).
 - **No sound or camera drivers yet.**
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
@@ -56,7 +67,12 @@ sudo apt install qemu-system-x86 ovmf mtools     # macOS: brew install qemu mtoo
 tools/run-qemu.sh
 ```
 
-Click inside the QEMU window to capture the mouse (Ctrl+Alt+G releases it).
+Click inside the QEMU window to capture the mouse (Ctrl+Alt+G releases it). The VM
+gets a network through QEMU, and Phone Link's port 7743 is forwarded, so a phone
+on the same network as your computer can pair using your computer's IP address.
+
+Automated tests (kernel crypto/QR/protocol, web and Android companion code):
+`tools/test.sh`.
 
 ## Install on a PC
 
@@ -99,6 +115,12 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/shell/       desktop shell, window manager, mobile shell, wallpaper
   src/apps/        built-in applications
   assets/fonts.bin prebuilt glyph atlases (regenerate with tools/fontgen.py)
+  src/net/         network stack: firmware NIC, ARP/IPv4/DHCP/TCP/mDNS
+  src/crypto.rs    SHA-256, HKDF, ChaCha20-Poly1305; rng.rs; qr.rs
+  src/hlp.rs       Hydatek Link Protocol; linksrv.rs its HTTP/WebSocket server
+companion/web/     browser companion for phones (served by HydatekOS)
+companion/android/ HydatekOS Link for Android (built without the Android SDK)
+tests-host/        host-side tests of kernel modules
 assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans Mono) + licences
 tools/             image builder, QEMU runner, GPT writer, font generator
 docs/              architecture, install guide, Phone Link protocol, roadmap

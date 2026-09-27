@@ -15,10 +15,13 @@
 - PNG/JPEG decoders and an image viewer
 
 ## M3 — connected
-- virtio-net, Intel e1000/i219 and Realtek RTL8111 drivers; IPv4/IPv6, DHCP, DNS, TCP, TLS
+- ✅ TCP/IP stack: ARP, IPv4, ICMP, UDP, DHCP, TCP, mDNS/DNS-SD (over the firmware NIC driver)
+- ✅ Phone Link over the network: encrypted Hydatek Link Protocol, QR pairing,
+  browser companion, HydatekOS Link for Android
+- Native virtio-net, Intel e1000/i219 and Realtek RTL8111 drivers; IPv6; DNS resolver; TLS
 - Wi-Fi (Intel iwlwifi-class hardware) with WPA2/WPA3
 - Browser: HTML/CSS subset renderer; Mail: IMAP/SMTP
-- Phone Link over the network (Hydatek Link Protocol)
+- Phone Link: X25519 key exchange (HLP/2), real-phone screen mirroring, iOS companion app
 
 ## M4 — senses
 - Intel HDA audio; Music playback

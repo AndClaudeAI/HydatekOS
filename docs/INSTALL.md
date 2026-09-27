@@ -60,7 +60,14 @@ partitions.
 | Keyboard | USB and PS/2, through the firmware |
 | Mouse / touchpad | USB through the firmware, or the HydatekOS PS/2 mouse driver (with wheel) |
 | Storage | The boot disk's FAT partition |
-| Wi-Fi, Ethernet, Bluetooth, audio, camera | Not yet (see ROADMAP.md) |
+| Ethernet | Through the firmware's network driver; DHCP, then Phone Link on port 7743 |
+| Wi-Fi, Bluetooth, audio, camera | Not yet (see ROADMAP.md) |
+
+**Networking:** plug in an Ethernet cable before booting. Many PCs only load
+their network driver when **Network Stack**, **PXE** or **UEFI network** is
+enabled in the firmware settings. Settings › Network shows the adapter and IP
+address. Phone Link needs the phone on the same network (e.g. the router's
+Wi-Fi) and TCP port 7743 reachable.
 
 If the pointer doesn't move on your machine, your firmware has no mouse driver and the
 touchpad isn't PS/2-compatible. The keyboard still works, and native USB/I2C-HID drivers

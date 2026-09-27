@@ -25,7 +25,10 @@ ARGS=(
   -drive format=raw,file="$ROOT/build/hydatekos.img"
   -device qemu-xhci -device usb-kbd   # pointer: PS/2 mouse, driven by HydatekOS
   -serial file:"$ROOT/build/serial.log"
-  -net none
+  # networking: user-mode NAT; port 7743 is forwarded so a phone or browser
+  # on this machine's network can reach Phone Link at http://<this-host>:7743
+  -netdev user,id=n0,hostfwd=tcp::7743-:7743 -device virtio-net-pci,netdev=n0
+  -device virtio-rng-pci
 )
 if [ "${HEADLESS:-0}" = 1 ]; then
   exec qemu-system-x86_64 "${ARGS[@]}" -display none -vnc :1 -monitor "${MONITOR:-stdio}"

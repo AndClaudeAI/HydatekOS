@@ -27,4 +27,12 @@ PART="$IMG@@1M"
 mformat -i "$PART" -T $(( (SIZE_MB - 2) * 2048 )) -F -v HYDATEKOS ::
 mmd -i "$PART" ::/EFI ::/EFI/BOOT ::/HYDATEK
 mcopy -i "$PART" "$EFI" ::/EFI/BOOT/BOOTX64.EFI
+# Phone Link's Android app, served to phones at http://<pc>:7743/app.apk
+APK="$ROOT/companion/android/build/hydatek-link.apk"
+if [ -f "$APK" ]; then
+  mmd -i "$PART" ::/HYDATEK/apps
+  mcopy -i "$PART" "$APK" ::/HYDATEK/apps/hydatek-link.apk
+else
+  echo "note: build companion/android/build.sh to include the Android app"
+fi
 echo "HydatekOS image: $IMG"
