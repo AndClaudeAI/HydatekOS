@@ -16,6 +16,8 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
 
+<img src="docs/screenshots/lock-keyboard.png" width="240" alt="Password with the on-screen keyboard on a portrait screen">
+
 | Pairing by QR code | Browser companion on the phone | Demo phone mirror |
 |---|---|---|
 | ![Pairing](docs/screenshots/phone-link-pairing.png) | ![Web companion](docs/screenshots/web-companion.png) | ![Mirror](docs/screenshots/phone-link.png) |
@@ -27,7 +29,9 @@ Windows, macOS or Linux.
   drivers, files and the network come up, then a fade into the lock screen (clock,
   date, Up next, phone notifications). Sign in with a **PIN** (keypad), a **password**,
   or **your phone's fingerprint**: Phone Link asks the paired Android phone, which
-  shows its own fingerprint prompt. Switch between them under the keypad; set them up
+  shows its own fingerprint prompt. The password has an **on-screen keyboard**
+  (letters, numbers, all symbols, shift and caps lock): it opens by itself on
+  portrait touch screens, and from the keyboard button in the field on desktops. Switch between them under the keypad; set them up
   in Settings › Lock screen. The screen also locks after idle time, from the logo
   menu, or with **F12**.
 - **Desktop shell:** menu bar with working menus, clock and "Up next" widget, quick
@@ -65,8 +69,8 @@ An operating system is a long project. Here's what's still missing; the plan is 
   protocol code is tested against HydatekOS, but it hasn't run on a real phone yet
   ([details](companion/android/README.md)).
 - **No sound, camera or fingerprint-reader drivers yet.** Fingerprint sign-in
-  works through a paired Android phone's sensor instead. There's no on-screen
-  keyboard either, so a password needs a physical keyboard.
+  works through a paired Android phone's sensor instead. The on-screen keyboard is
+  only on the lock screen so far; other text fields still need a physical keyboard.
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
 

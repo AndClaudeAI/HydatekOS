@@ -21,6 +21,21 @@ pub const MODE_PASSWORD: u8 = 21;
 pub const MODE_FINGER: u8 = 22;
 pub const RETRY: u8 = 23;
 pub const FIELD: u8 = 24;
+// on-screen keyboard
+pub const KB_TOGGLE: u8 = 30;
+pub const KB_SHIFT: u8 = 31;
+pub const KB_PAGE: u8 = 32; // letters <-> symbols ("123" / "ABC")
+pub const KB_MORE: u8 = 33; // 123 <-> #+=
+pub const KB_SPACE: u8 = 34;
+pub const KB_BACK: u8 = 35;
+pub const KB_CHAR: u8 = 100; // + row * 16 + column
+
+/// Keyboard pages: letters, then two symbol pages that cover printable ASCII.
+const PAGES: [[&str; 3]; 3] = [
+    ["qwertyuiop", "asdfghjkl", "zxcvbnm"],
+    ["1234567890", "-/:;()$&@\"", ".,?!'"],
+    ["[]{}#%^*+=", "_\\|~<>`", ".,?!'"],
+];
 
 const MAX_TRIES: u32 = 5;
 const WAIT_TICKS: u64 = 3000; // 30 s
@@ -45,11 +60,26 @@ pub struct Lock {
     shake_from: u64,
     /// pending fingerprint request: (id, tick sent)
     finger: Option<(String, u64)>,
+    /// on-screen keyboard: shown, page, shift (0 off, 1 next letter, 2 caps lock)
+    osk: bool,
+    page: usize,
+    shift: u8,
+    shift_at: u64,
+}
+
+enum Cap {
+    Char(char),
+    Text(&'static str),
+    Icon(Icon),
 }
 
 pub enum Outcome {
     Stay,
     Unlock,
+}
+
+fn touch(sys: &Sys) -> bool {
+    sys.screen.1 > sys.screen.0
 }
 
 fn methods(sys: &Sys) -> Vec<Mode> {
@@ -75,6 +105,10 @@ impl Lock {
         self.error.clear();
         self.finger = None;
         self.mode = if sys.has_pin() { Mode::Pin } else { Mode::Password };
+        self.page = 0;
+        self.shift = 0;
+        // touch-first (portrait) screens open the keyboard with the password
+        self.osk = self.mode == Mode::Password && touch(sys);
     }
 
     fn waiting(&self, now: u64) -> bool {
@@ -130,12 +164,56 @@ impl Lock {
         }
     }
 
+    fn type_char(&mut self, c: char, now: u64) {
+        if !self.waiting(now) && self.password.chars().count() < 64 {
+            self.password.push(c);
+            self.error.clear();
+        }
+    }
+
+    /// A key on the on-screen keyboard.
+    fn osk_key(&mut self, a: u8, now: u64) -> Outcome {
+        match a {
+            KB_SHIFT => {
+                // tap: next letter upper case; double tap: caps lock; tap again: off
+                self.shift = match self.shift {
+                    0 if now < self.shift_at + 50 => 2,
+                    0 => 1,
+                    1 if now < self.shift_at + 50 => 2,
+                    _ => 0,
+                };
+                self.shift_at = now;
+            }
+            KB_PAGE => self.page = if self.page == 0 { 1 } else { 0 },
+            KB_MORE => self.page = if self.page == 1 { 2 } else { 1 },
+            KB_SPACE => self.type_char(' ', now),
+            KB_BACK => {
+                self.password.pop();
+            }
+            c if c >= KB_CHAR => {
+                let (row, col) = (((c - KB_CHAR) / 16) as usize, ((c - KB_CHAR) % 16) as usize);
+                if let Some(ch) = PAGES[self.page].get(row).and_then(|r| r.chars().nth(col)) {
+                    let ch = if self.page == 0 && self.shift > 0 { ch.to_ascii_uppercase() } else { ch };
+                    self.type_char(ch, now);
+                    if self.shift == 1 {
+                        self.shift = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Outcome::Stay
+    }
+
     fn set_mode(&mut self, m: Mode, sys: &mut Sys, now: u64) {
         if !methods(sys).contains(&m) {
             return;
         }
         if self.mode == Mode::Finger && m != Mode::Finger {
             self.cancel_finger(sys);
+        }
+        if m == Mode::Password && self.mode != Mode::Password {
+            self.osk = touch(sys);
         }
         self.mode = m;
         self.error.clear();
@@ -201,6 +279,15 @@ impl Lock {
             MODE_PASSWORD => self.set_mode(Mode::Password, sys, now),
             MODE_FINGER => self.set_mode(Mode::Finger, sys, now),
             RETRY => self.ask_phone(sys, now),
+            KB_TOGGLE | FIELD if self.mode == Mode::Password => {
+                // the field opens the keyboard; the keyboard button toggles it
+                self.osk = if a == FIELD { true } else { !self.osk };
+            }
+            a if (KB_SHIFT..=KB_BACK).contains(&a) || a >= KB_CHAR => {
+                if self.mode == Mode::Password && self.osk {
+                    return self.osk_key(a, now);
+                }
+            }
             BACK => {
                 self.entry.pop();
             }
@@ -247,12 +334,7 @@ impl Lock {
                 _ => {}
             },
             Mode::Password => match k {
-                Key::Char(c) if !c.is_control() => {
-                    if !self.waiting(now) && self.password.chars().count() < 64 {
-                        self.password.push(c);
-                        self.error.clear();
-                    }
-                }
+                Key::Char(c) if !c.is_control() => self.type_char(c, now),
                 Key::Backspace => {
                     self.password.pop();
                 }
@@ -293,9 +375,12 @@ impl Lock {
         let gap = if tall { u(12) } else { 14 };
         let pad_h = if keypad { 4 * key + 3 * gap } else { 0 };
         // the clock shrinks a little when the keypad needs the room
-        let cs = match (keypad, tall) {
+        let osk = mode == Mode::Password && self.osk;
+        let kb = if osk { Some(self.osk_layout(r)) } else { None };
+        let kb_h = kb.as_ref().map(|k| k.0.h).unwrap_or(0);
+        let cs = match (keypad || osk, tall) {
             (true, true) => u(80),
-            (true, false) if r.h < 760 => 100,
+            (true, false) if r.h - kb_h < 760 => 100,
             _ => u(128),
         };
         // one centred column: date, clock, Up next, sign-in, sign-in options
@@ -309,7 +394,7 @@ impl Lock {
         let opts_h = if secured && methods.len() > 1 { u(22) + u(44) } else { 0 };
         let cx = r.x + r.w / 2;
         let top = if secured {
-            r.y + ((r.h - head_h - body_h - opts_h) / 2).max(u(40)) + u(20)
+            r.y + ((r.h - kb_h - head_h - body_h - opts_h) / 2).max(u(40)) + u(20)
         } else {
             r.y + ((r.h - head_h) / 2 - r.h / 10).max(u(40)) + u(20)
         };
@@ -369,6 +454,102 @@ impl Lock {
                 ui.icon_in(icon, b, u(20), if on { t.on_accent } else { t.text });
                 ui.zone(b, act);
             }
+        }
+        if let Some((panel, keys)) = kb {
+            self.render_osk(ui, panel, &keys, tall);
+        }
+    }
+
+    /// The keyboard panel and its keys (logical coordinates).
+    fn osk_layout(&self, r: Rect) -> (Rect, Vec<(Rect, u8, Cap)>) {
+        let tall = r.h > r.w;
+        let u = |v: i32| if tall { v * r.w / 390 } else { v };
+        let pw = if tall { r.w } else { r.w.min(760) };
+        let (pad, gap, vgap, kh) = (u(6), u(6), u(10), u(44));
+        let kw = (pw - 2 * pad - 9 * gap) / 10;
+        let h = 4 * kh + 3 * vgap + 2 * u(10) + if tall { u(14) } else { 0 };
+        let panel = Rect::new(r.x + (r.w - pw) / 2, r.b() - h, pw, h);
+        let x0 = panel.x + pad;
+        let row_y = |i: i32| panel.y + u(10) + i * (kh + vgap);
+        let mut keys = Vec::new();
+        let page = &PAGES[self.page];
+        // rows 1-2: characters, centred
+        for (ri, row) in page.iter().take(2).enumerate() {
+            let n = row.chars().count() as i32;
+            let start = panel.x + (pw - (n * kw + (n - 1) * gap)) / 2;
+            for (ci, ch) in row.chars().enumerate() {
+                let b = Rect::new(start + ci as i32 * (kw + gap), row_y(ri as i32), kw, kh);
+                keys.push((b, KB_CHAR + (ri * 16 + ci) as u8, Cap::Char(ch)));
+            }
+        }
+        // row 3: shift / #+= / 123, characters, backspace
+        let wide = kw * 3 / 2;
+        let y3 = row_y(2);
+        let (left_code, left) = match self.page {
+            0 => (KB_SHIFT, Cap::Icon(Icon::Shift)),
+            1 => (KB_MORE, Cap::Text("#+=")),
+            _ => (KB_MORE, Cap::Text("123")),
+        };
+        keys.push((Rect::new(x0, y3, wide, kh), left_code, left));
+        let row = page[2];
+        let n = row.chars().count() as i32;
+        let inner = pw - 2 * pad - 2 * wide - 2 * gap;
+        let cw = if self.page == 0 { kw } else { (inner - (n - 1) * gap) / n };
+        let start = x0 + wide + gap + (inner - (n * cw + (n - 1) * gap)) / 2;
+        for (ci, ch) in row.chars().enumerate() {
+            keys.push((Rect::new(start + ci as i32 * (cw + gap), y3, cw, kh), KB_CHAR + (32 + ci) as u8, Cap::Char(ch)));
+        }
+        keys.push((Rect::new(panel.r() - pad - wide, y3, wide, kh), KB_BACK, Cap::Icon(Icon::Backspace)));
+        // row 4: page switch, space, unlock
+        let y4 = row_y(3);
+        let side = kw * 2 + gap;
+        keys.push((Rect::new(x0, y4, side, kh), KB_PAGE, Cap::Text(if self.page == 0 { "123" } else { "ABC" })));
+        keys.push((Rect::new(x0 + side + gap, y4, pw - 2 * pad - 2 * side - 2 * gap, kh), KB_SPACE, Cap::Text("space")));
+        keys.push((Rect::new(panel.r() - pad - side, y4, side, kh), ENTER, Cap::Icon(Icon::ChevronRight)));
+        (panel, keys)
+    }
+
+    fn render_osk(&self, ui: &mut Ui, panel: Rect, keys: &[(Rect, u8, Cap)], tall: bool) {
+        let t = ui.t;
+        let u = |v: i32| if tall { v * panel.w / 390 } else { v };
+        let bg = Rect::new(panel.x, panel.y, panel.w, panel.h + u(24));
+        ui.rrect(bg, u(22), t.chip.with_alpha(245));
+        ui.zone(panel, Action::Lock(FIELD));
+        for (b, code, cap) in keys {
+            let a = Action::Lock(*code);
+            let special = !matches!(cap, Cap::Char(_)) || *code == KB_SPACE;
+            let on = *code == KB_SHIFT && self.shift > 0;
+            let (mut kbg, fg) = if *code == ENTER {
+                (t.accent, t.on_accent)
+            } else if on {
+                (t.text, t.surface)
+            } else if special {
+                (t.surface.mix(t.chip, 55), t.text)
+            } else {
+                (t.surface, t.text)
+            };
+            if ui.hot(a) {
+                kbg = kbg.mix(t.text, 25);
+            }
+            ui.rrect(*b, u(8), kbg);
+            match cap {
+                Cap::Char(c) => {
+                    let c = if self.page == 0 && self.shift > 0 { c.to_ascii_uppercase() } else { *c };
+                    let mut buf = [0u8; 4];
+                    ui.text_in(*b, Face::Regular, u(20), c.encode_utf8(&mut buf), fg, 1);
+                }
+                Cap::Text(s) => {
+                    ui.text_in(*b, Face::Medium, u(14), s, fg, 1);
+                }
+                Cap::Icon(i) => {
+                    // caps lock: underline the shift arrow
+                    ui.icon_in(*i, *b, u(20), fg);
+                    if *code == KB_SHIFT && self.shift == 2 {
+                        ui.rect(Rect::new(b.x + b.w / 2 - u(7), b.b() - u(9), u(14), u(2)), fg);
+                    }
+                }
+            }
+            ui.zone(*b, a);
         }
     }
 
@@ -490,7 +671,14 @@ impl Lock {
         ui.zone(f, Action::Lock(FIELD));
         // masked characters as dots
         let go = Rect::new(f.r() - h + u(6), f.y + u(6), h - u(12), h - u(12));
-        let inner = Rect::new(f.x + u(20), f.y, go.x - f.x - u(28), h);
+        let kbd = Rect::new(go.x - go.w - u(4), go.y, go.w, go.h);
+        let ka = Action::Lock(KB_TOGGLE);
+        if self.osk || ui.hot(ka) {
+            ui.circle(kbd.x + kbd.w / 2, kbd.y + kbd.h / 2, kbd.w / 2, t.hover);
+        }
+        ui.icon_in(Icon::Keyboard, kbd, kbd.w / 2 + u(2), if self.osk { t.accent } else { t.text2 });
+        ui.zone(kbd, ka);
+        let inner = Rect::new(f.x + u(20), f.y, kbd.x - f.x - u(28), h);
         let n = self.password.chars().count() as i32;
         let (dr, dp) = (u(4), u(14));
         let caret = (now / 50) % 2 == 0;
