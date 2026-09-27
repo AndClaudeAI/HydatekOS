@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""HydatekOS font atlas generator.
+
+HydatekOS has no TrueType engine in the kernel (yet). Instead, glyphs are
+pre-rasterised at build time into 8-bit coverage bitmaps and packed into a
+single blob that the kernel embeds with `include_bytes!`.
+
+Pack layout (little endian):
+    b"HFPK" u16 face_count
+    per face:
+        u8 face_id, u8 reserved, u16 px, i16 ascent, i16 descent,
+        u16 glyph_count, u32 data_len
+        per glyph: u32 codepoint, i16 left, i16 top, u16 w, u16 h, u16 adv64
+        coverage bytes (glyphs back to back, row major)
+
+Usage: python3 tools/fontgen.py   (writes kernel/assets/fonts.bin)
+"""
+import os
+import struct
+from PIL import Image, ImageDraw, ImageFont
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FONTS = os.path.join(ROOT, "assets", "fonts")
+OUT = os.path.join(ROOT, "kernel", "assets", "fonts.bin")
+
+TEXT = [chr(c) for c in range(32, 127)] + list("·–—•…°©’‘“”×‹›←→✓")
+DIGITS = list("0123456789: ")
+
+# face_id -> (file, charset, logical sizes). Must match kernel/src/font.rs
+FACES = {
+    0: ("figtree-400.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20]),
+    1: ("figtree-500.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 18, 20, 24]),
+    2: ("figtree-600.ttf", TEXT, [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 24, 28, 36]),
+    3: ("bodoni-moda-500.ttf", DIGITS, [48, 64, 96]),
+    4: ("dejavu-sans-mono.ttf", TEXT, [12, 13, 14]),
+}
+SCALES = [1, 2]
+
+
+def render_face(face_id, path, chars, px):
+    font = ImageFont.truetype(path, px)
+    ascent, descent = font.getmetrics()
+    glyphs, data = [], bytearray()
+    for ch in chars:
+        adv = font.getlength(ch)
+        l, t, r, b = font.getbbox(ch, anchor="ls")
+        w, h = max(0, r - l), max(0, b - t)
+        if w and h:
+            img = Image.new("L", (w, h), 0)
+            ImageDraw.Draw(img).text((-l, -t), ch, font=font, fill=255, anchor="ls")
+            buf = img.tobytes()
+        else:
+            w = h = 0
+            buf = b""
+        glyphs.append(struct.pack("<IhhHHH", ord(ch), l, -t, w, h, int(round(adv * 64))))
+        data += buf
+    head = struct.pack("<BBHhhHI", face_id, 0, px, ascent, descent, len(glyphs), len(data))
+    return head + b"".join(glyphs) + bytes(data)
+
+
+def main():
+    faces = []
+    for fid, (fname, chars, sizes) in FACES.items():
+        path = os.path.join(FONTS, fname)
+        for s in sorted({s * k for s in sizes for k in SCALES}):
+            faces.append(render_face(fid, path, chars, s))
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, "wb") as f:
+        f.write(b"HFPK" + struct.pack("<H", len(faces)))
+        for blob in faces:
+            f.write(blob)
+    print(f"wrote {OUT} ({os.path.getsize(OUT)} bytes, {len(faces)} faces)")
+
+
+if __name__ == "__main__":
+    main()

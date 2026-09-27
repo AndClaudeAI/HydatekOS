@@ -1,0 +1,23 @@
+[package]
+name = "hydatek"
+version = "0.1.0"
+edition = "2021"
+description = "HydatekOS kernel and shell"
+
+[[bin]]
+name = "hydatek"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1

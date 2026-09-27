@@ -1,0 +1,222 @@
+//! Keyboard and pointer input.
+//!
+//! Milestone 1 reads devices through the firmware's input protocols, which
+//! means USB/PS2 keyboards, mice, touchpads and tablets all work on real
+//! hardware without HydatekOS drivers. Native drivers come in milestone 2.
+
+use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTextInputEx};
+use crate::ui::Key;
+use alloc::vec::Vec;
+
+pub enum Ev {
+    Move,
+    Down,
+    Up,
+    RightDown,
+    Scroll(i32),
+    Key(Key, bool),
+}
+
+enum Ptr {
+    Rel(*mut SimplePointer),
+    Abs(*mut AbsolutePointer),
+    Ps2(crate::ps2::Ps2Mouse),
+}
+
+pub struct Input {
+    ptrs: Vec<Ptr>,
+    kbd_ex: Option<*mut SimpleTextInputEx>,
+    kbd: *mut SimpleTextInput,
+    pub x: i32,
+    pub y: i32,
+    w: i32,
+    h: i32,
+    left: bool,
+    right: bool,
+    acc: (i32, i32),
+    scroll_acc: i32,
+}
+
+impl Input {
+    pub fn new(w: i32, h: i32) -> Input {
+        let st = efi::st();
+        let mut ptrs = Vec::new();
+        for hnd in efi::handles(&efi::ABSOLUTE_POINTER_GUID) {
+            if let Some(p) = efi::handle_protocol::<AbsolutePointer>(hnd, &efi::ABSOLUTE_POINTER_GUID) {
+                unsafe { ((*p).reset)(p, true) };
+                ptrs.push(Ptr::Abs(p));
+            }
+        }
+        // Prefer the console splitter's aggregate pointer; fall back to every device.
+        let mut have_rel = false;
+        if let Some(p) = efi::handle_protocol::<SimplePointer>(st.console_in_handle, &efi::SIMPLE_POINTER_GUID) {
+            unsafe { ((*p).reset)(p, true) };
+            ptrs.push(Ptr::Rel(p));
+            have_rel = true;
+        }
+        if !have_rel {
+            for hnd in efi::handles(&efi::SIMPLE_POINTER_GUID) {
+                if let Some(p) = efi::handle_protocol::<SimplePointer>(hnd, &efi::SIMPLE_POINTER_GUID) {
+                    unsafe { ((*p).reset)(p, true) };
+                    ptrs.push(Ptr::Rel(p));
+                }
+            }
+        }
+        // Only the console splitter's virtual pointers exist: no firmware mouse
+        // driver is bound, so drive a PS/2 mouse ourselves.
+        let simple = efi::handles(&efi::SIMPLE_POINTER_GUID).len();
+        let abs = efi::handles(&efi::ABSOLUTE_POINTER_GUID).len();
+        if simple <= 1 && abs <= 1 {
+            if let Some(m) = crate::ps2::Ps2Mouse::init() {
+                log!("input: HydatekOS PS/2 mouse driver active");
+                ptrs.push(Ptr::Ps2(m));
+            }
+        }
+        log!("pointers: {} (firmware abs {}, simple {})", ptrs.len(), abs, simple);
+        let kbd_ex = efi::handle_protocol::<SimpleTextInputEx>(st.console_in_handle, &efi::TEXT_INPUT_EX_GUID);
+        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0 }
+    }
+
+    pub fn pointer_count(&self) -> usize {
+        self.ptrs.len()
+    }
+
+    pub fn poll(&mut self, speed: i32, out: &mut Vec<Ev>) {
+        let mut moved = false;
+        let mut left = self.left;
+        let mut right = self.right;
+        for p in self.ptrs.iter_mut() {
+            match p {
+                Ptr::Ps2(m) => {
+                    if let Some(pk) = m.poll() {
+                        let k = speed.clamp(1, 9);
+                        let dx = pk.dx * k / 3;
+                        let dy = pk.dy * k / 3;
+                        if dx != 0 || dy != 0 {
+                            self.x = (self.x + dx).clamp(0, self.w - 1);
+                            self.y = (self.y + dy).clamp(0, self.h - 1);
+                            moved = true;
+                        }
+                        self.scroll_acc += pk.dz;
+                        left = pk.left;
+                        right = pk.right;
+                    }
+                }
+                &mut Ptr::Rel(p) => {
+                    let mut s = efi::PointerState::default();
+                    if unsafe { ((*p).get_state)(p, &mut s) } != efi::SUCCESS {
+                        continue;
+                    }
+                    let (rx, ry) = unsafe { ((*(*p).mode).res_x.max(1) as i32, (*(*p).mode).res_y.max(1) as i32) };
+                    // counts -> pixels with gentle acceleration
+                    let k = speed.clamp(1, 9);
+                    let accel = |v: i32| if v.abs() > 8 { v * 2 } else { v };
+                    self.acc.0 += accel(s.rel_x) * k * 64 / rx.min(64).max(1);
+                    self.acc.1 += accel(s.rel_y) * k * 64 / ry.min(64).max(1);
+                    let dx = self.acc.0 / 64;
+                    let dy = self.acc.1 / 64;
+                    self.acc.0 -= dx * 64;
+                    self.acc.1 -= dy * 64;
+                    if dx != 0 || dy != 0 {
+                        self.x = (self.x + dx).clamp(0, self.w - 1);
+                        self.y = (self.y + dy).clamp(0, self.h - 1);
+                        moved = true;
+                    }
+                    if s.rel_z != 0 {
+                        self.scroll_acc += s.rel_z;
+                    }
+                    left = s.left != 0;
+                    right = s.right != 0;
+                }
+                &mut Ptr::Abs(p) => {
+                    let mut s = efi::AbsState::default();
+                    if unsafe { ((*p).get_state)(p, &mut s) } != efi::SUCCESS {
+                        continue;
+                    }
+                    let m = unsafe { &*(*p).mode };
+                    let spanx = (m.max_x - m.min_x).max(1);
+                    let spany = (m.max_y - m.min_y).max(1);
+                    let nx = ((s.x.saturating_sub(m.min_x)) * self.w as u64 / spanx) as i32;
+                    let ny = ((s.y.saturating_sub(m.min_y)) * self.h as u64 / spany) as i32;
+                    let (nx, ny) = (nx.clamp(0, self.w - 1), ny.clamp(0, self.h - 1));
+                    if nx != self.x || ny != self.y {
+                        self.x = nx;
+                        self.y = ny;
+                        moved = true;
+                    }
+                    left = s.buttons & 1 != 0;
+                    right = s.buttons & 2 != 0;
+                }
+            }
+        }
+        if moved {
+            out.push(Ev::Move);
+        }
+        if left != self.left {
+            self.left = left;
+            out.push(if left { Ev::Down } else { Ev::Up });
+        }
+        if right != self.right {
+            self.right = right;
+            if right {
+                out.push(Ev::RightDown);
+            }
+        }
+        if self.scroll_acc != 0 {
+            // wheel "down" (towards the user) reports positive z on most firmware
+            let z = self.scroll_acc;
+            self.scroll_acc = 0;
+            out.push(Ev::Scroll(z.signum()));
+        }
+        // keyboard
+        for _ in 0..16 {
+            let (key, shift) = match self.kbd_ex {
+                Some(k) => {
+                    let mut d = efi::KeyData::default();
+                    if unsafe { ((*k).read_key_stroke_ex)(k, &mut d) } != efi::SUCCESS {
+                        break;
+                    }
+                    (d.key, d.state.shift_state)
+                }
+                None => {
+                    let mut d = efi::InputKey::default();
+                    if unsafe { ((*self.kbd).read_key_stroke)(self.kbd, &mut d) } != efi::SUCCESS {
+                        break;
+                    }
+                    (d, 0)
+                }
+            };
+            let ctrl_state = shift & efi::SHIFT_STATE_VALID != 0 && shift & (efi::LEFT_CONTROL | efi::RIGHT_CONTROL) != 0;
+            if let Some((k, ctrl)) = map_key(key, ctrl_state) {
+                out.push(Ev::Key(k, ctrl));
+            }
+        }
+    }
+}
+
+fn map_key(k: efi::InputKey, ctrl: bool) -> Option<(Key, bool)> {
+    let key = match k.scan_code {
+        0x01 => Key::Up,
+        0x02 => Key::Down,
+        0x03 => Key::Right,
+        0x04 => Key::Left,
+        0x05 => Key::Home,
+        0x06 => Key::End,
+        0x08 => Key::Delete,
+        0x09 => Key::PageUp,
+        0x0a => Key::PageDown,
+        0x0b..=0x14 => Key::F((k.scan_code - 0x0a) as u8),
+        0x17 => Key::Esc,
+        0 => match k.unicode_char {
+            0 => return None,
+            0x08 => Key::Backspace,
+            0x09 => Key::Tab,
+            0x0a | 0x0d => Key::Enter,
+            0x1b => Key::Esc,
+            c @ 1..=26 => return Some((Key::Char((b'a' + c as u8 - 1) as char), true)),
+            c => Key::Char(char::from_u32(c as u32)?),
+        },
+        _ => return None,
+    };
+    Some((key, ctrl))
+}
