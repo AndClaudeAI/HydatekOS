@@ -65,7 +65,7 @@ pub fn file_icon(name: &str, dir: bool) -> Icon {
         Icon::Sheet
     } else if name.ends_with(".img") {
         Icon::Image
-    } else if name.to_ascii_lowercase().ends_with(".docx") {
+    } else if [".hyds", ".docx"].iter().any(|e| name.to_ascii_lowercase().ends_with(e)) {
         Icon::Scripts
     } else {
         Icon::Doc

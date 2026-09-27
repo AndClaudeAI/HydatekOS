@@ -1,6 +1,8 @@
 //! Hyda Scripts, the Hyda Workspace word processor: A4 pages, paragraph
 //! styles, bold / italic / underline / strikethrough, alignment, lists, undo,
-//! cut / copy / paste, and Word (.docx) files (also .txt and .md).
+//! cut / copy / paste. Documents are saved in Hyda Scripts' own format
+//! (.hyds, see doc.rs); Word (.docx), text and Markdown files open for viewing
+//! and editing, and are exported to, but never saved over.
 
 use super::{App, AppKind, LineEdit, HEADER};
 use crate::doc::{Align, Doc, Para, Pos, Style, BOLD, ITALIC, STRIKE, STYLES, UNDERLINE};
@@ -51,7 +53,7 @@ const C_PASTE: u32 = 22;
 const C_ALL: u32 = 23;
 const C_EXPORT_TXT: u32 = 24;
 const C_EXPORT_MD: u32 = 25;
-const C_SAVE_DOCX: u32 = 26;
+const C_EXPORT_DOCX: u32 = 26;
 const C_DISMISS: u32 = 27;
 const C_FIT: u32 = 28;
 const C_STYLE: u32 = 100;
@@ -107,9 +109,9 @@ pub struct Scripts {
     want_visible: bool,
     goal_x: Option<i32>,
     overlay: Overlay,
-    /// opened from a Word file another program made: the first save goes to a
-    /// copy, so what Hyda Scripts can't show yet (images, tables...) survives
-    foreign: bool,
+    /// opened from another format (.docx, .txt, .md): shown and editable, but
+    /// saving writes a new .hyds next to it and leaves the original alone
+    imported: bool,
 }
 
 /// Font size (points), base weight, space before/after (points), line height %.
@@ -172,7 +174,7 @@ impl Scripts {
             want_visible: false,
             goal_x: None,
             overlay: Overlay::None,
-            foreign: false,
+            imported: false,
         }
     }
 
@@ -605,6 +607,7 @@ impl Scripts {
         b.rfind('.').map(|k| &b[k..]).unwrap_or("")
     }
 
+    /// Export formats (saving always writes .hyds).
     fn encode(&self, ext: &str) -> Vec<u8> {
         match ext {
             ".md" => self.doc.to_markdown().into_bytes(),
@@ -627,25 +630,24 @@ impl Scripts {
 
     fn save(&mut self, sys: &mut Sys, quiet: bool) {
         if self.path.is_empty() {
-            self.path = sys.fs.unique("/home/Documents", &self.suggested_name(), ".docx");
+            self.path = sys.fs.unique("/home/Documents", &self.suggested_name(), ".hyds");
         }
-        let mut copied = false;
-        if self.foreign {
-            let dir = parent(&self.path);
-            self.path = sys.fs.unique(&dir, &format!("{} (edited)", self.title()), ".docx");
-            self.foreign = false;
-            copied = true;
+        // an imported file is never overwritten: its .hyds goes next to it
+        let mut from = None;
+        if self.imported {
+            from = Some(self.ext().to_string());
+            self.path = sys.fs.unique(&parent(&self.path), &self.title(), ".hyds");
+            self.imported = false;
         }
-        let ext = self.ext().to_ascii_lowercase();
-        let ok = sys.fs.write(&self.path, &self.encode(&ext));
+        let ok = sys.fs.write(&self.path, self.doc.to_hyds().as_bytes());
         if ok {
             self.dirty = false;
         }
         if !quiet {
             let msg = if !ok {
                 String::from("Couldn't save: the disk is read-only")
-            } else if copied {
-                format!("Saved as {} (the original is unchanged)", basename(&self.path))
+            } else if let Some(ext) = from {
+                format!("Saved as {} (the {} file is unchanged)", basename(&self.path), ext)
             } else {
                 format!("Saved {}", basename(&self.path))
             };
@@ -653,10 +655,13 @@ impl Scripts {
         }
     }
 
+    /// Write a copy in another format; the document itself stays .hyds.
     fn export(&mut self, sys: &mut Sys, ext: &str) {
         let dir = if self.path.is_empty() { String::from("/home/Documents") } else { parent(&self.path) };
         let name = if self.path.is_empty() { self.suggested_name() } else { self.title() };
-        let path = sys.fs.unique(&dir, &name, ext);
+        let target = join(&dir, &format!("{}{}", name, ext));
+        // never replace the file this document was imported from
+        let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ext) } else { target };
         sys.fs.write(&path, &self.encode(ext));
         sys.toast("Hyda Scripts", &format!("Exported {}", basename(&path)));
     }
@@ -674,7 +679,15 @@ impl Scripts {
             return;
         };
         let lower = path.to_ascii_lowercase();
-        let doc = if lower.ends_with(".docx") {
+        let doc = if lower.ends_with(".hyds") {
+            match Doc::from_hyds(&data) {
+                Ok(d) => d,
+                Err(why) => {
+                    sys.toast("Hyda Scripts", &format!("Can't open {}: {}", basename(path), why));
+                    return;
+                }
+            }
+        } else if lower.ends_with(".docx") {
             match Doc::from_docx(&data) {
                 Some(d) => d,
                 None => {
@@ -687,13 +700,10 @@ impl Scripts {
         } else {
             Doc::from_text(&String::from_utf8_lossy(&data))
         };
-        // made by another program? (Hyda Scripts names itself in docProps/app.xml)
-        let foreign = lower.ends_with(".docx")
-            && !crate::zip::read(&data, "docProps/app.xml").map_or(false, |a| String::from_utf8_lossy(&a).contains("<Application>Hyda Scripts</Application>"));
         self.park(sys);
         self.reset(doc);
         self.path = path.to_string();
-        self.foreign = foreign;
+        self.imported = !lower.ends_with(".hyds");
     }
 
     fn reset(&mut self, doc: Doc) {
@@ -707,20 +717,27 @@ impl Scripts {
         self.redo.clear();
         self.scroll = 0;
         self.ver += 1;
-        self.foreign = false;
+        self.imported = false;
     }
 
+    /// Hyda Scripts documents first, then files it can import.
     fn documents(sys: &Sys) -> Vec<String> {
-        let mut out = Vec::new();
+        let (mut own, mut other) = (Vec::new(), Vec::new());
         for dir in ["/home/Documents", "/home", "/home/Downloads", "/home/Shared"] {
             for (name, d, _) in sys.fs.list(dir) {
                 let l = name.to_ascii_lowercase();
-                if !d && (l.ends_with(".docx") || l.ends_with(".txt") || l.ends_with(".md")) {
-                    out.push(join(dir, &name));
+                if d {
+                    continue;
+                }
+                if l.ends_with(".hyds") {
+                    own.push(join(dir, &name));
+                } else if l.ends_with(".docx") || l.ends_with(".txt") || l.ends_with(".md") {
+                    other.push(join(dir, &name));
                 }
             }
         }
-        out
+        own.extend(other);
+        own
     }
 
     fn rename_to(&mut self, name: &str, sys: &mut Sys) {
@@ -729,8 +746,15 @@ impl Scripts {
         if name.is_empty() {
             return;
         }
-        let ext = if self.path.is_empty() { String::from(".docx") } else { self.ext().to_string() };
+        // renaming names the .hyds document; an imported original keeps its name
+        let ext = String::from(".hyds");
         let dir = if self.path.is_empty() { String::from("/home/Documents") } else { parent(&self.path) };
+        if self.imported {
+            self.path = sys.fs.unique(&dir, name, &ext);
+            self.imported = false;
+            self.save(sys, false);
+            return;
+        }
         let target = join(&dir, &format!("{}{}", name, ext));
         if target == self.path {
             return;
@@ -1100,12 +1124,16 @@ impl App for Scripts {
         let page = if self.lines.is_empty() { 1 } else { self.lines[self.line_of(self.cur)].page + 1 };
         let left = format!("Page {} of {}  ·  {} words", page, self.pages, self.doc.words());
         ui.text(r.x + 16, sy + 19, Face::Regular, 12, &left, t.text2);
-        let kind = match self.ext().to_ascii_lowercase().as_str() {
-            ".md" => "Markdown",
-            ".txt" => "Plain text",
-            _ => "Word document",
+        let right = if self.imported {
+            let kind = match self.ext().to_ascii_lowercase().as_str() {
+                ".md" => "Markdown",
+                ".txt" => "text",
+                _ => "Word",
+            };
+            format!("Viewing a {} file  ·  saving creates a .hyds copy", kind)
+        } else {
+            format!("Hyda Scripts document  ·  {}", if self.dirty { "Edited" } else if self.path.is_empty() { "Not saved yet" } else { "Saved" })
         };
-        let right = format!("{}  ·  {}", kind, if self.dirty { "Edited" } else if self.path.is_empty() { "Not saved yet" } else { "Saved" });
         let rw = ui.tw(Face::Regular, 12, &right);
         if !compact {
             ui.text(r.r() - rw - 16, sy + 19, Face::Regular, 12, &right, t.text3);
@@ -1168,14 +1196,7 @@ impl App for Scripts {
             }
             C_OPEN => self.overlay = Overlay::Open(Self::documents(sys)),
             C_SAVE => self.save(sys, false),
-            C_SAVE_DOCX => {
-                if self.ext().to_ascii_lowercase() != ".docx" {
-                    let dir = if self.path.is_empty() { String::from("/home/Documents") } else { parent(&self.path) };
-                    let name = if self.path.is_empty() { self.suggested_name() } else { self.title() };
-                    self.path = sys.fs.unique(&dir, &name, ".docx");
-                }
-                self.save(sys, false);
-            }
+            C_EXPORT_DOCX => self.export(sys, ".docx"),
             C_EXPORT_TXT => self.export(sys, ".txt"),
             C_EXPORT_MD => self.export(sys, ".md"),
             C_RENAME => {
@@ -1352,7 +1373,7 @@ impl App for Scripts {
                 ("New Document", C_NEW),
                 ("Open…", C_OPEN),
                 ("Save", C_SAVE),
-                ("Save as Word (.docx)", C_SAVE_DOCX),
+                ("Export as Word (.docx)", C_EXPORT_DOCX),
                 ("Export as Text (.txt)", C_EXPORT_TXT),
                 ("Export as Markdown (.md)", C_EXPORT_MD),
                 ("Rename…", C_RENAME),

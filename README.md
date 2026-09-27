@@ -8,9 +8,9 @@ PS/2 mouse driver, TCP/IP network stack, cryptography and every app are
 HydatekOS code: Rust, `no_std`, zero third-party crates. It isn't a skin on
 Windows, macOS or Linux.
 
-| Hyda Scripts (Hyda Workspace) | Its .docx in LibreOffice |
-|---|---|
-| ![Hyda Scripts](docs/screenshots/hyda-scripts.png) | ![In LibreOffice](docs/screenshots/hyda-scripts-in-libreoffice.png) |
+| Hyda Scripts (Hyda Workspace) |
+|---|
+| ![Hyda Scripts](docs/screenshots/hyda-scripts.png) |
 
 | Desktop | Phone Link with a phone | Mobile shell |
 |---|---|---|
@@ -55,10 +55,12 @@ Windows, macOS or Linux.
   the call log and placing calls. Everything is end-to-end encrypted
   (ChaCha20-Poly1305). A demo phone with a live screen mirror lets you try it
   without a device. Details: [docs/PHONE_LINK.md](docs/PHONE_LINK.md).
-- **Hyda Workspace, the office suite:** **Hyda Scripts** is its word processor. It
-  lays out A4 pages and has paragraph styles, bold/italic/underline/strikethrough,
-  alignment, lists, undo and copy/paste. It saves **real Word (.docx) files** that
-  open in Microsoft Word, LibreOffice and Google Docs, and reads Word files back.
+- **Hyda Workspace, the office suite:** **Hyda Scripts** is its word processor,
+  written from scratch. It lays out A4 pages and has paragraph styles,
+  bold/italic/underline/strikethrough, alignment, lists, undo and copy/paste.
+  Documents are saved in its own **`.hyds`** format. Word, text and Markdown files
+  open for viewing and editing (saving makes a `.hyds`), and File › Export makes
+  `.docx`, `.txt` or `.md` copies for sharing.
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
 - **Apps:** Files, Notes, Hyda Scripts, Settings, Calendar, Terminal (`hsh`), Phone Link,
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
@@ -147,7 +149,7 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/net/         network stack: firmware NIC, ARP/IPv4/DHCP/TCP/mDNS
   src/crypto.rs    SHA-256, HKDF, ChaCha20-Poly1305; rng.rs; qr.rs
   src/hlp.rs       Hydatek Link Protocol; linksrv.rs its HTTP/WebSocket server
-  src/doc.rs       Hyda Scripts documents: editing, Word/.txt/.md; zip.rs zip + inflate
+  src/doc.rs       Hyda Scripts documents: editing, .hyds, .docx/.txt/.md; zip.rs zip + inflate
 companion/web/     browser companion for phones (served by HydatekOS)
 companion/android/ HydatekOS Link for Android (built without the Android SDK)
 tests-host/        host-side tests of kernel modules

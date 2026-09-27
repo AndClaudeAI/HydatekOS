@@ -153,3 +153,41 @@ fn reads_word_template_docx() {
     let f = &d.paras[2].fmt;
     assert_eq!((f[0], f[7], f[18]), (0, BOLD, ITALIC));
 }
+
+#[test]
+fn hyds_round_trip() {
+    let mut d = sample();
+    // awkward text: backslashes, tabs, leading spaces, the Naira sign
+    d.paras.push(Para::plain("  C:\\path\\to\tfile ₦ \\t literal", Style::Body));
+    let s = d.to_hyds();
+    assert!(s.starts_with("HYDS 1\napp Hyda Scripts\nparas 12\np title left\nt Quarterly report\n"), "{}", s);
+    assert!(s.contains("\nf 0:5:b 6:1:iu 10:1:s\n"), "{}", s);
+    assert_eq!(Doc::from_hyds(s.as_bytes()), Ok(d.clone()));
+    // an empty document
+    assert_eq!(Doc::from_hyds(Doc::new().to_hyds().as_bytes()), Ok(Doc::new()));
+}
+
+#[test]
+fn hyds_rejects_bad_files() {
+    let good = sample().to_hyds();
+    assert_eq!(Doc::from_hyds(b"PK\x03\x04 a zip"), Err("not a Hyda Scripts document"));
+    assert_eq!(Doc::from_hyds(good.replace("HYDS 1", "HYDS 2").as_bytes()), Err("made by a newer Hyda Scripts"));
+    // truncated: no end line
+    let cut = &good[..good.len() / 2];
+    assert_eq!(Doc::from_hyds(cut.as_bytes()), Err("the file is incomplete"));
+    // one changed character fails the checksum
+    let bad = good.replacen("Quarterly", "Quarterlx", 1);
+    assert_eq!(Doc::from_hyds(bad.as_bytes()), Err("the file is damaged"));
+}
+
+#[test]
+fn hyds_skips_unknown_records() {
+    // a later version may add records; this reader ignores them
+    let mut body = String::from("HYDS 1\napp Future\nparas 1\np h1 center\ncolor 336699\nt Hi\nf 0:2:b\n");
+    let crc = zip::crc32(body.as_bytes());
+    body.push_str(&format!("end {:08x}\n", crc));
+    let d = Doc::from_hyds(body.as_bytes()).unwrap();
+    assert_eq!(d.paras.len(), 1);
+    assert_eq!((d.paras[0].style, d.paras[0].align, d.paras[0].string()), (Style::H1, Align::Center, "Hi".to_string()));
+    assert_eq!(d.paras[0].fmt, vec![BOLD, BOLD]);
+}

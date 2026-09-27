@@ -421,7 +421,7 @@ impl Shell {
         } else if p.ends_with(".img") {
             self.toast("Files", "Image preview arrives with the image codecs in milestone 2");
             return;
-        } else if p.to_ascii_lowercase().ends_with(".docx") {
+        } else if [".hyds", ".docx"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Scripts
         } else {
             AppKind::Notes

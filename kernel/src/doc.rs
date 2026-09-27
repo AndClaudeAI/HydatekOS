@@ -290,6 +290,168 @@ impl Doc {
         (Pos::new(pos.p, s), Pos::new(pos.p, e))
     }
 
+    // ---- Hyda Scripts document (.hyds) ------------------------------------------
+    //
+    // The native format: UTF-8 text, one record per line.
+    //
+    //   HYDS 1                      magic and format version
+    //   app Hyda Scripts            written by (informational)
+    //   paras 3                     paragraph count
+    //   p title left                paragraph: style, alignment
+    //   t Hello \\ world\t!          its text (\\ = backslash, \t = tab)
+    //   f 0:5:b 6:5:iu              formatting runs start:length:flags (b i u s)
+    //   ...
+    //   end 1a2b3c4d                CRC-32 (hex) of every byte before this line
+    //
+    // Readers skip record types they don't know, so later versions can add some.
+
+    pub fn to_hyds(&self) -> String {
+        let mut out = String::from("HYDS 1\napp Hyda Scripts\n");
+        out.push_str(&format!("paras {}\n", self.paras.len()));
+        for p in &self.paras {
+            let style = match p.style {
+                Style::Body => "body",
+                Style::Title => "title",
+                Style::H1 => "h1",
+                Style::H2 => "h2",
+                Style::Quote => "quote",
+                Style::Bullet => "bullet",
+                Style::Number => "number",
+            };
+            let align = match p.align {
+                Align::Left => "left",
+                Align::Center => "center",
+                Align::Right => "right",
+            };
+            out.push_str(&format!("p {} {}\nt ", style, align));
+            for &c in &p.text {
+                match c {
+                    '\\' => out.push_str("\\\\"),
+                    '\t' => out.push_str("\\t"),
+                    // keeps character positions (and so the "f" runs) aligned
+                    c if c.is_control() => out.push(' '),
+                    c => out.push(c),
+                }
+            }
+            out.push('\n');
+            let mut runs = Vec::new();
+            let mut i = 0;
+            while i < p.len() {
+                let f = p.fmt[i] & (BOLD | ITALIC | UNDERLINE | STRIKE);
+                let mut j = i;
+                while j < p.len() && p.fmt[j] & (BOLD | ITALIC | UNDERLINE | STRIKE) == f {
+                    j += 1;
+                }
+                if f != 0 {
+                    let mut fl = String::new();
+                    for (bit, ch) in [(BOLD, 'b'), (ITALIC, 'i'), (UNDERLINE, 'u'), (STRIKE, 's')] {
+                        if f & bit != 0 {
+                            fl.push(ch);
+                        }
+                    }
+                    runs.push(format!("{}:{}:{}", i, j - i, fl));
+                }
+                i = j;
+            }
+            if !runs.is_empty() {
+                out.push_str(&format!("f {}\n", runs.join(" ")));
+            }
+        }
+        let crc = crate::zip::crc32(out.as_bytes());
+        out.push_str(&format!("end {:08x}\n", crc));
+        out
+    }
+
+    pub fn from_hyds(data: &[u8]) -> Result<Doc, &'static str> {
+        let s = core::str::from_utf8(data).map_err(|_| "not a Hyda Scripts document")?;
+        let rest = s.strip_prefix("HYDS ").ok_or("not a Hyda Scripts document")?;
+        let ver: u32 = rest.split('\n').next().unwrap_or("").trim().parse().map_err(|_| "not a Hyda Scripts document")?;
+        if ver != 1 {
+            return Err("made by a newer Hyda Scripts");
+        }
+        // checksum over everything before the "end" line
+        let end_at = s.rfind("\nend ").ok_or("the file is incomplete")? + 1;
+        let want = u32::from_str_radix(s[end_at + 4..].trim(), 16).map_err(|_| "the file is damaged")?;
+        if crate::zip::crc32(&data[..end_at]) != want {
+            return Err("the file is damaged");
+        }
+        let mut paras: Vec<Para> = Vec::new();
+        let mut count = None;
+        for line in s[..end_at].lines().skip(1) {
+            let (tag, val) = line.split_once(' ').unwrap_or((line, ""));
+            match tag {
+                "paras" => count = val.parse::<usize>().ok(),
+                "p" => {
+                    let mut it = val.split(' ');
+                    let style = match it.next().unwrap_or("") {
+                        "title" => Style::Title,
+                        "h1" => Style::H1,
+                        "h2" => Style::H2,
+                        "quote" => Style::Quote,
+                        "bullet" => Style::Bullet,
+                        "number" => Style::Number,
+                        _ => Style::Body,
+                    };
+                    let align = match it.next().unwrap_or("") {
+                        "center" => Align::Center,
+                        "right" => Align::Right,
+                        _ => Align::Left,
+                    };
+                    let mut p = Para::new(style);
+                    p.align = align;
+                    paras.push(p);
+                }
+                "t" => {
+                    let p = paras.last_mut().ok_or("the file is damaged")?;
+                    let mut cs = val.chars();
+                    while let Some(c) = cs.next() {
+                        let c = if c == '\\' {
+                            match cs.next() {
+                                Some('t') => '\t',
+                                Some(o) => o,
+                                None => break,
+                            }
+                        } else {
+                            c
+                        };
+                        p.text.push(c);
+                        p.fmt.push(0);
+                    }
+                }
+                "f" => {
+                    let p = paras.last_mut().ok_or("the file is damaged")?;
+                    for run in val.split(' ').filter(|r| !r.is_empty()) {
+                        let mut it = run.split(':');
+                        let (Some(a), Some(n), Some(fl)) = (it.next(), it.next(), it.next()) else { continue };
+                        let (Ok(a), Ok(n)) = (a.parse::<usize>(), n.parse::<usize>()) else { continue };
+                        let mut f = 0u8;
+                        for ch in fl.chars() {
+                            f |= match ch {
+                                'b' => BOLD,
+                                'i' => ITALIC,
+                                'u' => UNDERLINE,
+                                's' => STRIKE,
+                                _ => 0,
+                            };
+                        }
+                        let e = a.saturating_add(n).min(p.len());
+                        for x in p.fmt[a.min(e)..e].iter_mut() {
+                            *x = f;
+                        }
+                    }
+                }
+                _ => {} // app, or a record from a later version
+            }
+        }
+        if count.map_or(false, |c| c != paras.len()) {
+            return Err("the file is damaged");
+        }
+        if paras.is_empty() {
+            paras.push(Para::new(Style::Body));
+        }
+        Ok(Doc { paras })
+    }
+
     // ---- plain text and Markdown ---------------------------------------------
 
     pub fn from_text(s: &str) -> Doc {

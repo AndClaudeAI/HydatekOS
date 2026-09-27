@@ -72,15 +72,17 @@ impl Vfs {
 
     fn seed(&mut self) {
         const SCRIPTS_WELCOME: &str = "# Welcome to Hyda Scripts\n\
-The **word processor** of *Hyda Workspace*. Documents are saved as Word files (.docx), so they open in Microsoft Word, LibreOffice and Google Docs.\n\
+The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. Documents are saved in its own format, **.hyds**.\n\
 ## Try it\n\
 - Pick a paragraph style from the menu at the left of the toolbar\n\
 - Select text and press **B**, *I*, U or ~~S~~ (or Ctrl+B, Ctrl+I, Ctrl+U)\n\
 - Centre or right-align paragraphs, and make bulleted or numbered lists\n\
+## Sharing\n\
+1. File › Export makes a Word (.docx), text or Markdown copy to send to others\n\
+2. Word, text and Markdown files open here too; saving one creates a .hyds copy and leaves the original as it was\n\
 ## Keyboard\n\
-1. Ctrl+S saves, Ctrl+O opens, Ctrl+N starts a new document\n\
-2. Ctrl+Z undoes and Ctrl+Y redoes\n\
-3. Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste\n\
+- Ctrl+S saves, Ctrl+O opens, Ctrl+N starts a new document\n\
+- Ctrl+Z undoes and Ctrl+Y redoes; Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste\n\
 > Tip: click the document name at the top to rename it.\n";
         if self.get("/home").is_some() {
             return;
@@ -96,8 +98,8 @@ The **word processor** of *Hyda Workspace*. Documents are saved as Word files (.
             self.mkdir(&join("/home/Documents", d));
         }
         self.write("/home/Documents/Strategy.doc", strategy);
-        let scripts = crate::doc::Doc::from_markdown(SCRIPTS_WELCOME).to_docx();
-        self.write("/home/Documents/Welcome to Hyda Scripts.docx", &scripts);
+        let scripts = crate::doc::Doc::from_markdown(SCRIPTS_WELCOME).to_hyds();
+        self.write("/home/Documents/Welcome to Hyda Scripts.hyds", scripts.as_bytes());
         self.write("/home/Documents/Budget.sheet", budget);
         self.write("/home/Documents/Meeting notes.txt", meeting);
         self.write("/home/Documents/Logo draft.img", b"HYDATEK-IMAGE");

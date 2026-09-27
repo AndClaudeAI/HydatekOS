@@ -1,16 +1,17 @@
 # Hyda Workspace
 
 Hyda Workspace is HydatekOS's office suite. Its first app is **Hyda Scripts**,
-the word processor. Like the rest of HydatekOS, it's written from scratch: the
-document model, page layout, Word file reader and writer, zip and deflate code
-are all HydatekOS code.
+the word processor. Like the rest of HydatekOS, it's written from scratch and
+built on no other word processor: the document model, its own file format
+(`.hyds`), page layout, and the importers and exporters for other formats are
+all HydatekOS code, with no third-party libraries.
 
 ![Hyda Scripts](screenshots/hyda-scripts.png)
 
 ## Hyda Scripts
 
 Open it from the dock, the app launcher (**F1**, type "scripts"), or by
-double-clicking a `.docx` file in Files. On a phone-shaped screen it opens full
+double-clicking a `.hyds` (or `.docx`) file in Files. On a phone-shaped screen it opens full
 screen from Files, with the page fitted to the width.
 
 ### What it does
@@ -26,8 +27,8 @@ screen from Files, with the page fitted to the width.
   double-click to select a word, undo and redo (100 steps), cut, copy and paste
   (formatting survives copy and paste inside Hyda Scripts).
 - **Zoom:** 50–200%, or fit to the window (click the percentage).
-- **Files:** Word (`.docx`) by default; it also opens and saves plain text (`.txt`)
-  and Markdown (`.md`), and exports either from a Word document.
+- **Files:** documents are saved as **`.hyds`**, Hyda Scripts' own format. Word,
+  text and Markdown files can be opened and exported to (see below).
 
 ### Keyboard
 
@@ -44,30 +45,54 @@ screen from Files, with the page fitted to the width.
 | Shift+arrows, Ctrl+arrows | Select; jump by word |
 | Enter on an empty list item | End the list |
 
-### Saving
+### Saving, importing and exporting
 
-- **Ctrl+S** saves. A new document is named after its first line and saved in
-  Documents; click the name at the top to rename it.
-- Closing the window saves your changes.
-- **Opening someone else's Word file:** the first save goes to a copy,
-  "*name* (edited).docx", and the original stays untouched. That's because Hyda
-  Scripts doesn't show everything Word can store yet (see below), and saving over
-  the original would lose it.
+| | Format | What Hyda Scripts does |
+|---|---|---|
+| **Save** | `.hyds` | The only format it saves to your storage. **Ctrl+S** saves; a new document is named after its first line and goes in Documents. Click the name at the top to rename it. Closing the window saves your changes. |
+| **Import** | `.docx`, `.txt`, `.md` | Opens the file so you can read and edit it. The status bar says "Viewing a Word file". Saving writes a **new `.hyds` next to it** (e.g. `Budget.docx` → `Budget.hyds`); the original is never changed. |
+| **Export** | `.docx`, `.txt`, `.md` | File › Export writes a copy for sharing, next to the document. It never replaces an existing file; the document you're editing stays `.hyds`. |
 
-### Word compatibility
+Exported Word files are standard Office Open XML, so the people you send them to
+can open them in Word or any other word processor.
 
-Documents are real Office Open XML (`.docx`) files: they open in Microsoft Word,
-LibreOffice and Google Docs with their styles, lists, alignment and formatting.
+When importing Word files, Hyda Scripts reads paragraphs, headings (by style
+name, in any language), lists, alignment, bold, italic, underline, strikethrough
+and tabs. **It doesn't bring in yet:** images, tables (their text appears as
+paragraphs), fonts, font sizes and colours, headers and footers, footnotes,
+comments, tracked changes and page setup. Because the original file is never
+overwritten, none of that is lost.
 
-![A Hyda Scripts document in LibreOffice](screenshots/hyda-scripts-in-libreoffice.png)
+## The .hyds format
 
-*A document written in Hyda Scripts, as LibreOffice Writer renders it.*
+A `.hyds` file is UTF-8 text with one record per line. It's designed for
+HydatekOS: easy to read, easy to recover, and checked for damage.
 
-When opening Word files, Hyda Scripts reads paragraphs, headings (by style name,
-in any language), lists, alignment, bold, italic, underline, strikethrough and
-tabs. **It doesn't show yet:** images, tables (their text appears as paragraphs),
-fonts, font sizes and colours, headers and footers, footnotes, comments, tracked
-changes and page setup.
+```
+HYDS 1                          magic and format version
+app Hyda Scripts                the program that wrote it
+paras 3                         number of paragraphs
+p title left                    a paragraph: style, alignment
+t Budget 2026                   its text
+p body center
+t Total: ₦1,200,000 approved.
+f 7:10:b 17:10:i                formatting runs: start:length:flags
+p bullet left
+t Rent
+end 44f68f84                    CRC-32 of every byte before this line
+```
+
+- **Styles:** `body`, `title`, `h1`, `h2`, `quote`, `bullet`, `number`.
+  **Alignment:** `left`, `center`, `right`.
+- **Text (`t`):** the paragraph's characters; `\\` is a backslash and `\t` a tab.
+- **Formatting (`f`):** runs of characters, counted from 0, with flags `b` bold,
+  `i` italic, `u` underline, `s` strikethrough. Unformatted text has no run.
+- **Integrity:** `end` carries the CRC-32 (hex) of everything before it. A file
+  with a wrong checksum, a missing `end` line or a wrong paragraph count is
+  reported as damaged or incomplete instead of being opened half-read.
+- **Versions:** `HYDS 1` is this version. Readers ignore record types they don't
+  know, so later versions can add records (colours, images...) that older
+  readers skip. A file with a newer major version is refused with a clear message.
 
 ### Other limits
 
@@ -82,7 +107,7 @@ changes and page setup.
 
 | Part | Where |
 |---|---|
-| Document model, editing, `.docx`/`.txt`/`.md` conversion | `kernel/src/doc.rs` |
+| Document model, editing, the `.hyds` format, `.docx`/`.txt`/`.md` import and export | `kernel/src/doc.rs` |
 | Zip reading and writing, CRC-32, inflate (RFC 1951) | `kernel/src/zip.rs` |
 | The app: layout, pagination, rendering, input | `kernel/src/apps/scripts.rs` |
 | Italic faces (slanted at build time), ₦ and other symbols | `tools/fontgen.py` |
@@ -99,9 +124,13 @@ spaces, keeps headings with the line after them, and flows lines onto A4 pages.
 - inflate against zlib's output (stored, fixed-Huffman and dynamic-Huffman blocks)
 - zip round trip and CRC-32
 - editing: typing, Enter, deleting across paragraphs, formatting, cut and paste
+- `.hyds` round trip (including backslashes, tabs, leading spaces, ₦), and
+  rejecting other files, newer versions, truncated and corrupted files;
+  skipping unknown records
 - `.docx` round trip and Markdown round trip
-- reading a Hyda Scripts document **re-saved by LibreOffice Writer**
-- reading a document made on **Microsoft Word's default template** (via python-docx)
+- importing Word files written by other programs (a file re-saved by another
+  word processor, and one built on Word's default template)
 
-Also checked by hand: documents written in HydatekOS (in QEMU) open in LibreOffice
-Writer and python-docx with every style and format intact.
+Those sample files, and the other word processor used to check that exported
+`.docx` files open correctly, are test tools on the build machine only; nothing
+from them is part of HydatekOS.

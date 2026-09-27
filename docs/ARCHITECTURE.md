@@ -92,8 +92,10 @@ through `Sys`, and to the shell through requests like `Req::Open`, `Req::OpenPat
 
 Hyda Scripts, the Hyda Workspace word processor, keeps a document as paragraphs
 (style, alignment, characters, one formatting byte per character). `doc.rs` does the
-editing operations and converts to and from Word (`.docx`: Office Open XML written
-by hand, read with a small XML tokenizer), plain text and Markdown. `zip.rs` writes
+editing operations, reads and writes the native `.hyds` format (line-based UTF-8
+with a CRC-32 trailer), and imports and exports Word (`.docx`: Office Open XML
+written by hand, read with a small XML tokenizer), plain text and Markdown.
+Saving always writes `.hyds`; other formats are only ever read or exported. `zip.rs` writes
 stored zip archives and reads stored or deflated ones with its own inflate.
 `apps/scripts.rs` lays paragraphs out on A4 pages, draws them, and handles the caret,
 selection (the shell forwards pointer drags to apps via `App::drag`, and
