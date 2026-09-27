@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 pub mod browser;
 pub mod calendar;
 pub mod files;
+pub mod grids;
 pub mod mail;
 pub mod messages;
 pub mod music;
@@ -36,9 +37,10 @@ pub enum AppKind {
     Phone,
     Camera,
     Scripts,
+    Grids,
 }
 
-pub const DESKTOP_APPS: [AppKind; 11] = [
+pub const DESKTOP_APPS: [AppKind; 12] = [
     AppKind::Files,
     AppKind::Browser,
     AppKind::Messages,
@@ -46,6 +48,7 @@ pub const DESKTOP_APPS: [AppKind; 11] = [
     AppKind::Calendar,
     AppKind::Notes,
     AppKind::Scripts,
+    AppKind::Grids,
     AppKind::Music,
     AppKind::Settings,
     AppKind::Terminal,
@@ -68,6 +71,7 @@ impl AppKind {
             AppKind::Phone => "Phone",
             AppKind::Camera => "Camera",
             AppKind::Scripts => "Hyda Scripts",
+            AppKind::Grids => "Hyda Grids",
         }
     }
     pub fn icon(self) -> Icon {
@@ -85,6 +89,7 @@ impl AppKind {
             AppKind::Phone => Icon::Phone,
             AppKind::Camera => Icon::Camera,
             AppKind::Scripts => Icon::Scripts,
+            AppKind::Grids => Icon::Sheet,
         }
     }
     /// Accent-coloured icon (as on the mobile home screen)?
@@ -101,6 +106,7 @@ impl AppKind {
             AppKind::Calendar => (700, 460),
             AppKind::Music => (560, 400),
             AppKind::Scripts => (900, 600),
+            AppKind::Grids => (920, 600),
             _ => (660, 430),
         }
     }
@@ -156,6 +162,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
         AppKind::Phone => Box::new(phone::Phone::new()),
         AppKind::Camera => Box::new(phone::Camera),
         AppKind::Scripts => Box::new(scripts::Scripts::new()),
+        AppKind::Grids => Box::new(grids::Grids::new()),
     }
 }
 

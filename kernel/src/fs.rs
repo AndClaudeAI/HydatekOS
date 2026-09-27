@@ -89,7 +89,6 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         }
         let welcome = b"Welcome to HydatekOS!\n\nThis is Notes. Everything you type here is saved to your\ndisk when you press Ctrl+S or click Save.\n\nTips\n- Click the grid button in the dock to see every app.\n- Drag windows by their title bar. Double-click to maximise.\n- Open Phone Link to pair HydatekOS Mobile.\n";
         let strategy = b"Hydatek Strategy 2026\n\n1. Ship HydatekOS milestone 1 (desktop + mobile shells).\n2. Own the stack: kernel, drivers, UI toolkit, apps.\n3. Phone Link: messages, notifications and files across devices.\n";
-        let budget = b"Item, Q3, Q4\nHardware, 12000, 14000\nDesign, 6000, 6500\nCloud, 3000, 3200\n";
         let meeting = b"Meeting notes - 27 September\n\n- Review dock icons\n- Dark mode polish\n- Phone Link pairing flow\n";
         for d in ["/home", "/home/Documents", "/home/Pictures", "/home/Downloads", "/home/Shared", "/trash", "/system"] {
             self.mkdir(d);
@@ -100,7 +99,7 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         self.write("/home/Documents/Strategy.doc", strategy);
         let scripts = crate::doc::Doc::from_markdown(SCRIPTS_WELCOME).to_hyds();
         self.write("/home/Documents/Welcome to Hyda Scripts.hyds", scripts.as_bytes());
-        self.write("/home/Documents/Budget.sheet", budget);
+        self.write("/home/Documents/Budget.hydg", crate::gridio::to_hydg(&sample_budget()).as_bytes());
         self.write("/home/Documents/Meeting notes.txt", meeting);
         self.write("/home/Documents/Logo draft.img", b"HYDATEK-IMAGE");
         self.write("/home/Welcome.txt", welcome);
@@ -382,4 +381,40 @@ fn load_dir(vol: *mut File, npath: &str, name: &str, depth: u32) -> Node {
         }
     }
     n
+}
+
+/// The starter sheet for Hyda Grids.
+fn sample_budget() -> crate::grid::Sheet {
+    use crate::grid::{Fmt, HAlign, Num, Sheet};
+    let mut s = Sheet::new();
+    s.name = String::from("Budget");
+    let rows: [[&str; 4]; 7] = [
+        ["Item", "Q3", "Q4", "Total"],
+        ["Hardware", "12000", "14000", "=B2+C2"],
+        ["Design", "6000", "6500", "=B3+C3"],
+        ["Cloud", "3000", "3200", "=B4+C4"],
+        ["Marketing", "4500", "5200", "=B5+C5"],
+        ["Total", "=SUM(B2:B5)", "=SUM(C2:C5)", "=SUM(D2:D5)"],
+        ["Growth", "", "=C6/B6-1", ""],
+    ];
+    for (r, row) in rows.iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            s.set_input(r as u32, c as u32, v);
+        }
+    }
+    let money = Fmt { num: Num::Currency, sym: '\u{20a6}', ..Fmt::default() };
+    for r in 1..6 {
+        for c in 1..4 {
+            s.set_fmt(r, c, Fmt { bold: r == 5, ..money });
+        }
+    }
+    for c in 0..4 {
+        s.set_fmt(0, c, Fmt { bold: true, align: if c == 0 { HAlign::Auto } else { HAlign::Right }, ..Fmt::default() });
+    }
+    s.set_fmt(5, 0, Fmt { bold: true, ..Fmt::default() });
+    s.set_fmt(6, 0, Fmt { italic: true, ..Fmt::default() });
+    s.set_fmt(6, 2, Fmt { num: Num::Percent, italic: true, ..Fmt::default() });
+    s.widths.insert(0, 140);
+    s.widths.insert(3, 120);
+    s
 }

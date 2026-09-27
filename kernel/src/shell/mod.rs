@@ -34,7 +34,7 @@ pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
 }
 const LOCAL_INST: u32 = 1_000_000;
 const PHONE_INST: u32 = 1_000_001;
-const DOCK_APPS: [AppKind; 9] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Music, AppKind::Settings];
+const DOCK_APPS: [AppKind; 10] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Grids, AppKind::Music, AppKind::Settings];
 const MENUS: [&str; 4] = ["File", "Edit", "View", "Go"];
 /// The linked phone renders at its native size and is scaled into Phone Link.
 const PHONE_W: i32 = 390;
@@ -421,6 +421,8 @@ impl Shell {
         } else if p.ends_with(".img") {
             self.toast("Files", "Image preview arrives with the image codecs in milestone 2");
             return;
+        } else if [".hydg", ".xlsx", ".csv"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
+            AppKind::Grids
         } else if [".hyds", ".docx"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Scripts
         } else {

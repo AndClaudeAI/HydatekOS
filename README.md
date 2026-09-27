@@ -8,9 +8,9 @@ PS/2 mouse driver, TCP/IP network stack, cryptography and every app are
 HydatekOS code: Rust, `no_std`, zero third-party crates. It isn't a skin on
 Windows, macOS or Linux.
 
-| Hyda Scripts (Hyda Workspace) |
-|---|
-| ![Hyda Scripts](docs/screenshots/hyda-scripts.png) |
+| Hyda Scripts (Hyda Workspace) | Hyda Grids (Hyda Workspace) |
+|---|---|
+| ![Hyda Scripts](docs/screenshots/hyda-scripts.png) | ![Hyda Grids](docs/screenshots/hyda-grids.png) |
 
 | Desktop | Phone Link with a phone | Mobile shell |
 |---|---|---|
@@ -60,9 +60,12 @@ Windows, macOS or Linux.
   bold/italic/underline/strikethrough, alignment, lists, undo and copy/paste.
   Documents are saved in its own **`.hyds`** format. Word, text and Markdown files
   open for viewing and editing (saving makes a `.hyds`), and File › Export makes
-  `.docx`, `.txt` or `.md` copies for sharing.
+  `.docx`, `.txt` or `.md` copies for sharing. **Hyda Grids** is its spreadsheet:
+  formulas with 25 functions, ₦ currency and other number formats, copy/paste that
+  moves references, AutoSum and resizable columns. Sheets are saved as **`.hydg`**;
+  Excel (`.xlsx`) and CSV files open for viewing and editing and are export formats.
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
-- **Apps:** Files, Notes, Hyda Scripts, Settings, Calendar, Terminal (`hsh`), Phone Link,
+- **Apps:** Files, Notes, Hyda Scripts, Hyda Grids, Settings, Calendar, Terminal (`hsh`), Phone Link,
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
@@ -150,6 +153,7 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/crypto.rs    SHA-256, HKDF, ChaCha20-Poly1305; rng.rs; qr.rs
   src/hlp.rs       Hydatek Link Protocol; linksrv.rs its HTTP/WebSocket server
   src/doc.rs       Hyda Scripts documents: editing, .hyds, .docx/.txt/.md; zip.rs zip + inflate
+  src/grid.rs      Hyda Grids formulas and formats; gridio.rs .hydg, .xlsx, .csv
 companion/web/     browser companion for phones (served by HydatekOS)
 companion/android/ HydatekOS Link for Android (built without the Android SDK)
 tests-host/        host-side tests of kernel modules

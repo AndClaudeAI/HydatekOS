@@ -16,6 +16,8 @@ mod efi;
 mod font;
 mod fs;
 mod gfx;
+mod grid;
+mod gridio;
 mod heap;
 mod hlp;
 mod icons;

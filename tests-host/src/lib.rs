@@ -10,9 +10,15 @@ pub mod hlp;
 pub mod zip;
 #[path = "../../kernel/src/doc.rs"]
 pub mod doc;
+#[path = "../../kernel/src/grid.rs"]
+pub mod grid;
+#[path = "../../kernel/src/gridio.rs"]
+pub mod gridio;
 
 #[cfg(test)]
 mod doc_tests;
+#[cfg(test)]
+mod grid_tests;
 
 #[cfg(test)]
 mod tests {

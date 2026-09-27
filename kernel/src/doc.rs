@@ -862,20 +862,20 @@ fn style_names(xml: &str) -> BTreeMap<String, String> {
 
 // ---- a very small XML tokenizer ----------------------------------------------------
 
-enum Tok<'a> {
+pub(crate) enum Tok<'a> {
     /// name, raw attribute text, self-closing
     Open(&'a str, &'a str, bool),
     Close(&'a str),
     Text(&'a str),
 }
 
-struct Tokens<'a> {
+pub(crate) struct Tokens<'a> {
     s: &'a str,
     i: usize,
 }
 
 impl<'a> Tokens<'a> {
-    fn new(s: &'a str) -> Tokens<'a> {
+    pub(crate) fn new(s: &'a str) -> Tokens<'a> {
         Tokens { s, i: 0 }
     }
 }
@@ -917,7 +917,7 @@ impl<'a> Iterator for Tokens<'a> {
     }
 }
 
-fn attr<'a>(attrs: &'a str, name: &str) -> &'a str {
+pub(crate) fn attr<'a>(attrs: &'a str, name: &str) -> &'a str {
     let mut rest = attrs;
     while let Some(k) = rest.find(name) {
         let before_ok = k == 0 || rest.as_bytes()[k - 1].is_ascii_whitespace();
@@ -935,7 +935,7 @@ fn attr<'a>(attrs: &'a str, name: &str) -> &'a str {
     ""
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -943,6 +943,7 @@ fn esc(s: &str) -> String {
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
+            '\t' | '\n' | '\r' => o.push(c),
             c if (c as u32) < 0x20 => {}
             c => o.push(c),
         }
@@ -950,7 +951,7 @@ fn esc(s: &str) -> String {
     o
 }
 
-fn unesc(s: &str) -> String {
+pub(crate) fn unesc(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }

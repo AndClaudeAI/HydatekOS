@@ -1,7 +1,7 @@
 # Hyda Workspace
 
-Hyda Workspace is HydatekOS's office suite. Its first app is **Hyda Scripts**,
-the word processor. Like the rest of HydatekOS, it's written from scratch and
+Hyda Workspace is HydatekOS's office suite: **Hyda Scripts**, the word
+processor, and **Hyda Grids**, the spreadsheet. Like the rest of HydatekOS, it's written from scratch and
 built on no other word processor: the document model, its own file format
 (`.hyds`), page layout, and the importers and exporters for other formats are
 all HydatekOS code, with no third-party libraries.
@@ -103,6 +103,102 @@ end 44f68f84                    CRC-32 of every byte before this line
 - **Phone Link paste:** text copied on a paired phone isn't pasted into Hyda
   Scripts yet.
 
+## Hyda Grids
+
+![Hyda Grids](screenshots/hyda-grids.png)
+
+Hyda Grids is the spreadsheet. Open it from the dock, the app launcher (**F1**,
+type "grids"), or by double-clicking a `.hydg` (or `.xlsx` / `.csv`) file in Files.
+A starter sheet, *Budget*, is in Documents.
+
+### What it does
+
+- **A grid of 1,000 rows by 100 columns** (A to CV) with frozen row and column
+  headers. The active cell and its row and column headers are highlighted.
+- **Formulas** start with `=`: `=SUM(B2:B5)`, `=D2*7.5%`, `=IF(C4>100,"over","ok")`,
+  `=A1&" "&B1`. Operators: `+ - * / ^ %`, `&` (join text), `= <> < > <= >=`.
+  Absolute references use `$` (`$B$2`).
+- **Functions:** SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, PRODUCT, ROUND, INT, ABS,
+  SQRT, POWER, MOD, IF, IFERROR, AND, OR, NOT, CONCAT, LEN, UPPER, LOWER, TRIM,
+  SUMIF and COUNTIF.
+- **Errors** show in the cell: `#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`,
+  and `#CIRC!` for a formula that depends on itself.
+- **Number formats:** General, Number (1,234.50), Currency (₦1,234.50) and
+  Percent. Typing `₦5,000`, `12%` or `1,250.5` picks the format for you; start
+  with `'` to keep something as text (`'007`).
+- **Formatting:** bold, italic, left / centre / right alignment. Numbers align
+  right by themselves; long text runs on into empty cells to the right.
+- **Editing:** type to replace a cell, **F2** or double-click to edit it, or edit
+  in the formula bar. While typing a formula, clicking a cell inserts its
+  reference.
+- **Selecting:** click, drag, Shift+click, Shift+arrows, or click a row or column
+  header. The status bar shows the **sum, average and count** of the selection.
+- **Copy and paste** move formulas' relative references (`=D2*0.075` copied one
+  row down becomes `=D3*0.075`). Text copied from elsewhere pastes into cells,
+  split by tabs and lines.
+- **AutoSum (Σ):** adds up the numbers above (or to the left of) the cell, in
+  their number format; with a range selected, it totals each column underneath.
+- **Columns:** drag a column header's edge to resize it; double-click the edge to
+  reset it.
+- **Undo and redo** (100 steps).
+
+### Keyboard
+
+| Keys | Action |
+|---|---|
+| Arrows, Tab, Enter (Shift for the other way) | Move |
+| Shift+arrows | Select |
+| F2 / Esc | Edit the cell / cancel editing |
+| Delete / Backspace | Clear / clear and edit |
+| Ctrl+B / Ctrl+I | Bold / italic |
+| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+A | Select everything |
+| Ctrl+Home / Ctrl+End | First cell / last used cell |
+| Ctrl+S / Ctrl+O / Ctrl+N | Save / open / new |
+
+### Saving, importing and exporting
+
+| | Format | What Hyda Grids does |
+|---|---|---|
+| **Save** | `.hydg` | The only format it saves to your storage. A new sheet goes to Documents; click the name at the top to rename it. Closing the window saves your changes. |
+| **Import** | `.xlsx`, `.csv` | Opens the file to read and edit ("Viewing an Excel file"). Saving writes a **new `.hydg` next to it**; the original is never changed. |
+| **Export** | `.xlsx`, `.csv` | File › Export writes a copy for sharing: an Excel workbook with formulas, their results, formats and column widths, or a CSV of the values. |
+
+When importing Excel files, Hyda Grids reads the first sheet's values, formulas
+(including shared formulas), bold and italic, alignment, currency / percent /
+number formats and column widths. Dates are shown as text (`2026-09-27`).
+
+### The .hydg format
+
+Line-based UTF-8 text, like `.hyds`:
+
+```
+HYDG 1                          magic and format version
+app Hyda Grids                  the program that wrote it
+sheet Budget                    sheet name
+w 0 140                         column A is 140 px wide
+c A1 b Item                     cell: reference, format, input
+c B2 n=cur,sym=₦ 12000
+c D2 n=cur,sym=₦ =B2+C2
+c C7 i,n=pct =C6/B6-1
+end f80f9715                    CRC-32 of every byte before this line
+```
+
+- **Format** is `-` or a comma list of `b` (bold), `i` (italic), `al=l|c|r`,
+  `n=num|cur|pct` and `sym=` (the currency symbol).
+- **Input** is exactly what was typed (a value, or a formula starting with `=`);
+  `\\`, `\t` and `\n` escape a backslash, tab and newline.
+- Checksum, versions and unknown records work as in `.hyds`.
+
+### Limits
+
+- **One sheet per file.** Importing an Excel workbook reads its first sheet.
+- **Not yet:** inserting or deleting rows and columns, sorting and filtering,
+  charts, cell colours and borders, freezing panes, find and replace, dates and
+  times as values, and printing.
+- Excel functions Hyda Grids doesn't have show `#NAME?` (the formula is kept).
+
 ## How it's built
 
 | Part | Where |
@@ -110,7 +206,10 @@ end 44f68f84                    CRC-32 of every byte before this line
 | Document model, editing, the `.hyds` format, `.docx`/`.txt`/`.md` import and export | `kernel/src/doc.rs` |
 | Zip reading and writing, CRC-32, inflate (RFC 1951) | `kernel/src/zip.rs` |
 | The app: layout, pagination, rendering, input | `kernel/src/apps/scripts.rs` |
-| Italic faces (slanted at build time), ₦ and other symbols | `tools/fontgen.py` |
+| Hyda Grids: cells, formula parser and evaluator, number formats | `kernel/src/grid.rs` |
+| Hyda Grids files: `.hydg`, `.xlsx` import/export, CSV | `kernel/src/gridio.rs` |
+| The Hyda Grids app | `kernel/src/apps/grids.rs` |
+| Italic faces (slanted at build time), ₦, Σ and other symbols | `tools/fontgen.py` |
 
 A document is a list of paragraphs; each has a style, an alignment, its
 characters and a formatting byte per character (bold, italic, underline,
@@ -119,7 +218,11 @@ spaces, keeps headings with the line after them, and flows lines onto A4 pages.
 
 ### Tests
 
-`tools/test.sh` runs these on the host (`tests-host/src/doc_tests.rs`):
+`tools/test.sh` runs these on the host (`tests-host/src/doc_tests.rs` and
+`grid_tests.rs`). For Hyda Grids: references, operator precedence, every
+function, circular references, number formats and typed values, moving
+references, `.hydg` round trip and damage checks, CSV, `.xlsx` round trip, an
+Excel file written by another program, and shared formulas. For Hyda Scripts:
 
 - inflate against zlib's output (stored, fixed-Huffman and dynamic-Huffman blocks)
 - zip round trip and CRC-32

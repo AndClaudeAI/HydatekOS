@@ -61,7 +61,7 @@ pub fn display_name(name: &str) -> &str {
 pub fn file_icon(name: &str, dir: bool) -> Icon {
     if dir {
         Icon::Folder
-    } else if name.ends_with(".sheet") {
+    } else if [".sheet", ".hydg", ".xlsx", ".csv"].iter().any(|e| name.to_ascii_lowercase().ends_with(e)) {
         Icon::Sheet
     } else if name.ends_with(".img") {
         Icon::Image

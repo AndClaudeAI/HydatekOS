@@ -102,6 +102,16 @@ selection (the shell forwards pointer drags to apps via `App::drag`, and
 `input::shift()` reports Shift), undo, and the clipboard (`Sys::clipboard`). More in
 [HYDA_WORKSPACE.md](HYDA_WORKSPACE.md).
 
+## Spreadsheets (`grid.rs`, `gridio.rs`, `apps/grids.rs`)
+
+Hyda Grids keeps a sheet as a sparse map of cells (the typed input and a format).
+`grid.rs` tokenizes and parses formulas into an expression tree and evaluates them
+with a per-frame cache and a guard against circular references. The UEFI target has
+no floating-point library, so rounding, square roots, logarithms and powers are
+implemented there too. `gridio.rs` reads and writes `.hydg` (line-based UTF-8 with a
+CRC-32 trailer) and imports and exports `.xlsx` (SpreadsheetML, sharing the zip and
+XML code with Hyda Scripts) and CSV.
+
 ## Storage (`fs.rs`)
 
 `Vfs` keeps the file tree in memory and writes every change through to `\HYDATEK\` on

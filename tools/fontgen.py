@@ -26,7 +26,7 @@ OUT = os.path.join(ROOT, "kernel", "assets", "fonts.bin")
 
 # Special characters for the on-screen keyboard (currencies incl. the Naira).
 SPECIAL = "₦€£¥¢₹₵§¶®™±÷¿¡«»µ¬¤¦"
-TEXT = [chr(c) for c in range(32, 127)] + list("·–—•…°©’‘“”×‹›←→✓" + SPECIAL)
+TEXT = [chr(c) for c in range(32, 127)] + list("·–—•…°©’‘“”×‹›←→✓Σ≤≥≠" + SPECIAL)
 DIGITS = list("0123456789: ")
 
 # Glyphs a face lacks (Figtree has no ₦, ₹ or ₵) come from DejaVu Sans,
