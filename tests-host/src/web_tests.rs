@@ -254,3 +254,138 @@ fn backgrounds_and_colours() {
     let text_at = p.items.iter().position(|i| matches!(i, Item::Text { .. })).unwrap();
     assert!(bg_at < text_at);
 }
+
+fn texts_with_colour(p: &render::Page) -> Vec<(String, u32)> {
+    p.items.iter().filter_map(|i| if let render::Item::Text { text, color, .. } = i { Some((text.clone(), *color)) } else { None }).collect()
+}
+
+#[test]
+fn css_selectors_and_cascade() {
+    let d = html::parse(
+        "<style>
+          :root { --brand: #0a7; --gap: 3px }
+          li:nth-child(odd) { color: #111 }
+          li:nth-child(2n) { color: #222 }
+          li:first-child + li + li { color: #333 }
+          h2 ~ p { color: #444 }
+          a[href^='https'] { color: #555 }
+          a[href$='.pdf' i] { color: #556 }
+          p:not(.x):last-of-type { color: var(--brand) }
+          :is(.a, .b) > span { color: var(--missing, #666) }
+          #main .item { color: #777 }
+          .item { color: #888 !important }
+          div.item.item2 { color: #999 }
+          @media (max-width: 600px) { .wide { color: #aaa } }
+          @media screen and (min-width: 601px) { .wide { color: #bbb } }
+          @media print { .wide { color: #ccc } }
+          @supports (display: grid) { .grid { color: #ddd } }
+          .up { text-transform: uppercase }
+          .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0) }
+          .menu { max-height: 0; overflow: hidden }
+          a:hover, p::before { color: red }
+        </style>
+        <ul><li>One</li><li>Two</li><li>Three</li><li>Four</li></ul>
+        <h2>T</h2><p class=x>Para1</p><p>Para2</p>
+        <p><a href='https://a.ng'>Secure</a> <a href='/doc.PDF'>Doc</a></p>
+        <div class=b><span>Span</span></div>
+        <div id=main><div class=item style='color:#123'>Item</div><div class='item item2'>Item2</div></div>
+        <div class=wide>Wide</div><div class=grid>Grid</div>
+        <div class=up>shout</div><div class=sr-only>Skip to content</div><div class=menu>Hidden menu</div>",
+    );
+    let p = render::layout(&d, "", 900);
+    let t = texts_with_colour(&p);
+    let col = |s: &str| t.iter().find(|(x, _)| x == s).map(|x| x.1);
+    assert_eq!(col("One"), Some(0x111111));
+    assert_eq!(col("Two"), Some(0x222222));
+    assert_eq!(col("Three"), Some(0x333333)); // the sibling rule beats :nth-child by order
+    assert_eq!(col("Para1"), Some(0x444444));
+    assert_eq!(col("Secure"), Some(0x555555));
+    assert_eq!(col("Doc"), Some(0x555566));
+    assert_eq!(col("Span"), Some(0x666666));
+    // !important beats style="" and a more specific rule
+    assert_eq!(col("Item"), Some(0x888888));
+    assert_eq!(col("Item2"), Some(0x888888));
+    assert_eq!(col("Wide"), Some(0xbbbbbb));
+    assert_eq!(col("Grid"), Some(0xdddddd));
+    assert_eq!(col("SHOUT"), Some(0x1e1b2c));
+    assert!(col("Skip").is_none() && col("Hidden").is_none(), "{:?}", t);
+    // p:not(.x):last-of-type: the paragraph with the links is the last <p>
+    assert_eq!(col("Para2"), Some(0x444444));
+    // a narrow window picks the other media rule
+    let narrow = render::layout(&d, "", 500);
+    assert_eq!(texts_with_colour(&narrow).iter().find(|x| x.0 == "Wide").map(|x| x.1), Some(0xaaaaaa));
+}
+
+#[test]
+fn css_helpers() {
+    use css::*;
+    let m = Media { width: 1000, height: 800 };
+    assert!(media_matches("screen and (min-width: 768px)", m));
+    assert!(!media_matches("(max-width: 767.98px)", m));
+    assert!(media_matches("print, (min-width: 40em)", m));
+    assert!(!media_matches("print", m));
+    assert!(media_matches("not print", m));
+    assert!(media_matches("(width >= 600px)", m));
+    assert!(media_matches("(400px <= width <= 1200px)", m));
+    assert!(!media_matches("(prefers-color-scheme: dark)", m));
+    assert!(media_matches("", m));
+    let css = "@charset \"utf-8\";\n@import url('base.css');\n@import \"print.css\" print;\n@import url(theme.css) screen and (min-width: 600px);\nbody { background: url(img/bg.png) }\n.x { background: url('/abs.png') } .y { background: url(data:image/png;base64,xx) }";
+    assert_eq!(
+        imports(css),
+        vec![(String::from("base.css"), String::new()), (String::from("print.css"), String::from("print")), (String::from("theme.css"), String::from("screen and (min-width: 600px)"))]
+    );
+    let abs = absolutize(css, &|u| Some(format!("https://a.ng/css/{}", u)));
+    assert!(abs.contains("url('https://a.ng/css/base.css')") && abs.contains("@import \"https://a.ng/css/print.css\""), "{}", abs);
+    assert!(abs.contains("url(https://a.ng/css/img/bg.png)") && abs.contains("url(data:image/png;base64,xx)"), "{}", abs);
+    assert_eq!(resolve_vars("1px solid var(--c, var(--d, red))", &|_| None, 0).as_deref(), Some("1px solid red"));
+    assert_eq!(resolve_vars("var(--c)", &|k| (k == "--c").then(|| String::from("blue")), 0).as_deref(), Some("blue"));
+    assert_eq!(resolve_vars("var(--nope)", &|_| None, 0), None);
+    let d = parse_decls("color: red !important; --x: 4px; background: url('a;b.png'); .nested { a: b } margin:0");
+    assert_eq!(d.len(), 4, "{:?}", d);
+    assert!(d[0].important && d[1].name == "--x" && d[2].value == "url('a;b.png')" && d[3].name == "margin");
+    let dom = html::parse("<head><link rel=stylesheet href=a.css><style>p{}</style><link rel='alternate stylesheet' href=b.css><link rel=stylesheet href=c.css media=print></head>");
+    let s = sources(&dom);
+    assert_eq!(s.len(), 3);
+    assert_eq!(s[0], Err((String::from("a.css"), String::new())));
+    assert_eq!(s[2], Err((String::from("c.css"), String::from("print"))));
+}
+
+/// A big real stylesheet: `HYDATEK_CSS=bootstrap.css cargo test --release big_css -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn big_css() {
+    let path = std::env::var("HYDATEK_CSS").unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    let t = std::time::Instant::now();
+    let c = css::Cascade::new(&text, css::Media { width: 1000, height: 800 });
+    println!("{} rules parsed in {:?}", c.len(), t.elapsed());
+    let mut body = String::new();
+    for i in 0..200 {
+        body.push_str(&format!("<div class='card mb-3'><div class='card-body'><h5 class=card-title>Card {}</h5><p class='card-text text-muted'>Text</p><a class='btn btn-primary' href=#>Go</a></div></div>", i));
+    }
+    let d = html::parse(&format!("<html><body><nav class='navbar navbar-expand-lg bg-body-tertiary'><div class=container-fluid><a class=navbar-brand href=#>Brand</a></div></nav><main class=container>{}</main></body></html>", body));
+    let t = std::time::Instant::now();
+    let p = render::layout_styled(&d, &c, 900, &|_| render::ImgStatus::Loading);
+    println!("laid out {} nodes into {} items in {:?}", d.nodes.len(), p.items.len(), t.elapsed());
+}
+
+#[test]
+fn calc_and_inline_boxes() {
+    use render::Item;
+    let d = html::parse(
+        "<style>:root{--g:1.5rem} .box{padding:calc(var(--g) * .5) calc(10px + 2%);width:min(300px, 50%)}
+         .btn{background:#0d6efd;color:#fff;padding:6px 12px;border:1px solid #0a58ca}</style>
+         <div class=box>Box</div><p>Go <a class=btn href=#>Button</a> now</p>",
+    );
+    let p = render::layout(&d, "", 1000);
+    // the box's text starts after its computed left padding (10px + 2% of 1000)
+    let x = p.items.iter().find_map(|i| if let Item::Text { x, text, .. } = i { (text == "Box").then_some(*x) } else { None }).unwrap();
+    assert_eq!(x, 30);
+    // the inline link gets its own background and border, behind its text
+    let bg = p.items.iter().position(|i| matches!(i, Item::Rect { color: 0x0d6efd, .. })).expect("button background");
+    let txt = p.items.iter().position(|i| matches!(i, Item::Text { text, .. } if text == "Button")).unwrap();
+    assert!(bg < txt);
+    assert!(p.items.iter().any(|i| matches!(i, Item::Frame { color: 0x0a58ca, .. })));
+    // "Go" and "now" have no box
+    assert_eq!(p.items.iter().filter(|i| matches!(i, Item::Rect { .. })).count(), 1);
+}

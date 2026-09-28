@@ -1,6 +1,7 @@
 //! The web layer: URLs, DNS, HTTP, and the queue apps use to fetch pages.
 //! `fetch.rs` does the network work from the main loop.
 
+pub mod css;
 pub mod dns;
 pub mod engines;
 #[cfg(target_os = "uefi")]
@@ -56,6 +57,11 @@ impl WebQueue {
     /// An image for the page at `referer`.
     pub fn get_image(&mut self, url: &str, referer: &str) -> u32 {
         self.push(url, "GET", Vec::new(), String::new(), http::ACCEPT_IMAGE, String::from(referer))
+    }
+
+    /// A stylesheet for the page at `referer`.
+    pub fn get_css(&mut self, url: &str, referer: &str) -> u32 {
+        self.push(url, "GET", Vec::new(), String::new(), http::ACCEPT_CSS, String::from(referer))
     }
 
     pub fn post(&mut self, url: &str, body: Vec<u8>, content_type: &str) -> u32 {

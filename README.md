@@ -71,7 +71,8 @@ Windows, macOS or Linux.
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
 - **Browser and Hyda Search:** HydatekOS's own web browser (HTML, CSS, layout,
   pictures with its own JPEG / PNG / WebP / GIF decoders and SVG renderer,
-  animations, CSS backgrounds, links, forms, cookies,
+  animations, external stylesheets with media queries and CSS variables,
+  CSS backgrounds, links, forms, cookies,
   redirects, gzip) and search engine. Hyda Search indexes
   the pages you visit, sites you add (with a polite crawler) and your files, and
   ranks results with BM25, privately on your computer. Secure sites work too,
@@ -91,8 +92,9 @@ An operating system is a long project. Here's what's still missing; the plan is 
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - **Wired Ethernet only, through the firmware's driver.** There are no Wi-Fi or
-  Bluetooth drivers yet. The browser runs no JavaScript, doesn't load external
-  stylesheets or show AVIF pictures, so many of today's sites look plain. Mail
+  Bluetooth drivers yet. The browser runs no JavaScript, lays out flexbox and grid
+  as plain blocks and can't show AVIF pictures, so many of today's sites look
+  simpler than in other browsers. Mail
   holds local messages.
 - **Phone Link can't mirror a real phone's screen yet.** The demo phone shows how
   it will look. The Android app has been built and statically checked, and its

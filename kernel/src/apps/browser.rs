@@ -8,6 +8,7 @@ use crate::gfx::{Color, Rect};
 use crate::icons::Icon;
 use crate::sys::Sys;
 use crate::ui::{Action, Key, Ui};
+use crate::web::css::{self, Cascade};
 use crate::web::{engines, html};
 use crate::web::render::{self, Control, Item, Page};
 use crate::web::url::{self, Url};
@@ -169,10 +170,39 @@ fn bg_tiles(nat: (u32, u32), bw: i32, bh: i32, size: render::BgSize, pos: (rende
     (tw, th, off(pos.0, bw - tw), off(pos.1, bh - th))
 }
 
+/// A stylesheet from the web (its url()s made absolute).
+enum SheetState {
+    Loading(u32),
+    Ready(Rc<String>),
+    Failed,
+}
+
+/// Wait this long (in 10 ms ticks) for a page's stylesheets.
+const SHEET_WAIT_TICKS: u64 = 1000;
+/// Keep up to this much stylesheet text for the next pages.
+const SHEET_CACHE_BYTES: usize = 8 << 20;
+
+/// A page that arrived and is waiting for its stylesheets.
+struct PendingPage {
+    url: Url,
+    html: String,
+    security: Option<String>,
+    since: u64,
+}
+
+fn sheet_key(base: &Url, href: &str) -> Option<String> {
+    base.join(href).filter(|u| u.scheme == "http" || u.scheme == "https").map(|u| u.without_fragment())
+}
+
 struct Loaded {
     url: Url,
     title: String,
     dom: html::Dom,
+    /// all the page's CSS, in order, imports inlined
+    css: String,
+    cascade: Cascade,
+    /// the window width the cascade's media queries were decided for
+    cascade_w: i32,
     page: Page,
     images: BTreeMap<String, Pic>,
     /// an image arrived: lay the page out again
@@ -203,6 +233,8 @@ pub struct Browser {
     /// the address that failed, while an error shows
     error_url: Option<String>,
     pump_ticks: u64,
+    sheets: BTreeMap<String, SheetState>,
+    pending: Option<PendingPage>,
 }
 
 fn esc(s: &str) -> String {
@@ -226,7 +258,12 @@ impl Loaded {
             Some(p) => p.size().map_or(render::ImgStatus::Loading, |(w, h)| render::ImgStatus::Ready(w, h)),
             None => render::ImgStatus::Loading,
         };
-        self.page = render::layout_with(&self.dom, "", width, &status);
+        let media = render::media_for(width);
+        if media.width != self.cascade_w {
+            self.cascade = Cascade::new(&self.css, media);
+            self.cascade_w = media.width;
+        }
+        self.page = render::layout_styled(&self.dom, &self.cascade, width, &status);
         self.width = width;
         // images the page uses that we haven't asked for yet
         for src in core::mem::take(&mut self.page.wanted) {
@@ -258,7 +295,7 @@ impl Loaded {
 
 impl Browser {
     pub fn new() -> Browser {
-        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false, show_security: false, error_url: None, pump_ticks: 0 };
+        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false, show_security: false, error_url: None, pump_ticks: 0, sheets: BTreeMap::new(), pending: None };
         b.pending_fragment = None;
         b
     }
@@ -293,6 +330,7 @@ impl Browser {
         }
         self.focus_field = None;
         self.error = None;
+        self.pending = None;
         if let Some((id, _)) = self.loading.take() {
             sys.web.stop(id);
         }
@@ -319,7 +357,8 @@ impl Browser {
         let dom = html::parse(&html);
         let title = dom.title();
         let width = (self.area.w - 2 * PAD).max(200);
-        let mut c = Loaded { url, title, dom, page: Page::default(), images: BTreeMap::new(), relayout: false, width, values: vec![], security: None };
+        let css = self.assemble_css(&url, &dom);
+        let mut c = Loaded { url, title, dom, css, cascade: Cascade::default(), cascade_w: -1, page: Page::default(), images: BTreeMap::new(), relayout: false, width, values: vec![], security: None };
         c.layout(width);
         self.cur = Some(c);
         self.scroll = 0;
@@ -352,6 +391,125 @@ impl Browser {
                 let why = data.map_or("wasn't found", |d| picture::decode(d).err().unwrap_or("can't be shown"));
                 self.error = Some((String::from("Can't show this image"), format!("{} {}.", name, why)));
                 self.error_url = Some(url.to_string());
+            }
+        }
+    }
+
+    // ---- stylesheets ---------------------------------------------------------------
+
+    /// Ask for a page's stylesheets that aren't cached; true if any are
+    /// still on their way.
+    fn request_sheets(&mut self, sys: &mut Sys, base: &Url, dom: &html::Dom) -> bool {
+        let referer = base.without_fragment();
+        for src in css::sources(dom) {
+            let href = match src {
+                Err((href, media)) if css::media_matches(&media, render::media_for(self.area.w - 2 * PAD)) || media.is_empty() => href,
+                Ok(text) => {
+                    // @import in a <style> block
+                    for (imp, _) in css::imports(&text) {
+                        if let Some(k) = sheet_key(base, &imp) {
+                            self.want_sheet(sys, k, &referer);
+                        }
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            if let Some(k) = sheet_key(base, &href) {
+                self.want_sheet(sys, k, &referer);
+            }
+        }
+        self.sheets.values().any(|s| matches!(s, SheetState::Loading(_)))
+    }
+
+    fn want_sheet(&mut self, sys: &mut Sys, key: String, referer: &str) {
+        if !self.sheets.contains_key(&key) {
+            let id = sys.web.get_css(&key, referer);
+            self.sheets.insert(key, SheetState::Loading(id));
+        }
+    }
+
+    /// Take finished stylesheets (and ask for what they @import).
+    fn pump_sheets(&mut self, sys: &mut Sys) {
+        let mut arrived: Vec<(String, Result<crate::web::Response, String>)> = Vec::new();
+        for (k, s) in self.sheets.iter() {
+            if let SheetState::Loading(id) = s {
+                if let Some(r) = sys.web.take(*id) {
+                    arrived.push((k.clone(), r));
+                }
+            }
+        }
+        for (key, r) in arrived {
+            let state = match r {
+                Ok(resp) if resp.status < 400 => {
+                    let text = String::from_utf8_lossy(&resp.body).into_owned();
+                    let base = Url::parse(&key);
+                    let abs = match &base {
+                        Some(b) => css::absolutize(&text, &|u| b.join(u).map(|x| x.to_string())),
+                        None => text,
+                    };
+                    for (imp, _) in css::imports(&abs) {
+                        if let Some(b) = &base {
+                            if let Some(k) = sheet_key(b, &imp) {
+                                self.want_sheet(sys, k, &key);
+                            }
+                        }
+                    }
+                    SheetState::Ready(Rc::new(abs))
+                }
+                _ => SheetState::Failed,
+            };
+            self.sheets.insert(key, state);
+        }
+        // keep the cache in bounds
+        let bytes: usize = self.sheets.values().map(|s| if let SheetState::Ready(t) = s { t.len() } else { 0 }).sum();
+        if bytes > SHEET_CACHE_BYTES && self.pending.is_none() {
+            self.sheets.retain(|_, s| matches!(s, SheetState::Loading(_)));
+        }
+    }
+
+    /// A sheet's text with its @imports in front (recursively).
+    fn expand_sheet(&self, text: &str, depth: u32) -> String {
+        let mut out = String::new();
+        if depth < 6 {
+            for (imp, media) in css::imports(text) {
+                if let Some(SheetState::Ready(t)) = self.sheets.get(&imp) {
+                    out.push_str(&css::with_media(&self.expand_sheet(t, depth + 1), &media));
+                    out.push('\n');
+                }
+            }
+        }
+        out.push_str(text);
+        out
+    }
+
+    /// All the page's CSS in document order: <style> blocks and the
+    /// stylesheets we have.
+    fn assemble_css(&self, base: &Url, dom: &html::Dom) -> String {
+        let mut out = String::new();
+        for src in css::sources(dom) {
+            match src {
+                Ok(text) => {
+                    let abs = css::absolutize(&text, &|u| base.join(u).map(|x| x.to_string()));
+                    out.push_str(&self.expand_sheet(&abs, 0));
+                }
+                Err((href, media)) => {
+                    if let Some(SheetState::Ready(t)) = sheet_key(base, &href).and_then(|k| self.sheets.get(&k)) {
+                        out.push_str(&css::with_media(&self.expand_sheet(t, 0), &media));
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Show the page that was waiting for its styles.
+    fn show_pending(&mut self) {
+        if let Some(p) = self.pending.take() {
+            self.show(p.url, p.html);
+            if let Some(c) = self.cur.as_mut() {
+                c.security = p.security;
             }
         }
     }
@@ -753,8 +911,22 @@ impl Browser {
                 }
                 Control::Submit { value, .. } => {
                     let hot = ui.hot(a);
-                    ui.rrect(r, 8, if hot { t.accent.mix(Color::rgb(0x000000), 20) } else { t.accent });
-                    ui.text_in(r, Face::Semibold, 14, value, t.on_accent, 1);
+                    match f.paint {
+                        // the page's own button colours
+                        Some((bg, fg, border)) => {
+                            if let Some(c) = bg {
+                                ui.rrect(r, 6, if hot { Color::rgb(c).mix(Color::rgb(0x000000), 20) } else { Color::rgb(c) });
+                            }
+                            if let Some(c) = border {
+                                ui.stroke(r, 6, 1, Color::rgb(c));
+                            }
+                            ui.text_in(r, Face::Semibold, 14, value, Color::rgb(fg), 1);
+                        }
+                        None => {
+                            ui.rrect(r, 8, if hot { t.accent.mix(Color::rgb(0x000000), 20) } else { t.accent });
+                            ui.text_in(r, Face::Semibold, 14, value, t.on_accent, 1);
+                        }
+                    }
                 }
                 Control::Check { .. } => {
                     ui.rrect(r, 4, Color::rgb(0xffffff));
@@ -786,7 +958,7 @@ impl App for Browser {
         let by = r.y + 8;
         ui.icon_button(Rect::new(r.x + 12, by, 28, 28), Icon::ChevronLeft, Action::App(inst, C_BACK), 16);
         ui.icon_button(Rect::new(r.x + 42, by, 28, 28), Icon::ChevronRight, Action::App(inst, C_FWD), 16);
-        let reload_icon = if self.loading.is_some() { Icon::Close } else { Icon::Redo };
+        let reload_icon = if self.loading.is_some() || self.pending.is_some() { Icon::Close } else { Icon::Redo };
         ui.icon_button(Rect::new(r.x + 72, by, 28, 28), reload_icon, Action::App(inst, C_RELOAD), 15);
         let mut bar = Rect::new(r.x + 108, by, r.w - 108 - 158, 28);
         let scheme_icon = match (&self.edit, &self.loading, if self.error.is_some() { None } else { self.cur.as_ref() }) {
@@ -834,6 +1006,8 @@ impl App for Browser {
                 None => 90,
             };
             ui.rect(Rect::new(r.x, line_y - 1, r.w * frac / 100, 3), t.accent);
+        } else if self.pending.is_some() {
+            ui.rect(Rect::new(r.x, line_y - 1, r.w * 95 / 100, 3), t.accent);
         }
         let area = Rect::new(r.x, line_y + 1, r.w, r.h - HEADER - 1 - STATUS);
         self.area = area;
@@ -885,6 +1059,10 @@ impl App for Browser {
                     None => String::new(),
                 },
                 (None, _) if self.error.is_some() => String::new(),
+                (None, _) if self.pending.is_some() => {
+                    let n = self.sheets.values().filter(|s| matches!(s, SheetState::Loading(_))).count();
+                    format!("Loading the page's styles… {} to go", n)
+                }
                 (None, Some(c)) if c.images_left() > 0 => format!("Loading images… {} to go", c.images_left()),
                 (None, Some(c)) => c.title.clone(),
                 _ => String::new(),
@@ -899,6 +1077,13 @@ impl App for Browser {
             self.go(sys, "hydatek://start", false);
         }
         self.pump_images(sys);
+        self.pump_sheets(sys);
+        if let Some(p) = &self.pending {
+            let waiting = self.sheets.values().any(|s| matches!(s, SheetState::Loading(_)));
+            if !waiting || self.pump_ticks > p.since + SHEET_WAIT_TICKS {
+                self.show_pending();
+            }
+        }
         let Some((id, requested)) = self.loading.clone() else { return };
         let Some(res) = sys.web.take(id) else { return };
         self.loading = None;
@@ -933,9 +1118,11 @@ impl App for Browser {
                 } else if ctype.contains("html") || ctype.is_empty() && text.trim_start().starts_with('<') {
                     let dom = html::parse(&text);
                     sys.search.visited(&url.without_fragment(), &dom);
-                    self.show(url, text);
-                    if let Some(c) = self.cur.as_mut() {
-                        c.security = resp.security.clone();
+                    // wait (a while) for the page's stylesheets before showing it
+                    let waiting = self.request_sheets(sys, &url, &dom);
+                    self.pending = Some(PendingPage { url, html: text, security: resp.security.clone(), since: self.pump_ticks });
+                    if !waiting {
+                        self.show_pending();
                     }
                 } else if ctype.starts_with("text/") || ctype.contains("json") || ctype.contains("xml") {
                     let html = format!("<html><head><title>{}</title></head><body><pre>{}</pre></body></html>", esc(&url.to_string()), esc(&text));
@@ -1010,6 +1197,9 @@ impl App for Browser {
             C_RELOAD => {
                 if let Some((id, _)) = self.loading.take() {
                     sys.web.stop(id);
+                } else if self.pending.is_some() {
+                    // stop waiting for styles: show the page as it is
+                    self.show_pending();
                 } else {
                     let u = self.current_url();
                     if !u.is_empty() {
@@ -1157,6 +1347,6 @@ impl App for Browser {
     }
 
     fn animating(&self) -> bool {
-        self.edit.is_some() || self.loading.is_some() || self.focus_field.is_some() || self.cur.as_ref().is_some_and(|c| c.relayout || c.images_left() > 0 || (self.error.is_none() && c.animated()))
+        self.edit.is_some() || self.loading.is_some() || self.pending.is_some() || self.focus_field.is_some() || self.cur.as_ref().is_some_and(|c| c.relayout || c.images_left() > 0 || (self.error.is_none() && c.animated()))
     }
 }

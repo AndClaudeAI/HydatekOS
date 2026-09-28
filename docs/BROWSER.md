@@ -18,9 +18,8 @@ index and crawler. None of it comes from another browser or search engine.
   links (including `#section` links), bulleted and numbered lists, block quotes,
   preformatted text, simple tables, horizontal rules, and colours, backgrounds,
   borders, sizes, alignment, margins, padding and widths from CSS.
-- **CSS:** `<style>` blocks and `style=""` attributes, with type, class, id,
-  descendant and child selectors, specificity, and `@media` rules for wide
-  screens.
+- **CSS:** external stylesheets, `<style>` blocks and `style=""` attributes;
+  see [Stylesheets](#stylesheets) below.
 - **Forms:** text fields, password fields, checkboxes, buttons and drop-downs
   (their selected value); GET and POST.
 - **HTTP and HTTPS:** redirects, cookies, chunked transfer, gzip / deflate, and
@@ -29,6 +28,42 @@ index and crawler. None of it comes from another browser or search engine.
   connection is secured. Plain `http://` pages get an ⓘ that says they aren't.
 
 ![An article](screenshots/browser-article.png)
+
+## Stylesheets
+
+![A page styled by an external stylesheet](screenshots/browser-stylesheets.png)
+
+Pages get their look from **external stylesheets**, as on the real web:
+
+- `<link rel="stylesheet" href="...">` (with its `media`) and `@import`
+  (nested too, with media conditions) are fetched, and the page waits up to
+  10 seconds for them before it shows, so it doesn't flash unstyled. Stop
+  shows it at once. Stylesheets are kept for the next pages of the site.
+- Addresses in a stylesheet (`url(...)` backgrounds, `@import`) are read
+  relative to the stylesheet, not the page.
+- **Selectors:** type, class, id, attributes (`[href^="https"]`,
+  `[type=email i]` ...), `:first-child`, `:last-child`, `:nth-child(2n+1)`,
+  `:nth-of-type`, `:not()`, `:is()`, `:where()`, `:root`, `:empty`, and
+  descendant, child (`>`), next (`+`) and later (`~`) sibling combinators.
+  Rules for `:hover`, `::before` and the like never match a still page.
+- **The cascade:** specificity, source order, `!important`, `style=""`, and
+  HTML's own presentational attributes underneath.
+- **`@media`** queries are decided by the window: `min-width`/`max-width`,
+  ranges like `(width >= 600px)`, `and`, `,`, `not`, `print` (no), orientation,
+  `prefers-color-scheme: light`. `@supports` and `@layer` blocks apply.
+- **Custom properties** (`--brand: #0a7`) and `var(--brand, fallback)`;
+  **`calc()`**, `min()`, `max()`, `clamp()` with px, em, rem, %, vw and vh.
+- **Hidden stays hidden:** skip links and screen-reader text (clipped to
+  nothing), closed menus (`max-height: 0`), things moved off-screen, and
+  `text-indent` image replacement.
+- Links and spans with a background or border (buttons, badges) get their
+  box; form buttons take the page's colours; `text-transform` works.
+
+It's fast enough for frameworks: Bootstrap 5.3's stylesheet (2,300 rules)
+reads in about 7 ms on a PC and a page of 1,600 elements lays out in about
+40 ms, helped by indexing rules by id, class and tag.
+
+![Bootstrap's own stylesheet](screenshots/browser-bootstrap.png)
 
 ## Pictures
 
@@ -190,9 +225,11 @@ a server refuses X25519).
 
 - **AVIF pictures** (they show their description): AVIF is built on the AV1
   video codec, a much larger decoder.
-- **In SVG:** text, filters, masks, clip paths and patterns. **In CSS:**
-  gradients (their first colour shows).
-- **JavaScript, web fonts and external stylesheets** (`<link rel=stylesheet>`).
+- **In SVG:** text, filters, masks, clip paths and patterns.
+- **JavaScript and web fonts.**
+- **In CSS:** rounded corners, shadows, `::before`/`::after` content,
+  positioning (absolute elements are laid out in the flow unless they're a
+  hiding trick), and gradients (their first colour shows).
 - **Tabs, bookmarks, find in page, downloads list, and text selection on pages.**
 - **Layout:** floats, flexbox and grid are laid out as ordinary blocks, so
   multi-column pages stack their columns.
@@ -205,7 +242,8 @@ a server refuses X25519).
 | URLs, DNS messages, HTTP messages | `kernel/src/web/url.rs`, `dns.rs`, `http.rs` |
 | Requests from apps, run by the main loop | `kernel/src/web/mod.rs`, `fetch.rs` |
 | HTML parser | `kernel/src/web/html.rs` |
-| CSS, style and layout | `kernel/src/web/render.rs` |
+| CSS parsing, selectors, media queries, the cascade | `kernel/src/web/css.rs` |
+| Style and layout | `kernel/src/web/render.rs` |
 | Hyda Search: index, ranking, crawler | `kernel/src/web/search.rs` |
 | Picture decoders: JPEG, PNG, WebP, GIF, BMP; the SVG renderer | `kernel/src/image/` |
 | TLS: hashes, AES-GCM, X25519, P-256/P-384, RSA, X.509, the handshake | `kernel/src/tls/` |

@@ -24,7 +24,8 @@
 - Wi-Fi (Intel iwlwifi-class hardware) with WPA2/WPA3
 - ✅ Browser: HTML/CSS subset renderer, Hyda Search
 - ✅ Browser pictures
-- Browser: external stylesheets, tabs; Mail: IMAP/SMTP
+- ✅ Browser: external stylesheets, media queries, CSS variables
+- Browser: flexbox and grid layout, tabs; Mail: IMAP/SMTP
 - Phone Link: X25519 key exchange (HLP/2), real-phone screen mirroring, iOS companion app
 
 ## M4 — senses

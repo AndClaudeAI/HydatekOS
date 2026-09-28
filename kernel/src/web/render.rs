@@ -3,7 +3,10 @@
 //! with text wrapping, lists, simple tables and form controls. The result is a
 //! display list the browser draws.
 
+use super::css::{self, Cascade, Media};
 use super::html::{Dom, Kind, NodeId};
+use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use crate::font::{self, Face};
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -20,214 +23,6 @@ fn color(v: &str) -> Option<Option<u32>> {
     let (c, a) = crate::image::color::parse(v)?;
     // boxes aren't blended yet: mostly transparent counts as none
     Some(if a < 77 { None } else { Some(c) })
-}
-
-// ---- stylesheets ----------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-struct Simple {
-    tag: Option<String>,
-    id: Option<String>,
-    classes: Vec<String>,
-    /// :hover and friends can't match a static page
-    never: bool,
-}
-
-#[derive(Clone, Debug)]
-struct Selector {
-    /// compound selectors right to left, with "is the next one a direct parent"
-    parts: Vec<(Simple, bool)>,
-    spec: (u32, u32, u32),
-}
-
-#[derive(Clone, Debug)]
-struct Rule {
-    sels: Vec<Selector>,
-    decls: Vec<(String, String)>,
-}
-
-pub struct Sheet {
-    rules: Vec<Rule>,
-}
-
-fn parse_simple(s: &str) -> Option<Simple> {
-    let mut simple = Simple { tag: None, id: None, classes: vec![], never: false };
-    let b = s.as_bytes();
-    let mut i = 0;
-    let word = |i: &mut usize| -> String {
-        let st = *i;
-        while *i < b.len() && (b[*i].is_ascii_alphanumeric() || b[*i] == b'-' || b[*i] == b'_' || b[*i] >= 0x80) {
-            *i += 1;
-        }
-        s[st..*i].to_string()
-    };
-    while i < b.len() {
-        match b[i] {
-            b'*' => i += 1,
-            b'#' => {
-                i += 1;
-                simple.id = Some(word(&mut i));
-            }
-            b'.' => {
-                i += 1;
-                simple.classes.push(word(&mut i));
-            }
-            b'[' => {
-                // attribute selectors: accepted, not checked
-                i += s[i..].find(']').map(|k| k + 1).unwrap_or(s.len() - i);
-            }
-            b':' => {
-                i += 1;
-                if i < b.len() && b[i] == b':' {
-                    i += 1;
-                }
-                let p = word(&mut i).to_ascii_lowercase();
-                if i < b.len() && b[i] == b'(' {
-                    i += s[i..].find(')').map(|k| k + 1).unwrap_or(s.len() - i);
-                }
-                if !matches!(p.as_str(), "link" | "visited" | "root" | "first-child" | "not") {
-                    simple.never = true;
-                }
-            }
-            c if c.is_ascii_alphabetic() => simple.tag = Some(word(&mut i).to_ascii_lowercase()),
-            _ => return None,
-        }
-    }
-    Some(simple)
-}
-
-fn parse_selector(s: &str) -> Option<Selector> {
-    let s = s.replace('>', " > ").replace('+', " + ").replace('~', " ~ ");
-    let mut parts: Vec<(Simple, bool)> = Vec::new();
-    let mut child = false;
-    let mut spec = (0, 0, 0);
-    let toks: Vec<&str> = s.split_whitespace().collect();
-    for t in toks.iter().rev() {
-        match *t {
-            ">" => child = true,
-            "+" | "~" => return None,
-            t => {
-                let simple = parse_simple(t)?;
-                spec.0 += simple.id.is_some() as u32;
-                spec.1 += simple.classes.len() as u32;
-                spec.2 += simple.tag.is_some() as u32;
-                if let Some(last) = parts.last_mut() {
-                    last.1 = child;
-                }
-                child = false;
-                parts.push((simple, false));
-            }
-        }
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    Some(Selector { parts, spec })
-}
-
-fn parse_decls(s: &str) -> Vec<(String, String)> {
-    s.split(';')
-        .filter_map(|d| d.split_once(':'))
-        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().trim_end_matches("!important").trim().to_string()))
-        .filter(|(k, _)| !k.is_empty())
-        .collect()
-}
-
-impl Sheet {
-    pub fn parse(css: &str) -> Sheet {
-        let mut rules = Vec::new();
-        // strip comments
-        let mut src = String::with_capacity(css.len());
-        let mut rest = css;
-        while let Some(k) = rest.find("/*") {
-            src.push_str(&rest[..k]);
-            rest = rest[k + 2..].find("*/").map(|e| &rest[k + 2 + e + 2..]).unwrap_or("");
-        }
-        src.push_str(rest);
-        let b = src.as_bytes();
-        let mut i = 0;
-        while i < b.len() {
-            let Some(open) = src[i..].find('{').map(|k| i + k) else { break };
-            let prelude = src[i..open].trim();
-            // matching close brace
-            let mut depth = 0;
-            let mut j = open;
-            while j < b.len() {
-                match b[j] {
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                j += 1;
-            }
-            let body = &src[open + 1..j.min(src.len())];
-            if let Some(at) = prelude.strip_prefix('@') {
-                // keep the rules of media queries that suit a desktop-sized screen
-                let lower = at.to_ascii_lowercase();
-                if lower.starts_with("media") && !lower.contains("print") && !lower.contains("max-width") {
-                    rules.extend(Sheet::parse(body).rules);
-                }
-            } else if rules.len() < 6000 {
-                let sels: Vec<Selector> = prelude.split(',').filter_map(parse_selector).collect();
-                if !sels.is_empty() {
-                    rules.push(Rule { sels, decls: parse_decls(body) });
-                }
-            }
-            i = j + 1;
-        }
-        Sheet { rules }
-    }
-}
-
-fn matches_simple(dom: &Dom, n: NodeId, s: &Simple) -> bool {
-    if s.never {
-        return false;
-    }
-    if let Some(t) = &s.tag {
-        if dom.tag(n) != t {
-            return false;
-        }
-    }
-    if let Some(id) = &s.id {
-        if dom.attr(n, "id") != Some(id.as_str()) {
-            return false;
-        }
-    }
-    if !s.classes.is_empty() {
-        let cls = dom.attr(n, "class").unwrap_or("");
-        if !s.classes.iter().all(|c| cls.split_whitespace().any(|x| x == c)) {
-            return false;
-        }
-    }
-    true
-}
-
-fn matches(dom: &Dom, n: NodeId, sel: &Selector) -> bool {
-    if !matches_simple(dom, n, &sel.parts[0].0) {
-        return false;
-    }
-    let mut cur = n;
-    for k in 1..sel.parts.len() {
-        let direct = sel.parts[k - 1].1;
-        let mut p = dom.nodes[cur].parent;
-        loop {
-            let Some(pn) = p else { return false };
-            if matches!(dom.nodes[pn].kind, Kind::Element { .. }) && matches_simple(dom, pn, &sel.parts[k].0) {
-                cur = pn;
-                break;
-            }
-            if direct {
-                return false;
-            }
-            p = dom.nodes[pn].parent;
-        }
-    }
-    true
 }
 
 // ---- computed style -----------------------------------------------------------------------
@@ -272,6 +67,30 @@ struct Style {
     border: Option<u32>,
     link: Option<usize>,
     bg_img: Option<Background>,
+    /// custom properties (--name), inherited
+    vars: Rc<BTreeMap<String, String>>,
+    /// text-transform: 0 none, 1 upper, 2 lower, 3 capitalise
+    case: u8,
+    /// positioned out of the flow (absolute / fixed)
+    out_of_flow: bool,
+    /// clipped to nothing
+    clipped: bool,
+    /// moved far off-screen
+    offscreen: bool,
+    /// max-height: 0 (a closed menu)
+    collapsed: bool,
+    overflow_hidden: bool,
+    /// text-indent far to the left: the text is hidden (the box isn't)
+    no_text: bool,
+    /// the background, border and padding of the inline element around text
+    ibox: Option<IBox>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IBox {
+    bg: Option<u32>,
+    border: Option<u32>,
+    pad: [i32; 4],
 }
 
 /// A length that may be a percentage (of the box) or automatic.
@@ -376,32 +195,183 @@ fn bg_repeat(v: &str) -> (bool, bool) {
 
 pub const LINK_COLOR: u32 = 0x1a5fb4;
 
+/// A CSS length in px: units, and calc() / min() / max() / clamp().
 fn length(v: &str, em: i32, pct_of: i32) -> Option<i32> {
-    let v = v.trim();
-    if v == "0" {
-        return Some(0);
+    let mut p = Calc { s: v.trim().as_bytes(), i: 0, em: em as f64, pct: pct_of as f64 };
+    let x = p.expr()?;
+    p.ws();
+    (p.i == p.s.len() && x.is_finite()).then_some(x as i32)
+}
+
+/// A tiny evaluator for CSS maths (viewport units assume a 1000 × 800 window).
+struct Calc<'a> {
+    s: &'a [u8],
+    i: usize,
+    em: f64,
+    pct: f64,
+}
+
+impl Calc<'_> {
+    fn ws(&mut self) {
+        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
     }
-    let num = |s: &str| s.trim().parse::<f64>().ok();
-    if let Some(n) = v.strip_suffix("px") {
-        return num(n).map(|x| x as i32);
+
+    fn expr(&mut self) -> Option<f64> {
+        let mut v = self.term()?;
+        loop {
+            self.ws();
+            match self.s.get(self.i) {
+                Some(b'+') => {
+                    self.i += 1;
+                    v += self.term()?;
+                }
+                Some(b'-') => {
+                    self.i += 1;
+                    v -= self.term()?;
+                }
+                _ => return Some(v),
+            }
+        }
     }
-    if let Some(n) = v.strip_suffix("rem") {
-        return num(n).map(|x| (x * 16.0) as i32);
+
+    fn term(&mut self) -> Option<f64> {
+        let mut v = self.factor()?;
+        loop {
+            self.ws();
+            match self.s.get(self.i) {
+                Some(b'*') => {
+                    self.i += 1;
+                    v *= self.factor()?;
+                }
+                Some(b'/') => {
+                    self.i += 1;
+                    let d = self.factor()?;
+                    if d == 0.0 {
+                        return None;
+                    }
+                    v /= d;
+                }
+                _ => return Some(v),
+            }
+        }
     }
-    if let Some(n) = v.strip_suffix("em") {
-        return num(n).map(|x| (x * em as f64) as i32);
+
+    fn args(&mut self) -> Option<Vec<f64>> {
+        let mut out = Vec::new();
+        loop {
+            out.push(self.expr()?);
+            self.ws();
+            match self.s.get(self.i) {
+                Some(b',') => self.i += 1,
+                Some(b')') => {
+                    self.i += 1;
+                    return Some(out);
+                }
+                _ => return None,
+            }
+        }
     }
-    if let Some(n) = v.strip_suffix("pt") {
-        return num(n).map(|x| (x * 4.0 / 3.0) as i32);
+
+    fn factor(&mut self) -> Option<f64> {
+        self.ws();
+        let st = self.i;
+        if self.s.get(self.i) == Some(&b'(') {
+            self.i += 1;
+            let v = self.expr()?;
+            self.ws();
+            if self.s.get(self.i) != Some(&b')') {
+                return None;
+            }
+            self.i += 1;
+            return Some(v);
+        }
+        if self.s.get(self.i).is_some_and(|c| c.is_ascii_alphabetic()) {
+            while self.i < self.s.len() && (self.s[self.i].is_ascii_alphabetic() || self.s[self.i] == b'-') {
+                self.i += 1;
+            }
+            let name = core::str::from_utf8(&self.s[st..self.i]).ok()?.to_ascii_lowercase();
+            if self.s.get(self.i) != Some(&b'(') {
+                return None;
+            }
+            self.i += 1;
+            let a = self.args()?;
+            return match (name.as_str(), a.len()) {
+                ("calc", 1) => Some(a[0]),
+                ("min", n) if n > 0 => a.into_iter().reduce(f64::min),
+                ("max", n) if n > 0 => a.into_iter().reduce(f64::max),
+                ("clamp", 3) => Some(a[1].max(a[0]).min(a[2])),
+                _ => None,
+            };
+        }
+        // a number and its unit
+        if matches!(self.s.get(self.i), Some(b'-') | Some(b'+')) {
+            self.i += 1;
+        }
+        while self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || self.s[self.i] == b'.') {
+            self.i += 1;
+        }
+        if matches!(self.s.get(self.i), Some(b'e') | Some(b'E')) && self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_digit() || *c == b'-') {
+            self.i += 2;
+            while self.i < self.s.len() && self.s[self.i].is_ascii_digit() {
+                self.i += 1;
+            }
+        }
+        let n: f64 = core::str::from_utf8(&self.s[st..self.i]).ok()?.parse().ok()?;
+        let us = self.i;
+        while self.i < self.s.len() && (self.s[self.i].is_ascii_alphabetic() || self.s[self.i] == b'%') {
+            self.i += 1;
+        }
+        let unit = core::str::from_utf8(&self.s[us..self.i]).ok()?.to_ascii_lowercase();
+        let k = match unit.as_str() {
+            "" | "px" => 1.0,
+            "rem" => 16.0,
+            "em" => self.em,
+            "ex" | "ch" => self.em / 2.0,
+            "pt" => 4.0 / 3.0,
+            "pc" => 16.0,
+            "in" => 96.0,
+            "cm" => 37.8,
+            "mm" => 3.78,
+            "%" => self.pct / 100.0,
+            "vw" | "vi" | "svw" | "lvw" | "dvw" => 10.0,
+            "vh" | "vb" | "svh" | "lvh" | "dvh" => 8.0,
+            "vmin" => 8.0,
+            "vmax" => 10.0,
+            _ => return None,
+        };
+        Some(n * k)
     }
-    if let Some(n) = v.strip_suffix('%') {
-        return num(n).map(|x| (x * pct_of as f64 / 100.0) as i32);
+}
+
+/// Split at spaces outside parentheses (so calc(1rem + 2px) stays whole).
+fn words_top(v: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0;
+    let mut start = None;
+    for (i, c) in v.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        if c.is_whitespace() && depth <= 0 {
+            if let Some(st) = start.take() {
+                out.push(&v[st..i]);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
     }
-    None
+    if let Some(st) = start {
+        out.push(&v[st..]);
+    }
+    out
 }
 
 fn four(v: &str, em: i32, w: i32) -> Option<[Option<i32>; 4]> {
-    let parts: Vec<Option<i32>> = v.split_whitespace().map(|p| if p == "auto" { None } else { Some(length(p, em, w).unwrap_or(0)) }).collect();
+    let parts: Vec<Option<i32>> = words_top(v).into_iter().map(|p| if p == "auto" { None } else { Some(length(p, em, w).unwrap_or(0)) }).collect();
     Some(match parts.len() {
         1 => [parts[0]; 4],
         2 => [parts[0], parts[1], parts[0], parts[1]],
@@ -416,6 +386,11 @@ fn default_style(tag: &str, parent: &Style) -> Style {
     s.disp = Disp::Inline;
     s.bg = None;
     s.bg_img = None;
+    s.out_of_flow = false;
+    s.clipped = false;
+    s.offscreen = false;
+    s.collapsed = false;
+    s.overflow_hidden = false;
     s.margin = [0; 4];
     s.padding = [0; 4];
     s.width = None;
@@ -498,7 +473,25 @@ fn apply(s: &mut Style, parent: &Style, prop: &str, v: &str, containing_w: i32) 
                 _ => s.disp,
             }
         }
-        "visibility" if vl == "hidden" => s.disp = Disp::None,
+        "visibility" if vl == "hidden" || vl == "collapse" => s.disp = Disp::None,
+        "text-transform" => {
+            s.case = match vl.as_str() {
+                "uppercase" => 1,
+                "lowercase" => 2,
+                "capitalize" => 3,
+                _ => 0,
+            }
+        }
+        "position" => s.out_of_flow = vl == "absolute" || vl == "fixed",
+        "overflow" | "overflow-y" | "overflow-x" => s.overflow_hidden = vl.contains("hidden") || vl.contains("clip"),
+        // the ways pages hide things visually: clipping to nothing, moving
+        // far off-screen, collapsing
+        "clip" if vl.replace(' ', "").starts_with("rect(0") || vl.contains("rect(1px") => s.clipped = true,
+        "clip-path" if vl.contains("inset(50%") || vl.contains("inset(100%") || vl == "circle(0)" => s.clipped = true,
+        "transform" if vl.contains("scale(0)") => s.clipped = true,
+        "left" | "top" | "right" if vl.starts_with('-') && length(&vl, em, containing_w).is_some_and(|x| x <= -999) => s.offscreen = true,
+        "text-indent" => s.no_text = vl.starts_with('-') && length(&vl, em, containing_w).is_some_and(|x| x <= -999),
+        "max-height" if length(&vl, em, 0) == Some(0) => s.collapsed = true,
         "color" => {
             if let Some(Some(c)) = color(&vl) {
                 s.color = c;
@@ -657,6 +650,15 @@ fn apply(s: &mut Style, parent: &Style, prop: &str, v: &str, containing_w: i32) 
         "width" => s.width = length(&vl, s.size, containing_w),
         "height" => s.height = if vl.ends_with('%') { None } else { length(&vl, s.size, 0) },
         "max-width" => s.max_width = length(&vl, s.size, containing_w),
+        "border-color" => {
+            if s.border.is_some() {
+                if let Some(Some(c)) = color(vl.split_whitespace().next().unwrap_or("")) {
+                    s.border = Some(c);
+                }
+            }
+        }
+        "border-width" if length(vl.split_whitespace().next().unwrap_or(""), em, 0) == Some(0) => s.border = None,
+        "border-style" if vl.starts_with("none") || vl.starts_with("hidden") => s.border = None,
         "border" | "border-bottom" | "border-top" => {
             if vl.contains("none") || vl.starts_with('0') {
                 s.border = None;
@@ -751,6 +753,8 @@ pub struct Field {
     pub h: i32,
     pub form: usize,
     pub ctl: Control,
+    /// the page's colours for a button: background, text, border
+    pub paint: Option<(Option<u32>, u32, Option<u32>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -792,6 +796,7 @@ struct Frag {
     /// an image drawn inline: index into Page::images
     image: Option<usize>,
     h: i32,
+    ibox: Option<IBox>,
 }
 
 struct Lines {
@@ -823,7 +828,7 @@ fn measure(f: Face, size: i32, s: &str) -> i32 {
 struct Engine<'a> {
     dom: &'a Dom,
     images: &'a dyn Fn(&str) -> ImgStatus,
-    rules: Vec<(Selector, usize, &'a [(String, String)])>,
+    cascade: &'a Cascade,
     out: Page,
 }
 
@@ -836,20 +841,7 @@ impl<'a> Engine<'a> {
             s.color = LINK_COLOR;
             s.underline = true;
         }
-        // matching rules in specificity then source order
-        let mut hits: Vec<((u32, u32, u32), usize, &[(String, String)])> = Vec::new();
-        for (sel, order, decls) in &self.rules {
-            if matches(self.dom, n, sel) {
-                hits.push((sel.spec, *order, decls));
-            }
-        }
-        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-        for (_, _, decls) in hits {
-            for (k, v) in decls.iter() {
-                apply(&mut s, parent, k, v, containing_w);
-            }
-        }
-        // presentational attributes
+        // presentational attributes (below every style rule)
         if let Some(a) = self.dom.attr(n, "align") {
             s.align = match a.to_ascii_lowercase().as_str() {
                 "center" | "middle" => Align::Center,
@@ -865,10 +857,51 @@ impl<'a> Engine<'a> {
                 s.color = c;
             }
         }
-        if let Some(inline) = self.dom.attr(n, "style") {
-            for (k, v) in parse_decls(inline) {
-                apply(&mut s, parent, &k, &v, containing_w);
+        // the cascade: author rules, then style="" (each !important last)
+        let inline = self.dom.attr(n, "style").map(css::parse_decls).unwrap_or_default();
+        let mut decls: Vec<(bool, u32, u32, &css::Decl)> = self.cascade.matching(self.dom, n);
+        for d in &inline {
+            decls.push((d.important, u32::MAX, u32::MAX, d));
+        }
+        decls.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
+        // custom properties first, then everything that may use them
+        if decls.iter().any(|d| d.3.name.starts_with("--")) {
+            let vars = Rc::make_mut(&mut s.vars);
+            for (_, _, _, d) in &decls {
+                if d.name.starts_with("--") {
+                    vars.insert(d.name.clone(), d.value.clone());
+                }
             }
+        }
+        for (_, _, _, d) in &decls {
+            if d.name.starts_with("--") {
+                continue;
+            }
+            let lower = d.value.to_ascii_lowercase();
+            if matches!(lower.as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer") {
+                continue;
+            }
+            if d.value.contains("var(") {
+                let vars = &s.vars;
+                if let Some(v) = css::resolve_vars(&d.value, &|k: &str| vars.get(k).cloned(), 0) {
+                    apply(&mut s, parent, &d.name, &v, containing_w);
+                }
+            } else {
+                apply(&mut s, parent, &d.name, &d.value, containing_w);
+            }
+        }
+        // an inline element with a background or border (a button-like link)
+        if s.disp == Disp::Inline {
+            if s.bg.is_some() || s.border.is_some() {
+                s.ibox = Some(IBox { bg: s.bg, border: s.border, pad: s.padding });
+            }
+        } else {
+            s.ibox = None;
+        }
+        // hidden by the ways pages hide things visually
+        let tiny = s.width.is_some_and(|w| w <= 1) || s.height.is_some_and(|h| h <= 1);
+        if s.clipped || (s.out_of_flow && (s.offscreen || (s.overflow_hidden && tiny))) || (s.overflow_hidden && (s.collapsed || s.height == Some(0))) {
+            s.disp = Disp::None;
         }
         if tag == "a" && self.dom.attr(n, "href").is_some() {
             s.link = Some(usize::MAX); // assigned by the caller
@@ -922,6 +955,16 @@ impl<'a> Engine<'a> {
             if let Some(li) = f.link {
                 self.out.links.push((x, l.y, f.w, lh, li));
             }
+            if let Some(b) = f.ibox {
+                let (bx, by) = (x - b.pad[3], base - f.size * 95 / 100 - b.pad[0] - 2);
+                let (bw, bh) = (f.w + b.pad[3] + b.pad[1], f.size * 125 / 100 + b.pad[0] + b.pad[2]);
+                if let Some(c) = b.bg {
+                    self.out.items.push(Item::Rect { x: bx, y: by, w: bw, h: bh, color: c });
+                }
+                if let Some(c) = b.border {
+                    self.out.items.push(Item::Frame { x: bx, y: by, w: bw, h: bh, color: c });
+                }
+            }
             self.out.items.push(Item::Text { x, y: base, size: f.size, face: f.face, color: f.color, text: f.text, underline: f.underline, strike: f.strike });
         }
         l.y += lh;
@@ -940,7 +983,7 @@ impl<'a> Engine<'a> {
         let space = if l.pending_space && !l.cur.is_empty() { measure(f, size, " ") } else { 0 };
         // extend the previous fragment when the style continues
         if let Some(prev) = l.cur.last_mut() {
-            if prev.field.is_none() && prev.image.is_none() && prev.face == f && prev.size == size && prev.color == s.color && prev.link == s.link && prev.underline == s.underline && prev.strike == s.strike {
+            if prev.field.is_none() && prev.image.is_none() && prev.ibox == s.ibox && prev.face == f && prev.size == size && prev.color == s.color && prev.link == s.link && prev.underline == s.underline && prev.strike == s.strike {
                 if space > 0 {
                     prev.text.push(' ');
                 }
@@ -953,12 +996,41 @@ impl<'a> Engine<'a> {
             }
         }
         l.cur_w += space;
-        l.cur.push(Frag { x: l.cur_w, w, text: word.to_string(), face: f, size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0 });
+        l.cur.push(Frag { x: l.cur_w, w, text: word.to_string(), face: f, size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0, ibox: s.ibox });
         l.cur_w += w;
         l.pending_space = false;
     }
 
     fn text(&mut self, l: &mut Lines, s: &Style, t: &str) {
+        if s.no_text {
+            return;
+        }
+        let cased;
+        let t = match s.case {
+            1 => {
+                cased = t.to_uppercase();
+                cased.as_str()
+            }
+            2 => {
+                cased = t.to_lowercase();
+                cased.as_str()
+            }
+            3 => {
+                let mut out = String::with_capacity(t.len());
+                let mut start = true;
+                for ch in t.chars() {
+                    if start && ch.is_alphabetic() {
+                        out.extend(ch.to_uppercase());
+                    } else {
+                        out.push(ch);
+                    }
+                    start = ch.is_whitespace();
+                }
+                cased = out;
+                cased.as_str()
+            }
+            _ => t,
+        };
         if s.pre {
             for (k, line) in t.split('\n').enumerate() {
                 if k > 0 {
@@ -969,7 +1041,7 @@ impl<'a> Engine<'a> {
                     l.pending_space = false;
                     let f = face(s);
                     let w = measure(f, s.size, &line);
-                    l.cur.push(Frag { x: l.cur_w, w, text: line, face: f, size: s.size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0 });
+                    l.cur.push(Frag { x: l.cur_w, w, text: line, face: f, size: s.size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0, ibox: s.ibox });
                     l.cur_w += w;
                 }
             }
@@ -1000,8 +1072,8 @@ impl<'a> Engine<'a> {
             l.cur_w += 6;
         }
         let fi = self.out.fields.len();
-        self.out.fields.push(Field { x: 0, y: 0, w, h, form, ctl });
-        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: None, field: Some(fi), image: None, h });
+        self.out.fields.push(Field { x: 0, y: 0, w, h, form, ctl, paint: (s.bg.is_some() || s.border.is_some()).then_some((s.bg, s.color, s.border)) });
+        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: None, field: Some(fi), image: None, h, ibox: None });
         l.cur_w += w;
         l.pending_space = true;
     }
@@ -1121,7 +1193,7 @@ impl<'a> Engine<'a> {
         }
         let img = self.out.images.len();
         self.out.images.push(src);
-        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: s.link, field: None, image: Some(img), h });
+        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: s.link, field: None, image: Some(img), h, ibox: None });
         l.cur_w += w;
         l.pending_space = false;
     }
@@ -1133,7 +1205,7 @@ impl<'a> Engine<'a> {
         let h = (s.size * 2).max(26);
         match (tag, ty.as_str()) {
             ("input", "hidden") => {
-                self.out.fields.push(Field { x: 0, y: 0, w: 0, h: 0, form, ctl: Control::Hidden { name, value } });
+                self.out.fields.push(Field { x: 0, y: 0, w: 0, h: 0, form, ctl: Control::Hidden { name, value }, paint: None });
             }
             ("input", "submit") | ("input", "button") | ("button", _) => {
                 let label = if tag == "button" { self.dom.text(n) } else if value.is_empty() { String::from("Submit") } else { value.clone() };
@@ -1165,7 +1237,7 @@ impl<'a> Engine<'a> {
                     val = first.unwrap_or_default();
                 }
                 let w = measure(face(s), s.size, &val) + 36;
-                self.out.fields.push(Field { x: 0, y: 0, w: 0, h: 0, form, ctl: Control::Hidden { name, value: val.clone() } });
+                self.out.fields.push(Field { x: 0, y: 0, w: 0, h: 0, form, ctl: Control::Hidden { name, value: val.clone() }, paint: None });
                 self.field(l, s, form, Control::Submit { name: String::new(), value: val }, w.min(l.width), h);
             }
             _ => {
@@ -1311,27 +1383,25 @@ pub fn layout(dom: &Dom, extra_css: &str, width: i32) -> Page {
     layout_with(dom, extra_css, width, &|_| ImgStatus::Broken)
 }
 
-/// Lay out a page; `images` says what's known about each image address.
+/// The window a page of content width `width` sits in (for media queries).
+pub fn media_for(width: i32) -> Media {
+    Media { width: width + 48, height: 800 }
+}
+
+/// Lay out a page with its own <style> blocks (and `extra_css` first);
+/// `images` says what's known about each image address.
 pub fn layout_with(dom: &Dom, extra_css: &str, width: i32, images: &dyn Fn(&str) -> ImgStatus) -> Page {
-    // stylesheets: <style> blocks in order (external sheets aren't fetched)
-    let mut css = String::from(extra_css);
-    for n in 0..dom.nodes.len() {
-        if dom.tag(n) == "style" {
-            for &c in &dom.nodes[n].children {
-                if let Kind::Text(t) = &dom.nodes[c].kind {
-                    css.push('\n');
-                    css.push_str(t);
-                }
-            }
-        }
+    let mut text = String::from(extra_css);
+    for s in css::sources(dom).into_iter().flatten() {
+        text.push('\n');
+        text.push_str(&s);
     }
-    let sheet = Sheet::parse(&css);
-    let mut rules = Vec::new();
-    for (order, r) in sheet.rules.iter().enumerate() {
-        for sel in &r.sels {
-            rules.push((sel.clone(), order, r.decls.as_slice()));
-        }
-    }
+    let cascade = Cascade::new(&text, media_for(width));
+    layout_styled(dom, &cascade, width, images)
+}
+
+/// Lay out a page with a prepared cascade (its stylesheets, fetched).
+pub fn layout_styled(dom: &Dom, cascade: &Cascade, width: i32, images: &dyn Fn(&str) -> ImgStatus) -> Page {
     let root_style = Style {
         disp: Disp::Block,
         size: 16,
@@ -1353,8 +1423,17 @@ pub fn layout_with(dom: &Dom, extra_css: &str, width: i32, images: &dyn Fn(&str)
         border: None,
         link: None,
         bg_img: None,
+        vars: Rc::new(BTreeMap::new()),
+        case: 0,
+        out_of_flow: false,
+        clipped: false,
+        offscreen: false,
+        collapsed: false,
+        overflow_hidden: false,
+        no_text: false,
+        ibox: None,
     };
-    let mut e = Engine { dom, images, rules, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![], images: vec![], wanted: vec![] } };
+    let mut e = Engine { dom, images, cascade, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![], images: vec![], wanted: vec![] } };
     let mut y = 0;
     let top: Vec<NodeId> = dom.nodes[0].children.clone();
     let mut lines = Lines { x0: 0, width, y: 0, cur: vec![], cur_w: 0, align: Align::Left, pending_space: false };

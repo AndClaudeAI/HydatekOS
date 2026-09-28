@@ -11,6 +11,8 @@ pub const USER_AGENT: &str = "Mozilla/5.0 (HydatekOS 0.1) Hyda/0.1";
 
 /// What a page request accepts.
 pub const ACCEPT_PAGE: &str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8";
+/// Stylesheet requests.
+pub const ACCEPT_CSS: &str = "text/css,*/*;q=0.1";
 /// Image requests ask for the formats HydatekOS decodes.
 pub const ACCEPT_IMAGE: &str = "image/png,image/jpeg,image/gif,image/bmp;q=0.9,image/*;q=0.5,*/*;q=0.3";
 
