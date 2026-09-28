@@ -14,11 +14,31 @@ pub mod doc;
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
 pub mod gridio;
+#[path = "../../kernel/src/web/mod.rs"]
+pub mod web;
+/// Text measurement stand-in for the kernel's font pack.
+pub mod font {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Face {
+        Regular,
+        Medium,
+        Semibold,
+        Display,
+        Mono,
+        Italic,
+        SemiboldItalic,
+    }
+    pub fn measure(_f: Face, px: i32, s: &str) -> i32 {
+        s.chars().count() as i32 * px / 2
+    }
+}
 
 #[cfg(test)]
 mod doc_tests;
 #[cfg(test)]
 mod grid_tests;
+#[cfg(test)]
+mod web_tests;
 
 #[cfg(test)]
 mod tests {

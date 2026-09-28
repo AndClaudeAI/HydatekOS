@@ -34,6 +34,7 @@ mod shell;
 mod sys;
 mod theme;
 mod ui;
+mod web;
 mod zip;
 
 use alloc::vec;
@@ -208,6 +209,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     disp.present(splash.step(65, "Starting network"), full);
     let mut net = net::Net::up();
     let mut server = net.as_mut().map(linksrv::LinkServer::new);
+    let mut fetcher = web::fetch::Fetcher::new();
     if let Some(n) = net.as_ref() {
         sys.link.desktop_name = n.hostname.clone();
     }
@@ -247,6 +249,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
                 if srv.poll(n, &mut sh.sys) {
                     sh.dirty = true;
                 }
+                if fetcher.poll(n, &mut sh.sys.web, ticks * 10) {
+                    sh.dirty = true;
+                }
             }
             continue;
         }
@@ -260,6 +265,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         if let (Some(n), Some(srv)) = (net.as_mut(), server.as_mut()) {
             n.poll(ticks * 10);
             if srv.poll(n, &mut sh.sys) {
+                sh.dirty = true;
+            }
+            if fetcher.poll(n, &mut sh.sys.web, ticks * 10) {
                 sh.dirty = true;
             }
             if ticks % 50 == 0 {

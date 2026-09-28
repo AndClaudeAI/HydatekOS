@@ -1,4 +1,4 @@
-//! TCP (RFC 793/9293), server side: passive open, in-order delivery,
+//! TCP (RFC 793/9293): passive and active open, in-order delivery,
 //! cumulative ACKs, go-back-N retransmission with exponential backoff,
 //! flow control via the peer's window, zero-window probing and orderly close.
 
@@ -20,6 +20,7 @@ const MAX_CONNS: usize = 24;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum State {
+    SynSent,
     SynRcvd,
     Established,
     CloseWait,
@@ -78,6 +79,7 @@ pub struct Tcp {
     listen: Vec<u16>,
     pub conns: Vec<Conn>,
     next_id: u32,
+    next_port: u16,
 }
 
 type Out = Vec<(Ip, Vec<u8>)>;
@@ -175,7 +177,7 @@ impl Conn {
 
 impl Tcp {
     pub fn new() -> Tcp {
-        Tcp { listen: vec![], conns: vec![], next_id: 1 }
+        Tcp { listen: vec![], conns: vec![], next_id: 1, next_port: 49152 + (crate::rng::u32() % 8192) as u16 }
     }
 
     pub fn listen(&mut self, port: u16) {
@@ -185,6 +187,68 @@ impl Tcp {
     }
 
     // ---- application API --------------------------------------------------
+
+    /// Open a connection to (rip, rport) from `lip`. Returns its id and the SYN.
+    pub fn connect(&mut self, lip: Ip, rip: Ip, rport: u16, now: u64) -> (u32, Out) {
+        // make room: forget connections that are finished
+        if self.conns.len() >= MAX_CONNS {
+            if let Some(j) = self.conns.iter().position(|c| matches!(c.state, State::TimeWait | State::Closed)) {
+                self.conns.remove(j);
+            }
+        }
+        let mut lport = self.next_port;
+        for _ in 0..16384 {
+            lport = if lport >= 65000 { 49152 } else { lport + 1 };
+            if !self.conns.iter().any(|c| c.lport == lport) {
+                break;
+            }
+        }
+        self.next_port = lport;
+        let iss = crate::rng::u32();
+        let mut c = Conn {
+            id: self.next_id,
+            state: State::SynSent,
+            lport,
+            rip,
+            rport,
+            lip,
+            iss,
+            snd_una: iss,
+            snd_nxt: iss.wrapping_add(1),
+            snd_max: iss.wrapping_add(1),
+            snd_wnd: 0,
+            rcv_nxt: 0,
+            rx: VecDeque::new(),
+            ooo: Vec::new(),
+            tx: VecDeque::new(),
+            sent: 0,
+            syn_acked: false,
+            fin_sent: false,
+            fin_seq: None,
+            fin_acked: false,
+            probe: false,
+            app_closed: false,
+            accepted: true,
+            peer_mss: 536,
+            rto: 1000,
+            timer: 0,
+            retries: 0,
+            need_ack: false,
+            adv_wnd: 0,
+            idle_since: now,
+        };
+        self.next_id += 1;
+        let syn = c.segment(SYN, iss, &[], true);
+        c.arm(now);
+        let id = c.id;
+        self.conns.push(c);
+        (id, vec![syn])
+    }
+
+    /// Still connecting (SYN sent, no answer yet).
+    pub fn connecting(&self, id: u32) -> bool {
+        self.conns.iter().any(|c| c.id == id && c.state == State::SynSent)
+    }
 
     pub fn accept(&mut self, port: u16) -> Option<u32> {
         let c = self.conns.iter_mut().find(|c| !c.accepted && c.lport == port && matches!(c.state, State::Established | State::CloseWait))?;
@@ -246,7 +310,7 @@ impl Tcp {
 
     /// Peer has finished sending (or the connection is gone).
     pub fn peer_closed(&self, id: u32) -> bool {
-        self.conns.iter().find(|c| c.id == id).map(|c| !matches!(c.state, State::Established | State::FinWait1 | State::FinWait2 | State::SynRcvd)).unwrap_or(true)
+        self.conns.iter().find(|c| c.id == id).map(|c| !matches!(c.state, State::Established | State::FinWait1 | State::FinWait2 | State::SynRcvd | State::SynSent)).unwrap_or(true)
     }
 
     // ---- segment input ------------------------------------------------------
@@ -360,6 +424,48 @@ impl Tcp {
 
         let c = &mut self.conns[i];
         c.idle_since = now;
+        if c.state == State::SynSent {
+            // active open: expect SYN+ACK for our SYN
+            if flags & ACK != 0 && ack != c.iss.wrapping_add(1) {
+                return out;
+            }
+            if flags & RST != 0 {
+                if flags & ACK != 0 {
+                    c.state = State::Closed; // connection refused
+                }
+                return out;
+            }
+            if flags & SYN != 0 && flags & ACK != 0 {
+                let mut o = 20;
+                while o < off {
+                    match seg[o] {
+                        0 => break,
+                        1 => o += 1,
+                        k => {
+                            if o + 1 >= off {
+                                break;
+                            }
+                            let l = seg[o + 1] as usize;
+                            if k == 2 && l == 4 && o + 3 < off {
+                                c.peer_mss = (u16::from_be_bytes([seg[o + 2], seg[o + 3]]) as usize).max(64);
+                            }
+                            o += l.max(2);
+                        }
+                    }
+                }
+                c.rcv_nxt = seq.wrapping_add(1);
+                c.snd_una = ack;
+                c.snd_wnd = wnd;
+                c.syn_acked = true;
+                c.state = State::Established;
+                c.timer = 0;
+                c.retries = 0;
+                c.rto = 1000;
+                c.need_ack = true;
+                c.output(now, &mut out);
+            }
+            return out;
+        }
         if flags & RST != 0 {
             if le(c.rcv_nxt, seq) && lt(seq, c.rcv_nxt.wrapping_add(c.window().max(1) as u32)) || seq == c.rcv_nxt {
                 c.state = State::Closed;
@@ -493,7 +599,7 @@ impl Tcp {
                 _ => {}
             }
             if c.timer_due(now) {
-                if c.snd_wnd == 0 && c.snd_una == c.snd_nxt && c.state != State::SynRcvd {
+                if c.snd_wnd == 0 && c.snd_una == c.snd_nxt && !matches!(c.state, State::SynRcvd | State::SynSent) {
                     // zero-window probe, not a loss
                     c.probe = true;
                     c.rto = (c.rto * 2).min(8_000);
@@ -510,6 +616,13 @@ impl Tcp {
                 if c.state == State::SynRcvd {
                     let iss = c.iss;
                     out.push(c.segment(SYN | ACK, iss, &[], true));
+                } else if c.state == State::SynSent {
+                    if c.retries > 5 {
+                        c.state = State::Closed;
+                        continue;
+                    }
+                    let iss = c.iss;
+                    out.push(c.segment(SYN, iss, &[], true));
                 } else {
                     // go back N: resend from the first unacknowledged byte
                     c.snd_nxt = c.snd_una;

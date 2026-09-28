@@ -107,6 +107,7 @@ impl AppKind {
             AppKind::Music => (560, 400),
             AppKind::Scripts => (900, 600),
             AppKind::Grids => (920, 600),
+            AppKind::Browser => (1000, 640),
             _ => (660, 430),
         }
     }

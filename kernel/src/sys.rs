@@ -77,6 +77,10 @@ pub struct Sys {
     pub reqs: Vec<Req>,
     /// text copied with Cut/Copy (shared by apps)
     pub clipboard: String,
+    /// web requests from apps (carried out by the main loop's fetcher)
+    pub web: crate::web::WebQueue,
+    /// Hyda Search: the index and its crawler
+    pub search: crate::web::search::Search,
     pub screen: (i32, i32, i32),
     pub firmware: String,
     pub mem_total: u64,
@@ -125,6 +129,8 @@ impl Sys {
             lock_finger: false,
             reqs: Vec::new(),
             clipboard: String::new(),
+            web: crate::web::WebQueue::default(),
+            search: crate::web::search::Search::default(),
             screen: (0, 0, 1),
             firmware: String::new(),
             mem_total: 0,
@@ -133,6 +139,7 @@ impl Sys {
         s.load_settings();
         s.load_link();
         s.load_lock();
+        s.load_search();
         s.load_events();
         s
     }
@@ -179,6 +186,62 @@ impl Sys {
             self.lock_idle
         );
         self.fs.write("/system/settings.txt", s.as_bytes());
+    }
+
+    // ---- Hyda Search ---------------------------------------------------------------
+
+    fn load_search(&mut self) {
+        if let Some(d) = self.fs.read("/system/search.hydx") {
+            self.search.index = crate::web::search::Index::load(&d);
+        }
+        self.index_files();
+    }
+
+    /// Put the text of your documents in the search index.
+    pub fn index_files(&mut self) {
+        let mut stack = alloc::vec![String::from("/home")];
+        let mut n = 0;
+        while let Some(dir) = stack.pop() {
+            for (name, is_dir, size) in self.fs.list(&dir) {
+                let path = crate::fs::join(&dir, &name);
+                if is_dir {
+                    stack.push(path);
+                    continue;
+                }
+                if size > 2 << 20 || n > 500 {
+                    continue;
+                }
+                let lower = name.to_ascii_lowercase();
+                let Some(data) = self.fs.read(&path) else { continue };
+                let text = if lower.ends_with(".txt") || lower.ends_with(".md") || lower.ends_with(".doc") || lower.ends_with(".csv") {
+                    String::from_utf8_lossy(&data).into_owned()
+                } else if lower.ends_with(".hyds") {
+                    match crate::doc::Doc::from_hyds(&data) {
+                        Ok(d) => d.to_text(),
+                        Err(_) => continue,
+                    }
+                } else if lower.ends_with(".hydg") {
+                    match crate::gridio::from_hydg(&data) {
+                        Ok(sh) => sh.cells.values().map(|c| c.input.clone()).collect::<Vec<_>>().join(" "),
+                        Err(_) => continue,
+                    }
+                } else {
+                    continue;
+                };
+                let title = name.rsplit_once('.').map(|x| x.0).unwrap_or(&name).to_string();
+                self.search.index.add(&alloc::format!("file://{}", path), &title, &alloc::format!("{} {}", title, text));
+                n += 1;
+            }
+        }
+    }
+
+    /// Run the crawler and save the index now and then (every tick).
+    pub fn web_tick(&mut self) {
+        let now = self.ticks;
+        self.search.tick(&mut self.web, now);
+        if let Some(data) = self.search.to_save(now) {
+            self.fs.write("/system/search.hydx", &data);
+        }
     }
 
     // ---- lock-screen sign-in: PIN, password, phone fingerprint ----------------

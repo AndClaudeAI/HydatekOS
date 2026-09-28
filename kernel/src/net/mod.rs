@@ -92,7 +92,12 @@ pub struct Net {
     rxbuf: Vec<u8>,
     pub rx_packets: u64,
     pub tx_packets: u64,
+    /// UDP datagrams for client sockets (ports 40000-40999): (src, sport, dport, data)
+    pub udp_rx: Vec<(Ip, u16, u16, Vec<u8>)>,
 }
+
+/// Local UDP ports that queue datagrams for applications (the DNS resolver).
+pub const UDP_CLIENT_PORTS: core::ops::Range<u16> = 40000..41000;
 
 impl Net {
     pub fn up() -> Option<Net> {
@@ -122,6 +127,7 @@ impl Net {
             rxbuf: vec![0u8; 2048],
             rx_packets: 0,
             tx_packets: 0,
+            udp_rx: vec![],
         })
     }
 
@@ -380,7 +386,29 @@ impl Net {
                     self.send_udp(dst, 5353, port, &resp);
                 }
             }
+            p if UDP_CLIENT_PORTS.contains(&p) => {
+                if self.udp_rx.len() < 64 {
+                    self.udp_rx.push((src, sport, dport, data.to_vec()));
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Open a TCP connection; its SYN goes out now.
+    pub fn connect(&mut self, ip: Ip, port: u16) -> u32 {
+        let (id, out) = self.tcp.connect(self.ip, ip, port, self.now);
+        for (dst, seg) in out {
+            self.send_ip(dst, PROTO_TCP, &seg);
+        }
+        id
+    }
+
+    /// Send queued TCP data right away (instead of on the next poll).
+    pub fn flush(&mut self) {
+        let out = self.tcp.poll(self.now);
+        for (dst, seg) in out {
+            self.send_ip(dst, PROTO_TCP, &seg);
         }
     }
 

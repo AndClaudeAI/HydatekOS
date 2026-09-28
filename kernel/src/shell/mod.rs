@@ -357,21 +357,33 @@ impl Shell {
             self.dirty = true;
         }
         let mut anim = self.launcher.is_some();
+        let mut changed = false;
         for w in self.wins.iter_mut() {
+            let was = w.app.animating();
             w.app.tick(&mut self.sys);
-            anim |= !w.min && w.app.animating();
+            let now = w.app.animating();
+            // an app that just stopped (a page finished loading) needs one more frame
+            changed |= was != now && !w.min;
+            anim |= !w.min && now;
         }
         for m in [&mut self.local, &mut self.phone] {
             if let Some(a) = m.app.as_mut() {
+                let was = a.animating();
                 a.tick(&mut self.sys);
-                anim |= a.animating();
+                let now = a.animating();
+                changed |= was != now;
+                anim |= now;
             }
+        }
+        if changed {
+            self.dirty = true;
         }
         let before = self.toasts.len();
         self.toasts.retain(|t| t.until > ticks);
         if before != self.toasts.len() {
             self.dirty = true;
         }
+        self.sys.web_tick();
         self.process_reqs();
         if anim && ticks >= self.last_anim + 10 {
             self.last_anim = ticks;
