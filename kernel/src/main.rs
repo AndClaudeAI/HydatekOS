@@ -27,6 +27,7 @@ mod crypto;
 mod doc;
 mod deck;
 mod deckio;
+mod pdf;
 mod link;
 mod linksrv;
 mod net;

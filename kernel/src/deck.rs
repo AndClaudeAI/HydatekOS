@@ -30,6 +30,10 @@ pub enum Kind {
     Rect,
     Ellipse,
     Picture,
+    /// a straight line, optionally with arrowheads
+    Line,
+    Table,
+    Chart,
 }
 
 impl Kind {
@@ -42,6 +46,9 @@ impl Kind {
             Kind::Rect => "rect",
             Kind::Ellipse => "ellipse",
             Kind::Picture => "picture",
+            Kind::Line => "line",
+            Kind::Table => "table",
+            Kind::Chart => "chart",
         }
     }
     pub fn from_id(s: &str) -> Option<Kind> {
@@ -53,6 +60,9 @@ impl Kind {
             "rect" => Kind::Rect,
             "ellipse" => Kind::Ellipse,
             "picture" => Kind::Picture,
+            "line" => Kind::Line,
+            "table" => Kind::Table,
+            "chart" => Kind::Chart,
             _ => return None,
         })
     }
@@ -60,8 +70,9 @@ impl Kind {
     pub fn placeholder(self) -> bool {
         matches!(self, Kind::Title | Kind::Subtitle | Kind::Body)
     }
+    /// Holds text of its own (tables keep theirs in their cells).
     pub fn has_text(self) -> bool {
-        self != Kind::Picture
+        !matches!(self, Kind::Picture | Kind::Line | Kind::Table | Kind::Chart)
     }
     pub fn prompt(self) -> &'static str {
         match self {
@@ -199,6 +210,478 @@ pub fn light(c: u32) -> bool {
     r * 299 + g * 587 + b * 114 > 150_000
 }
 
+
+/// The outline of a rectangle-kind shape (named as in PowerPoint).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Geom {
+    Rect,
+    RoundRect,
+    Triangle,
+    RtTriangle,
+    Diamond,
+    Pentagon,
+    Hexagon,
+    Octagon,
+    Star5,
+    RightArrow,
+    LeftArrow,
+    UpArrow,
+    DownArrow,
+    Chevron,
+    Parallelogram,
+    Trapezoid,
+}
+
+pub const GEOMS: [Geom; 16] = [
+    Geom::Rect,
+    Geom::RoundRect,
+    Geom::Triangle,
+    Geom::RtTriangle,
+    Geom::Diamond,
+    Geom::Pentagon,
+    Geom::Hexagon,
+    Geom::Octagon,
+    Geom::Star5,
+    Geom::RightArrow,
+    Geom::LeftArrow,
+    Geom::UpArrow,
+    Geom::DownArrow,
+    Geom::Chevron,
+    Geom::Parallelogram,
+    Geom::Trapezoid,
+];
+
+impl Geom {
+    /// PowerPoint's preset name.
+    pub fn id(self) -> &'static str {
+        match self {
+            Geom::Rect => "rect",
+            Geom::RoundRect => "roundRect",
+            Geom::Triangle => "triangle",
+            Geom::RtTriangle => "rtTriangle",
+            Geom::Diamond => "diamond",
+            Geom::Pentagon => "pentagon",
+            Geom::Hexagon => "hexagon",
+            Geom::Octagon => "octagon",
+            Geom::Star5 => "star5",
+            Geom::RightArrow => "rightArrow",
+            Geom::LeftArrow => "leftArrow",
+            Geom::UpArrow => "upArrow",
+            Geom::DownArrow => "downArrow",
+            Geom::Chevron => "chevron",
+            Geom::Parallelogram => "parallelogram",
+            Geom::Trapezoid => "trapezoid",
+        }
+    }
+    pub fn from_id(s: &str) -> Option<Geom> {
+        GEOMS.iter().copied().find(|g| g.id() == s)
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Geom::Rect => "Rectangle",
+            Geom::RoundRect => "Rounded rectangle",
+            Geom::Triangle => "Triangle",
+            Geom::RtTriangle => "Right triangle",
+            Geom::Diamond => "Diamond",
+            Geom::Pentagon => "Pentagon",
+            Geom::Hexagon => "Hexagon",
+            Geom::Octagon => "Octagon",
+            Geom::Star5 => "Star",
+            Geom::RightArrow => "Right arrow",
+            Geom::LeftArrow => "Left arrow",
+            Geom::UpArrow => "Up arrow",
+            Geom::DownArrow => "Down arrow",
+            Geom::Chevron => "Chevron",
+            Geom::Parallelogram => "Parallelogram",
+            Geom::Trapezoid => "Trapezoid",
+        }
+    }
+}
+
+/// An entrance animation, played by clicks in the slideshow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Anim {
+    None,
+    Appear,
+    Fade,
+    /// flies in from the bottom
+    Fly,
+}
+
+impl Anim {
+    pub fn id(self) -> &'static str {
+        match self {
+            Anim::None => "none",
+            Anim::Appear => "appear",
+            Anim::Fade => "fade",
+            Anim::Fly => "fly",
+        }
+    }
+    pub fn from_id(s: &str) -> Anim {
+        match s {
+            "appear" => Anim::Appear,
+            "fade" => Anim::Fade,
+            "fly" => Anim::Fly,
+            _ => Anim::None,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Table {
+    /// column widths and row heights, in units (rows grow to fit their text)
+    pub cols: Vec<i32>,
+    pub rows: Vec<i32>,
+    /// the cells, row by row
+    pub cells: Vec<Doc>,
+    /// the first row is a heading row
+    pub header: bool,
+    /// rows alternate shades
+    pub banded: bool,
+}
+
+impl Table {
+    pub fn new(rows: usize, cols: usize, w: i32, h: i32) -> Table {
+        let (rows, cols) = (rows.max(1), cols.max(1));
+        let mut cw = vec![w / cols as i32; cols];
+        cw[cols - 1] += w - w / cols as i32 * cols as i32;
+        Table { cols: cw, rows: vec![h / rows as i32; rows], cells: vec![Doc::new(); rows * cols], header: true, banded: true }
+    }
+    pub fn nrows(&self) -> usize {
+        self.rows.len()
+    }
+    pub fn ncols(&self) -> usize {
+        self.cols.len()
+    }
+    pub fn cell(&self, r: usize, c: usize) -> &Doc {
+        &self.cells[r * self.ncols() + c]
+    }
+    pub fn cell_mut(&mut self, r: usize, c: usize) -> &mut Doc {
+        let n = self.ncols();
+        &mut self.cells[r * n + c]
+    }
+    pub fn insert_row(&mut self, at: usize) {
+        let at = at.min(self.nrows());
+        let h = self.rows.get(at.min(self.nrows() - 1)).copied().unwrap_or(40);
+        self.rows.insert(at, h);
+        let n = self.ncols();
+        for k in 0..n {
+            self.cells.insert(at * n + k, Doc::new());
+        }
+    }
+    pub fn delete_row(&mut self, r: usize) {
+        if self.nrows() <= 1 || r >= self.nrows() {
+            return;
+        }
+        let n = self.ncols();
+        self.rows.remove(r);
+        self.cells.drain(r * n..r * n + n);
+    }
+    /// A new column takes half of the column it's put beside.
+    pub fn insert_col(&mut self, at: usize) {
+        let at = at.min(self.ncols());
+        let src = at.min(self.ncols() - 1);
+        let half = self.cols[src] / 2;
+        self.cols[src] -= half;
+        self.cols.insert(at, half.max(20));
+        let old = self.ncols() - 1;
+        for r in (0..self.nrows()).rev() {
+            self.cells.insert(r * old + at, Doc::new());
+        }
+    }
+    pub fn delete_col(&mut self, c: usize) {
+        if self.ncols() <= 1 || c >= self.ncols() {
+            return;
+        }
+        let n = self.ncols();
+        let w = self.cols.remove(c);
+        let give = if c < self.ncols() { c } else { c - 1 };
+        self.cols[give] += w;
+        for r in (0..self.nrows()).rev() {
+            self.cells.remove(r * n + c);
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChartKind {
+    Column,
+    Bar,
+    Line,
+    Area,
+    Pie,
+}
+
+pub const CHART_KINDS: [ChartKind; 5] = [ChartKind::Column, ChartKind::Bar, ChartKind::Line, ChartKind::Area, ChartKind::Pie];
+
+impl ChartKind {
+    pub fn id(self) -> &'static str {
+        match self {
+            ChartKind::Column => "column",
+            ChartKind::Bar => "bar",
+            ChartKind::Line => "line",
+            ChartKind::Area => "area",
+            ChartKind::Pie => "pie",
+        }
+    }
+    pub fn from_id(s: &str) -> ChartKind {
+        CHART_KINDS.iter().copied().find(|k| k.id() == s).unwrap_or(ChartKind::Column)
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            ChartKind::Column => "Column",
+            ChartKind::Bar => "Bar",
+            ChartKind::Line => "Line",
+            ChartKind::Area => "Area",
+            ChartKind::Pie => "Pie",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Series {
+    pub name: String,
+    pub vals: Vec<f64>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Chart {
+    pub kind: ChartKind,
+    pub title: String,
+    pub cats: Vec<String>,
+    pub series: Vec<Series>,
+    pub legend: bool,
+}
+
+impl Chart {
+    pub fn sample(kind: ChartKind) -> Chart {
+        let s = |name: &str, v: [f64; 4]| Series { name: name.into(), vals: v.to_vec() };
+        let series = if kind == ChartKind::Pie { vec![s("Share", [45.0, 25.0, 18.0, 12.0])] } else { vec![s("2025", [4.3, 2.5, 3.5, 4.5]), s("2026", [5.1, 3.9, 4.2, 6.0])] };
+        let cats = if kind == ChartKind::Pie { vec!["Solar", "Fintech", "Software", "Other"] } else { vec!["Q1", "Q2", "Q3", "Q4"] };
+        Chart { kind, title: String::new(), cats: cats.iter().map(|c| c.to_string()).collect(), series, legend: true }
+    }
+    /// Smallest and largest values (0 always included).
+    pub fn range(&self) -> (f64, f64) {
+        let (mut lo, mut hi) = (0.0f64, 0.0f64);
+        for s in &self.series {
+            for &v in &s.vals {
+                if v < lo {
+                    lo = v;
+                }
+                if v > hi {
+                    hi = v;
+                }
+            }
+        }
+        if hi == lo {
+            hi = lo + 1.0;
+        }
+        (lo, hi)
+    }
+}
+
+/// Round axis steps: (first tick, step, count) covering [lo, hi] in about 5 steps.
+pub fn nice_ticks(lo: f64, hi: f64) -> (f64, f64, usize) {
+    let span = (hi - lo).max(1e-9);
+    let raw = span / 5.0;
+    let mut mag = 1.0f64;
+    while mag * 10.0 <= raw {
+        mag *= 10.0;
+    }
+    while mag > raw {
+        mag /= 10.0;
+    }
+    let step = [1.0, 2.0, 2.5, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(10.0 * mag);
+    let first = floor(lo / step) * step;
+    let mut n = 0;
+    while first + step * (n as f64) < hi - step * 1e-9 {
+        n += 1;
+    }
+    (first, step, n.max(1))
+}
+
+fn floor(x: f64) -> f64 {
+    let t = x as i64 as f64;
+    if t > x {
+        t - 1.0
+    } else {
+        t
+    }
+}
+
+/// A number for an axis or a data sheet: no needless decimals.
+pub fn fmt_num(v: f64) -> String {
+    let neg = v < 0.0;
+    let a = if neg { -v } else { v };
+    let scaled = (a * 100.0 + 0.5) as u64;
+    let (int, frac) = (scaled / 100, scaled % 100);
+    let mut s = if frac == 0 {
+        alloc::format!("{}", int)
+    } else if frac % 10 == 0 {
+        alloc::format!("{}.{}", int, frac / 10)
+    } else {
+        alloc::format!("{}.{:02}", int, frac)
+    };
+    if neg && scaled != 0 {
+        s.insert(0, '-');
+    }
+    s
+}
+
+/// Parse a number typed in the chart's data (commas and spaces ignored).
+pub fn parse_num(s: &str) -> Option<f64> {
+    let t: String = s.chars().filter(|c| !matches!(c, ',' | ' ' | '₦' | '$' | '%')).collect();
+    if t.is_empty() {
+        return None;
+    }
+    let (neg, t) = match t.strip_prefix('-') {
+        Some(r) => (true, r.to_string()),
+        None => (false, t),
+    };
+    let (i, f) = t.split_once('.').unwrap_or((&t, ""));
+    if !i.chars().all(|c| c.is_ascii_digit()) || !f.chars().all(|c| c.is_ascii_digit()) || (i.is_empty() && f.is_empty()) {
+        return None;
+    }
+    let mut v = 0.0f64;
+    for c in i.chars() {
+        v = v * 10.0 + (c as u8 - b'0') as f64;
+    }
+    let mut scale = 0.1;
+    for c in f.chars() {
+        v += (c as u8 - b'0') as f64 * scale;
+        scale /= 10.0;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// ---- angles and outlines ------------------------------------------------------------
+
+const SIN: [i32; 91] = [
+    0, 286, 572, 857, 1143, 1428, 1713, 1997, 2280, 2563, 2845, 3126, 3406, 3686, 3964, 4240, 4516, 4790, 5063, 5334, 5604, 5872, 6138, 6402, 6664, 6924, 7182, 7438, 7692, 7943, 8192, 8438, 8682, 8923, 9162, 9397, 9630, 9860, 10087, 10311, 10531, 10749, 10963, 11174, 11381, 11585, 11786, 11982, 12176, 12365, 12551, 12733, 12911, 13085, 13255, 13421, 13583, 13741, 13894, 14044, 14189,
+    14330, 14466, 14598, 14726, 14849, 14968, 15082, 15191, 15296, 15396, 15491, 15582, 15668, 15749, 15826, 15897, 15964, 16026, 16083, 16135, 16182, 16225, 16262, 16294, 16322, 16344, 16362, 16374, 16382, 16384,
+];
+
+/// sin of whole degrees, times 16384.
+pub fn sin_deg(d: i32) -> i32 {
+    let d = d.rem_euclid(360);
+    match d {
+        0..=90 => SIN[d as usize],
+        91..=180 => SIN[(180 - d) as usize],
+        181..=270 => -SIN[(d - 180) as usize],
+        _ => -SIN[(360 - d) as usize],
+    }
+}
+
+pub fn cos_deg(d: i32) -> i32 {
+    sin_deg(d + 90)
+}
+
+/// Rotate (x, y) by `deg` (clockwise on screen) around (cx, cy).
+pub fn rotate(x: i32, y: i32, cx: i32, cy: i32, deg: i32) -> (i32, i32) {
+    if deg % 360 == 0 {
+        return (x, y);
+    }
+    let (s, c) = (sin_deg(deg) as i64, cos_deg(deg) as i64);
+    let (dx, dy) = ((x - cx) as i64, (y - cy) as i64);
+    (cx + ((dx * c - dy * s) >> 14) as i32, cy + ((dx * s + dy * c) >> 14) as i32)
+}
+
+/// The outline of a shape in its own box (0,0)-(w,h), in 1/16 units.
+pub fn outline(kind: Kind, geom: Geom, w: i32, h: i32) -> Vec<(i32, i32)> {
+    let (w, h) = (w.max(1) * 16, h.max(1) * 16);
+    let ss = w.min(h);
+    let ell = |n: i32, rx: i32, ry: i32, cx: i32, cy: i32, start: i32| -> Vec<(i32, i32)> {
+        (0..n).map(|k| {
+            let a = start + k * 360 / n;
+            (cx + (rx as i64 * cos_deg(a) as i64 >> 14) as i32, cy + (ry as i64 * sin_deg(a) as i64 >> 14) as i32)
+        }).collect()
+    };
+    if kind == Kind::Ellipse {
+        return ell(90, w / 2, h / 2, w / 2, h / 2, 0);
+    }
+    match geom {
+        Geom::Rect => vec![(0, 0), (w, 0), (w, h), (0, h)],
+        Geom::RoundRect => {
+            let r = ss / 6;
+            let mut p = Vec::new();
+            for (cx, cy, a0) in [(w - r, r, 270), (w - r, h - r, 0), (r, h - r, 90), (r, r, 180)] {
+                for k in 0..=9 {
+                    let a = a0 + k * 10;
+                    p.push((cx + (r as i64 * cos_deg(a) as i64 >> 14) as i32, cy + (r as i64 * sin_deg(a) as i64 >> 14) as i32));
+                }
+            }
+            p
+        }
+        Geom::Triangle => vec![(w / 2, 0), (w, h), (0, h)],
+        Geom::RtTriangle => vec![(0, 0), (w, h), (0, h)],
+        Geom::Diamond => vec![(w / 2, 0), (w, h / 2), (w / 2, h), (0, h / 2)],
+        Geom::Pentagon => ell(5, w / 2, h / 2, w / 2, h / 2 + h / 20, 270),
+        Geom::Hexagon => {
+            let a = ss / 4;
+            vec![(a, 0), (w - a, 0), (w, h / 2), (w - a, h), (a, h), (0, h / 2)]
+        }
+        Geom::Octagon => {
+            let a = ss * 29 / 100;
+            vec![(a, 0), (w - a, 0), (w, a), (w, h - a), (w - a, h), (a, h), (0, h - a), (0, a)]
+        }
+        Geom::Star5 => {
+            let (cx, cy) = (w / 2, h / 2 + h / 20);
+            let mut p = Vec::new();
+            for k in 0..10 {
+                let a = 270 + k * 36;
+                let (rx, ry) = if k % 2 == 0 { (w / 2, h / 2) } else { (w * 19 / 100, h * 19 / 100) };
+                p.push((cx + (rx as i64 * cos_deg(a) as i64 >> 14) as i32, cy + (ry as i64 * sin_deg(a) as i64 >> 14) as i32));
+            }
+            p
+        }
+        Geom::RightArrow => {
+            let xh = w - ss / 2;
+            vec![(0, h / 4), (xh, h / 4), (xh, 0), (w, h / 2), (xh, h), (xh, h * 3 / 4), (0, h * 3 / 4)]
+        }
+        Geom::LeftArrow => {
+            let xh = ss / 2;
+            vec![(w, h / 4), (xh, h / 4), (xh, 0), (0, h / 2), (xh, h), (xh, h * 3 / 4), (w, h * 3 / 4)]
+        }
+        Geom::DownArrow => {
+            let yh = h - ss / 2;
+            vec![(w / 4, 0), (w / 4, yh), (0, yh), (w / 2, h), (w, yh), (w * 3 / 4, yh), (w * 3 / 4, 0)]
+        }
+        Geom::UpArrow => {
+            let yh = ss / 2;
+            vec![(w / 4, h), (w / 4, yh), (0, yh), (w / 2, 0), (w, yh), (w * 3 / 4, yh), (w * 3 / 4, h)]
+        }
+        Geom::Chevron => {
+            let a = ss / 2;
+            vec![(0, 0), (w - a, 0), (w, h / 2), (w - a, h), (0, h), (a, h / 2)]
+        }
+        Geom::Parallelogram => {
+            let a = ss / 4;
+            vec![(a, 0), (w, 0), (w - a, h), (0, h)]
+        }
+        Geom::Trapezoid => {
+            let a = ss / 4;
+            vec![(0, h), (a, 0), (w - a, 0), (w, h)]
+        }
+    }
+}
+
+/// A line's two ends (start, end) in slide units.
+pub fn line_ends(sh: &Shape) -> ((i32, i32), (i32, i32)) {
+    let (x0, x1) = if sh.flip_h { (sh.x + sh.w, sh.x) } else { (sh.x, sh.x + sh.w) };
+    let (y0, y1) = if sh.flip_v { (sh.y + sh.h, sh.y) } else { (sh.y, sh.y + sh.h) };
+    ((x0, y0), (x1, y1))
+}
+
+/// Set a line from its two ends.
+pub fn set_line_ends(sh: &mut Shape, a: (i32, i32), b: (i32, i32)) {
+    sh.x = a.0.min(b.0);
+    sh.y = a.1.min(b.1);
+    sh.w = (a.0 - b.0).abs();
+    sh.h = (a.1 - b.1).abs();
+    sh.flip_h = a.0 > b.0;
+    sh.flip_v = a.1 > b.1;
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Shape {
     pub kind: Kind,
@@ -216,6 +699,24 @@ pub struct Shape {
     pub anchor: Anchor,
     /// index into `Deck::pics`
     pub pic: Option<usize>,
+    /// outline of a rectangle-kind shape
+    pub geom: Geom,
+    /// clockwise, in degrees
+    pub rot: i32,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// a gradient from the fill to this colour, at this angle (0: left to right, 90: top to bottom)
+    pub grad: Option<(u32, i32)>,
+    /// outline / line width in units
+    pub line_w: i32,
+    /// arrowheads at a line's start and end
+    pub head: bool,
+    pub tail: bool,
+    pub anim: Anim,
+    /// order among the slide's animations
+    pub anim_order: u16,
+    pub table: Option<Table>,
+    pub chart: Option<Chart>,
 }
 
 impl Shape {
@@ -234,7 +735,68 @@ impl Shape {
         if matches!(kind, Kind::Rect | Kind::Ellipse) {
             text.paras[0].align = Align::Center;
         }
-        Shape { kind, x, y, w, h, text, size, fill: None, line: None, color: None, anchor, pic: None }
+        let mut sh = Shape { kind, x, y, w, h, text, size, fill: None, line: None, color: None, anchor, pic: None, geom: Geom::Rect, rot: 0, flip_h: false, flip_v: false, grad: None, line_w: 3, head: false, tail: false, anim: Anim::None, anim_order: 0, table: None, chart: None };
+        match kind {
+            Kind::Table => {
+                sh.size = 18;
+                sh.table = Some(Table::new(3, 3, w, h));
+            }
+            Kind::Chart => sh.chart = Some(Chart::sample(ChartKind::Column)),
+            Kind::Line => sh.tail = true,
+            _ => {}
+        }
+        sh
+    }
+
+    /// A point in slide units, in this shape's own (unrotated) frame.
+    pub fn to_local(&self, x: i32, y: i32) -> (i32, i32) {
+        rotate(x, y, self.x + self.w / 2, self.y + self.h / 2, -self.rot)
+    }
+
+    /// The text box of a table's cell, as a shape of its own.
+    pub fn cell_shape(&self, r: usize, c: usize) -> Option<Shape> {
+        let t = self.table.as_ref()?;
+        if r >= t.nrows() || c >= t.ncols() {
+            return None;
+        }
+        let x = self.x + t.cols[..c].iter().sum::<i32>();
+        let y = self.y + t.rows[..r].iter().sum::<i32>();
+        let mut s = Shape::new(Kind::Text, x, y, t.cols[c], t.rows[r]);
+        s.text = t.cell(r, c).clone();
+        s.size = self.size;
+        s.anchor = Anchor::Middle;
+        s.color = self.color;
+        Some(s)
+    }
+
+    /// Grow a table's rows to fit their text, and the shape around them.
+    pub fn fit_table(&mut self) {
+        let Some(t) = self.table.clone() else { return };
+        let mut t = t;
+        let total: i32 = t.cols.iter().sum();
+        if total != self.w && total > 0 {
+            // columns follow the shape's width
+            let mut acc = 0;
+            let n = t.ncols();
+            for (i, c) in t.cols.iter_mut().enumerate() {
+                *c = if i + 1 == n { self.w - acc } else { (*c as i64 * self.w as i64 / total as i64) as i32 };
+                acc += *c;
+            }
+        }
+        for r in 0..t.nrows() {
+            let mut need = self.size as i32 * 4 / 3 * 6 / 5 + 2 * INSET_Y + 8;
+            for c in 0..t.ncols() {
+                let x: i32 = t.cols[..c].iter().sum();
+                let mut s = Shape::new(Kind::Text, x, 0, t.cols[c], 10_000);
+                s.text = t.cell(r, c).clone();
+                s.size = self.size;
+                let tb = layout_at(&s, 100);
+                need = need.max(tb.height + 2 * INSET_Y + 8);
+            }
+            t.rows[r] = t.rows[r].max(need).max(20);
+        }
+        self.h = t.rows.iter().sum();
+        self.table = Some(t);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -257,6 +819,17 @@ impl Shape {
     }
 
     pub fn contains(&self, x: i32, y: i32) -> bool {
+        if self.kind == Kind::Line {
+            // near the line
+            let ((x0, y0), (x1, y1)) = line_ends(self);
+            let (dx, dy) = ((x1 - x0) as i64, (y1 - y0) as i64);
+            let len2 = (dx * dx + dy * dy).max(1);
+            let t = (((x - x0) as i64 * dx + (y - y0) as i64 * dy) * 1024 / len2).clamp(0, 1024);
+            let (px, py) = (x0 as i64 + dx * t / 1024, y0 as i64 + dy * t / 1024);
+            let (ex, ey) = (x as i64 - px, y as i64 - py);
+            return ex * ex + ey * ey <= (10 + self.line_w as i64).pow(2);
+        }
+        let (x, y) = self.to_local(x, y);
         x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
     }
 }
@@ -267,6 +840,8 @@ pub struct Slide {
     pub shapes: Vec<Shape>,
     pub notes: String,
     pub bg: Option<u32>,
+    /// a gradient from the background to this colour, at this angle
+    pub bg_grad: Option<(u32, i32)>,
     pub trans: Trans,
 }
 
@@ -290,6 +865,9 @@ pub struct Deck {
     pub theme: Theme,
     pub slides: Vec<Slide>,
     pub pics: Vec<Pic>,
+    /// footer text and slide numbers, on every slide but title slides
+    pub footer: String,
+    pub numbers: bool,
 }
 
 impl Default for Deck {
@@ -330,13 +908,13 @@ pub fn layout_shapes(l: Layout, w: i32, h: i32) -> Vec<Shape> {
 
 impl Deck {
     pub fn new() -> Deck {
-        let mut d = Deck { name: String::from("Untitled presentation"), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![] };
+        let mut d = Deck { name: String::from("Untitled presentation"), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), numbers: false };
         d.slides.push(d.new_slide(Layout::Title));
         d
     }
 
     pub fn new_slide(&self, l: Layout) -> Slide {
-        Slide { layout: l, shapes: layout_shapes(l, self.w, self.h), notes: String::new(), bg: None, trans: Trans::None }
+        Slide { layout: l, shapes: layout_shapes(l, self.w, self.h), notes: String::new(), bg: None, bg_grad: None, trans: Trans::None }
     }
 
     /// Change a slide's layout, carrying its text over to the new placeholders.
@@ -392,8 +970,27 @@ impl Deck {
         let mut out = String::new();
         for s in &self.slides {
             for sh in &s.shapes {
-                if !sh.is_empty() {
+                if sh.kind.has_text() && !sh.is_empty() {
                     out.push_str(&sh.plain());
+                    out.push('\n');
+                }
+                if let Some(t) = &sh.table {
+                    for c in &t.cells {
+                        out.push_str(&Doc::plain(&c.paras));
+                        out.push(' ');
+                    }
+                    out.push('\n');
+                }
+                if let Some(c) = &sh.chart {
+                    out.push_str(&c.title);
+                    for x in &c.cats {
+                        out.push(' ');
+                        out.push_str(x);
+                    }
+                    for x in &c.series {
+                        out.push(' ');
+                        out.push_str(&x.name);
+                    }
                     out.push('\n');
                 }
             }
@@ -510,7 +1107,7 @@ fn indent(p: &Para) -> (i32, i32) {
     }
 }
 
-fn lay_at(sh: &Shape, scale: i32) -> TextBox {
+pub fn layout_at(sh: &Shape, scale: i32) -> TextBox {
     let inner_w = (sh.w - 2 * INSET_X).max(8);
     let mut lines = Vec::new();
     let mut y = 0;
@@ -608,11 +1205,11 @@ fn lay_at(sh: &Shape, scale: i32) -> TextBox {
 pub fn layout(sh: &Shape) -> TextBox {
     let room = sh.h - 2 * INSET_Y;
     let mut scale = 100;
-    let mut tb = lay_at(sh, scale);
+    let mut tb = layout_at(sh, scale);
     if sh.kind != Kind::Picture {
         while tb.height > room && scale > 40 {
             scale = (scale - 8).max(40);
-            tb = lay_at(sh, scale);
+            tb = layout_at(sh, scale);
         }
     }
     // vertical anchoring
@@ -671,4 +1268,61 @@ pub fn caret_xy(sh: &Shape, tb: &TextBox, pos: Pos) -> (usize, i32) {
     let p = &sh.text.paras[l.p.min(sh.text.paras.len() - 1)];
     let x = l.x + span_w(sh.kind, p, l.start, pos.i.min(p.len()).max(l.start), l.px);
     (found, x)
+}
+
+// ---- colours and places shared by the renderer and the exporters ----------------------
+
+/// Blend colour `a` towards `b` by `t`/256.
+pub fn mix(a: u32, b: u32, t: u32) -> u32 {
+    let t = t.min(256);
+    let f = |s: u32| ((((a >> s) & 255) * (256 - t) + ((b >> s) & 255) * t) >> 8) << s;
+    f(16) | f(8) | f(0)
+}
+
+/// Readable text on a fill.
+pub fn on(fill: u32) -> u32 {
+    if light(fill) {
+        0x1E1B2C
+    } else {
+        0xFFFFFF
+    }
+}
+
+/// Colour of a chart's series (or a pie's slice) `i`.
+pub fn series_color(t: &Theme, i: usize) -> u32 {
+    const MORE: [u32; 5] = [0x4F7CAC, 0x5B9B6B, 0xD9A441, 0x8E6CB5, 0xC2504F];
+    if i == 0 {
+        t.accent
+    } else {
+        MORE[(i - 1) % MORE.len()]
+    }
+}
+
+/// A table cell's fill and text colour, and whether its text is bold.
+pub fn cell_style(t: &Theme, tb: &Table, r: usize) -> (u32, u32, bool) {
+    if tb.header && r == 0 {
+        return (t.accent, on(t.accent), true);
+    }
+    let data_row = if tb.header { r - 1 } else { r };
+    let fill = if tb.banded && data_row % 2 == 0 { mix(t.bg, t.accent, 34) } else { mix(t.bg, t.text, 8) };
+    (fill, t.text, false)
+}
+
+/// The lines between table cells.
+pub fn table_line(t: &Theme) -> u32 {
+    mix(t.bg, t.text, 70)
+}
+
+/// Where the footer text and the slide number go.
+pub fn footer_rects(w: i32, h: i32) -> ((i32, i32, i32, i32), (i32, i32, i32, i32)) {
+    ((w * 3 / 10, h - 54, w * 4 / 10, 40), (w - 210, h - 54, 150, 40))
+}
+
+pub fn footer_color(t: &Theme) -> u32 {
+    mix(t.bg, t.text, 170)
+}
+
+/// Does this slide show the footer and number? (Not on title slides.)
+pub fn shows_footer(d: &Deck, s: &Slide) -> bool {
+    (d.numbers || !d.footer.is_empty()) && s.layout != Layout::Title
 }

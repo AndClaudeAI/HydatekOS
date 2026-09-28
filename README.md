@@ -73,9 +73,11 @@ Windows, macOS or Linux.
   moves references, AutoSum and resizable columns. Sheets are saved as **`.hydg`**;
   Excel (`.xlsx`) and CSV files open for viewing and editing and are export formats.
   **Hyda Slides** makes presentations: layouts, six themes, bullets, text boxes,
-  shapes and pictures, speaker notes, and a full-screen slideshow with fade and
-  push transitions. Presentations are saved as **`.hydp`**; PowerPoint (`.pptx`)
-  files open for viewing and editing and are an export format.
+  sixteen shapes, lines and arrows, tables, charts, gradients, rotation,
+  pictures, entrance animations, footers and slide numbers, speaker notes, a
+  full-screen slideshow with transitions and a presenter view. Presentations
+  are saved as **`.hydp`**; PowerPoint (`.pptx`) files open for viewing and
+  editing and are an export format, as is PDF (slides or notes pages).
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
 - **Browser and Hyda Search:** HydatekOS's own web browser (HTML, CSS, layout,
   pictures with its own JPEG / PNG / WebP / GIF decoders and SVG renderer,

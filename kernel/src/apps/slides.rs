@@ -7,15 +7,14 @@
 use super::{App, AppKind, LineEdit, HEADER};
 use crate::deck::*;
 use crate::deckio;
-use crate::doc::{Doc, Pos, Style, BOLD, ITALIC, STRIKE, UNDERLINE};
-use crate::font::{self, Face};
+use crate::doc::{Doc, Pos, Style, BOLD, ITALIC, UNDERLINE};
+use crate::font::Face;
 use crate::fs::{basename, join, parent};
 use crate::gfx::{Canvas, Color, Rect};
 use crate::icons::Icon;
-use crate::image::Image;
+use super::slidedraw::{self, anim_steps, blit, draw_slide, ellipse, mixp, Opts, Pics};
 use crate::sys::Sys;
 use crate::ui::{Action, Key, Ui};
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
@@ -28,6 +27,8 @@ const NOTES_H: i32 = 86;
 const STATUS: i32 = 28;
 /// Transition length in ticks (100 per second).
 const TRANS_TICKS: u64 = 40;
+/// An entrance animation's length in ticks.
+const ANIM_TICKS: u64 = 45;
 
 const C_CANVAS: u32 = 1;
 const C_NOTES: u32 = 2;
@@ -77,7 +78,33 @@ const C_FRONT: u32 = 46;
 const C_BACK: u32 = 47;
 const C_STRIP: u32 = 48;
 const C_ADD_SLIDE: u32 = 49;
+const C_TABLE: u32 = 50;
+const C_CHART: u32 = 51;
+const C_ANIM: u32 = 52;
+const C_FOOTER: u32 = 53;
+const C_PDF: u32 = 54;
+const C_PDF_NOTES: u32 = 55;
+const C_PRESENTER: u32 = 56;
+const C_ROT_R: u32 = 57;
+const C_ROT_L: u32 = 58;
+const C_FLIP_H: u32 = 59;
+const C_FLIP_V: u32 = 60;
+const C_OBJECT: u32 = 61;
+const C_DLG_TEXT: u32 = 63;
+const C_DLG_NUMBERS: u32 = 64;
+const C_DLG_OK: u32 = 65;
+const C_DATA_DONE: u32 = 66;
+const C_DATA_ADD_ROW: u32 = 67;
+const C_DATA_DEL_ROW: u32 = 68;
+const C_DATA_ADD_SER: u32 = 69;
+const C_DATA_DEL_SER: u32 = 70;
+const C_DATA_LEGEND: u32 = 71;
+const C_DATA_TITLE: u32 = 72;
 const C_THUMB: u32 = 100;
+const C_DATA_CELL: u32 = 3000;
+const C_DATA_KIND: u32 = 2900;
+/// how many files an Open or Insert Picture list can show
+const FILES_MAX: u32 = 100;
 const C_MENU: u32 = 1000;
 const C_FILE: u32 = 2000;
 
@@ -91,6 +118,32 @@ enum MenuKind {
     Theme,
     Color,
     Trans,
+    /// insert a shape, line or arrow
+    Shapes,
+    /// insert a table of a chosen size
+    Table,
+    /// insert a chart of a kind
+    Chart,
+    /// rows, columns and style of the selected table
+    TableEdit,
+    /// the selected chart
+    ChartEdit,
+    Anim,
+}
+
+/// The chart data sheet: cell (row, column) in a grid of categories (rows)
+/// by series (columns); row 0 holds series names, column 0 category names.
+struct DataEd {
+    shape: usize,
+    cur: (usize, usize),
+    /// typing into the current cell (or the title when `title`)
+    text: Option<String>,
+    title: bool,
+}
+
+struct FooterDlg {
+    text: LineEdit,
+    numbers: bool,
 }
 
 enum Overlay {
@@ -99,11 +152,15 @@ enum Overlay {
     Pictures(Vec<String>),
     Rename(LineEdit),
     Menu(MenuKind, Rect),
+    ChartData(DataEd),
+    Footer(FooterDlg),
 }
 
 #[derive(Clone, Copy)]
 struct TextEd {
     shape: usize,
+    /// a table cell (row, column) of the shape
+    cell: Option<(usize, usize)>,
     caret: Pos,
     anchor: Option<Pos>,
     /// typing since the last undo snapshot
@@ -117,6 +174,10 @@ enum Press {
     Text,
     /// dragging a thumbnail to reorder (moved yet?)
     Thumb(bool),
+    /// turning a shape: its centre (screen) and rotation at the start
+    Rotate { centre: (i32, i32), orig: i32, moved: bool },
+    /// dragging one end of a line (0 start, 1 end)
+    LineEnd { end: u8, moved: bool },
 }
 
 struct Show {
@@ -126,247 +187,16 @@ struct Show {
     /// the black "end of slideshow" screen
     end: bool,
     black: bool,
-    frame: Option<(usize, i32, i32, u64, Canvas)>,
-}
-
-/// Decoded pictures and their scaled copies.
-#[derive(Default)]
-struct Pics {
-    decoded: BTreeMap<usize, Option<Image>>,
-    scaled: BTreeMap<(usize, i32, i32), Rc<Vec<u32>>>,
-}
-
-impl Pics {
-    fn clear(&mut self) {
-        self.decoded.clear();
-        self.scaled.clear();
-    }
-    fn get(&mut self, deck: &Deck, i: usize, w: i32, h: i32) -> Option<Rc<Vec<u32>>> {
-        if w <= 0 || h <= 0 || w > 8000 || h > 8000 {
-            return None;
-        }
-        if let Some(p) = self.scaled.get(&(i, w, h)) {
-            return Some(p.clone());
-        }
-        let img = self.decoded.entry(i).or_insert_with(|| deck.pics.get(i).and_then(|p| crate::image::decode(&p.data).ok()));
-        let img = img.as_ref()?;
-        let px = Rc::new(crate::gfx::scale_argb(&img.px, img.w as i32, img.h as i32, w, h));
-        if self.scaled.len() > 24 {
-            self.scaled.clear();
-        }
-        self.scaled.insert((i, w, h), px.clone());
-        Some(px)
-    }
-}
-
-// ---- drawing slides ------------------------------------------------------------
-
-/// A filled ellipse (or a ring `t` pixels wide), anti-aliased.
-fn ellipse(c: &mut Canvas, r: Rect, col: Color, t: i32) {
-    if r.w <= 0 || r.h <= 0 {
-        return;
-    }
-    let span = |a8: i64, b8: i64, dy: i64| -> Option<i64> {
-        if a8 <= 0 || b8 <= 0 || dy.abs() >= b8 {
-            return None;
-        }
-        Some(a8 * isqrt(b8 * b8 - dy * dy) / b8)
-    };
-    let cx8 = (2 * r.x as i64 + r.w as i64) * 4;
-    let cy8 = (2 * r.y as i64 + r.h as i64) * 4;
-    let (a8, b8) = (r.w as i64 * 4, r.h as i64 * 4);
-    let t8 = t as i64 * 8;
-    let y0 = r.y.max(c.clip.y);
-    let y1 = r.b().min(c.clip.b());
-    let mut row = vec![0u8; r.w as usize];
-    let mut cov = vec![0i32; r.w as usize];
-    let add = |cov: &mut Vec<i32>, l: i64, rr: i64, sign: i32| {
-        let lo = ((l >> 3) - r.x as i64).max(0);
-        let hi = (((rr + 7) >> 3) - r.x as i64).min(r.w as i64);
-        for px in lo..hi {
-            let a = (r.x as i64 + px) * 8;
-            let o = rr.min(a + 8) - l.max(a);
-            if o > 0 {
-                cov[px as usize] += sign * o as i32;
-            }
-        }
-    };
-    for py in y0..y1 {
-        for v in cov.iter_mut() {
-            *v = 0;
-        }
-        for sub in 0..4 {
-            let dy = py as i64 * 8 + sub * 2 + 1 - cy8;
-            let Some(hw) = span(a8, b8, dy) else { continue };
-            add(&mut cov, cx8 - hw, cx8 + hw, 1);
-            if t > 0 {
-                if let Some(iw) = span(a8 - t8, b8 - t8, dy) {
-                    add(&mut cov, cx8 - iw, cx8 + iw, -1);
-                }
-            }
-        }
-        for (m, &v) in row.iter_mut().zip(cov.iter()) {
-            *m = (v.clamp(0, 32) * 255 / 32) as u8;
-        }
-        c.mask(r.x, py, r.w, 1, &row, col);
-    }
-}
-
-fn isqrt(n: i64) -> i64 {
-    if n <= 0 {
-        return 0;
-    }
-    let mut x = n;
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
-
-fn frame(c: &mut Canvas, r: Rect, t: i32, col: Color) {
-    c.fill_rect(Rect::new(r.x, r.y, r.w, t), col);
-    c.fill_rect(Rect::new(r.x, r.b() - t, r.w, t), col);
-    c.fill_rect(Rect::new(r.x, r.y, t, r.h), col);
-    c.fill_rect(Rect::new(r.r() - t, r.y, t, r.h), col);
-}
-
-/// Draw a slide `wpx` pixels wide at (x0, y0). In the editor (`prompts`),
-/// empty placeholders show their prompt, except the one being typed in.
-fn draw_slide(c: &mut Canvas, x0: i32, y0: i32, wpx: i32, deck: &Deck, slide: &Slide, pics: &mut Pics, prompts: Option<Option<usize>>) {
-    let k = |u: i32| (u as i64 * wpx as i64 / deck.w.max(1) as i64) as i32;
-    let hpx = k(deck.h);
-    let old = c.set_clip(c.clip.intersect(&Rect::new(x0, y0, wpx, hpx)));
-    let t = &deck.theme;
-    c.fill_rect(Rect::new(x0, y0, wpx, hpx), Color::rgb(slide.bg.unwrap_or(t.bg)));
-    for dc in &t.deco {
-        let (x, y, w, h) = dc.place(deck.w, deck.h);
-        let r = Rect::new(x0 + k(x), y0 + k(y), k(x + w) - k(x), k(y + h) - k(y));
-        if dc.ellipse {
-            ellipse(c, r, Color::rgb(dc.color), 0);
-        } else {
-            c.fill_rect(r, Color::rgb(dc.color));
-        }
-    }
-    for (si, sh) in slide.shapes.iter().enumerate() {
-        let r = Rect::new(x0 + k(sh.x), y0 + k(sh.y), k(sh.x + sh.w) - k(sh.x), k(sh.y + sh.h) - k(sh.y));
-        match sh.kind {
-            Kind::Picture => {
-                if let Some(px) = sh.pic.and_then(|p| pics.get(deck, p, r.w, r.h)) {
-                    c.blend_argb(&px, r.w, r.h, r.x, r.y);
-                } else {
-                    c.fill_rect(r, Color::rgb(0xD8D2C8));
-                }
-                continue;
-            }
-            Kind::Rect | Kind::Ellipse => {
-                let fill = sh.fill.unwrap_or(t.accent);
-                if sh.kind == Kind::Ellipse {
-                    ellipse(c, r, Color::rgb(fill), 0);
-                    if let Some(l) = sh.line {
-                        ellipse(c, r, Color::rgb(l), (k(3)).max(1));
-                    }
-                } else {
-                    c.fill_rect(r, Color::rgb(fill));
-                    if let Some(l) = sh.line {
-                        frame(c, r, k(3).max(1), Color::rgb(l));
-                    }
-                }
-            }
-            _ => {
-                if let Some(f) = sh.fill {
-                    c.fill_rect(r, Color::rgb(f));
-                }
-                if let Some(l) = sh.line {
-                    frame(c, r, k(3).max(1), Color::rgb(l));
-                }
-            }
-        }
-        if sh.is_empty() {
-            if let Some(ed) = prompts {
-                if sh.kind.placeholder() && ed != Some(si) {
-                    // the placeholder's outline and prompt
-                    let dim = if light(slide.bg.unwrap_or(t.bg)) { Color::rgb(0x9A938A) } else { Color::rgb(0x8C88A0) };
-                    let mut x = r.x;
-                    while x < r.r() {
-                        c.fill_rect(Rect::new(x, r.y, 6.min(r.r() - x), 1), dim);
-                        c.fill_rect(Rect::new(x, r.b() - 1, 6.min(r.r() - x), 1), dim);
-                        x += 10;
-                    }
-                    let mut y = r.y;
-                    while y < r.b() {
-                        c.fill_rect(Rect::new(r.x, y, 1, 6.min(r.b() - y)), dim);
-                        c.fill_rect(Rect::new(r.r() - 1, y, 1, 6.min(r.b() - y)), dim);
-                        y += 10;
-                    }
-                    let mut p = sh.clone();
-                    p.text = Doc::new();
-                    p.text.paras[0].align = sh.text.paras[0].align;
-                    p.text.paras[0].push(sh.kind.prompt(), 0);
-                    draw_text(c, x0, y0, wpx, deck, &p, dim);
-                }
-            }
-            continue;
-        }
-        draw_text(c, x0, y0, wpx, deck, sh, Color::rgb(deckio::text_color(sh, t)));
-    }
-    c.set_clip(old);
-}
-
-/// Draw a shape's text: laid out in slide units, placed glyph by glyph.
-fn draw_text(c: &mut Canvas, x0: i32, y0: i32, wpx: i32, deck: &Deck, sh: &Shape, col: Color) {
-    let tb = layout(sh);
-    let (num, den) = (wpx as i64, deck.w.max(1) as i64);
-    let k = |u: i64| (u * num / den) as i32;
-    let mut buf = [0u8; 4];
-    for l in &tb.lines {
-        let p = &sh.text.paras[l.p];
-        let px = k(l.px as i64).max(1);
-        let base = y0 + k((sh.y + l.base) as i64);
-        if let Some((bx, mark)) = &l.bullet {
-            let f = face_for(sh.kind, p.fmt.first().copied().unwrap_or(0) & !(BOLD | ITALIC));
-            font::draw(c, x0 + k((sh.x + bx) as i64), base, f, px, mark, col);
-        }
-        // pen in 1/64 unit
-        let mut pen: i64 = 0;
-        let left = (sh.x + l.x) as i64 * 64;
-        let mut run_start: Option<(i32, u8)> = None;
-        for i in l.start..l.end {
-            let ch = p.text[i];
-            let f = p.fmt[i];
-            let face = face_for(sh.kind, f);
-            let gx = x0 + ((left + pen) * num / den / 64) as i32;
-            if run_start.map_or(true, |(_, rf)| rf != f & (UNDERLINE | STRIKE)) {
-                run_start = Some((gx, f & (UNDERLINE | STRIKE)));
-            }
-            if ch != ' ' && ch != '\t' {
-                font::draw(c, gx, base, face, px, ch.encode_utf8(&mut buf), col);
-            }
-            pen += font::advance64(face, l.px, if ch == '\t' { ' ' } else { ch }) as i64;
-            // underline / strikethrough under this character
-            if f & (UNDERLINE | STRIKE) != 0 {
-                let gx2 = x0 + ((left + pen) * num / den / 64) as i32;
-                let th = (px / 14).max(1);
-                if f & UNDERLINE != 0 {
-                    c.fill_rect(Rect::new(gx, base + px / 9, gx2 - gx, th), col);
-                }
-                if f & STRIKE != 0 {
-                    c.fill_rect(Rect::new(gx, base - px * 3 / 10, gx2 - gx, th), col);
-                }
-            }
-        }
-    }
-}
-
-/// Copy `src` into `dst` at (x, y), inside `dst`'s clip.
-fn blit(dst: &mut Canvas, src: &Canvas, x: i32, y: i32) {
-    let r = Rect::new(x, y, src.w, src.h).intersect(&dst.clip);
-    for yy in r.y..r.b() {
-        let a = (yy * dst.w + r.x) as usize;
-        let b = ((yy - y) * src.w + (r.x - x)) as usize;
-        dst.px[a..a + r.w as usize].copy_from_slice(&src.px[b..b + r.w as usize]);
-    }
+    /// (slide, width, height, deck generation, animation steps shown) and the picture
+    frame: Option<(usize, i32, i32, u64, usize, Canvas)>,
+    /// animation steps shown on this slide; one playing since a tick
+    step: usize,
+    playing: Option<u64>,
+    /// the frame before the playing step (for fading)
+    before: Option<Canvas>,
+    presenter: bool,
+    started: u64,
+    next: Option<(usize, i32, u64, Canvas)>,
 }
 
 // ---- the app ----------------------------------------------------------------
@@ -402,6 +232,8 @@ pub struct Slides {
     thumb_gen: Vec<u64>,
     pics: Pics,
     ticks: u64,
+    /// the table cell being typed in, as a shape of its own
+    cell_sh: Option<Shape>,
 }
 
 impl Slides {
@@ -434,6 +266,7 @@ impl Slides {
             thumb_gen: vec![],
             pics: Pics::default(),
             ticks: 0,
+            cell_sh: None,
         };
         s.touch_all();
         s
@@ -456,6 +289,26 @@ impl Slides {
 
     /// The current slide changed.
     fn touch(&mut self) {
+        // typing in a table cell: the cell takes the text, rows grow to fit it
+        if let (Some(ed), Some(cs)) = (self.ed, self.cell_sh.as_mut()) {
+            if let Some((r, c)) = ed.cell {
+                let cur = self.cur;
+                if let Some(sh) = self.deck.slides[cur].shapes.get_mut(ed.shape) {
+                    if let Some(t) = sh.table.as_mut() {
+                        if r < t.nrows() && c < t.ncols() {
+                            *t.cell_mut(r, c) = cs.text.clone();
+                        }
+                    }
+                    sh.fit_table();
+                    if let Some(n) = sh.cell_shape(r, c) {
+                        cs.x = n.x;
+                        cs.y = n.y;
+                        cs.w = n.w;
+                        cs.h = n.h;
+                    }
+                }
+            }
+        }
         self.gen += 1;
         self.dirty = true;
         if self.thumb_gen.len() != self.deck.slides.len() {
@@ -519,10 +372,51 @@ impl Slides {
     }
 
     fn stop_edit(&mut self) {
-        if let Some(ed) = self.ed.take() {
-            let _ = ed;
+        if self.ed.is_some() {
+            self.touch();
+            self.ed = None;
+            self.cell_sh = None;
             self.touch();
         }
+    }
+
+    /// Start typing in cell (r, c) of table `shape`.
+    fn start_cell_edit(&mut self, shape: usize, r: usize, c: usize, caret: Option<Pos>) {
+        self.notes = None;
+        let Some(cs) = self.slide().shapes.get(shape).and_then(|s| s.cell_shape(r, c)) else { return };
+        let caret = caret.map(|p| cs.text.clamp(p)).unwrap_or(cs.text.end());
+        if self.ed.is_some() {
+            self.touch();
+        }
+        self.sel = Some(shape);
+        self.cell_sh = Some(cs);
+        self.ed = Some(TextEd { shape, cell: Some((r, c)), caret, anchor: None, typing: false });
+        self.touch();
+    }
+
+    /// The text being typed in, as a shape (a table cell's box for a cell).
+    fn text_target(&self) -> Option<Shape> {
+        let ed = self.ed?;
+        if ed.cell.is_some() {
+            return self.cell_sh.clone();
+        }
+        self.slide().shapes.get(ed.shape).cloned()
+    }
+
+    /// The text that formatting commands change.
+    fn target_doc(&mut self) -> Option<&mut Doc> {
+        if let Some(ed) = self.ed {
+            if ed.cell.is_some() {
+                return self.cell_sh.as_mut().map(|s| &mut s.text);
+            }
+        }
+        let i = self.sel?;
+        let c = self.cur;
+        let sh = self.deck.slides[c].shapes.get_mut(i)?;
+        if !sh.kind.has_text() {
+            return None;
+        }
+        Some(&mut sh.text)
     }
 
     fn start_edit(&mut self, shape: usize, caret: Option<Pos>) {
@@ -533,7 +427,8 @@ impl Slides {
         }
         let caret = caret.map(|c| sh.text.clamp(c)).unwrap_or(sh.text.end());
         self.sel = Some(shape);
-        self.ed = Some(TextEd { shape, caret, anchor: None, typing: false });
+        self.cell_sh = None;
+        self.ed = Some(TextEd { shape, cell: None, caret, anchor: None, typing: false });
         self.touch();
     }
 
@@ -678,6 +573,9 @@ impl Slides {
 
     fn ed_shape(&mut self) -> Option<(&mut Shape, &mut TextEd)> {
         let ed = self.ed.as_mut()?;
+        if ed.cell.is_some() {
+            return Some((self.cell_sh.as_mut()?, ed));
+        }
         let c = self.cur;
         let sh = self.deck.slides[c].shapes.get_mut(ed.shape)?;
         Some((sh, ed))
@@ -860,63 +758,67 @@ impl Slides {
     /// Bold / italic / underline: on the selection, or the whole shape when it's
     /// only selected.
     fn toggle_fmt(&mut self, bit: u8) {
-        let Some(i) = self.sel else { return };
-        if !self.slide().shapes[i].kind.has_text() {
+        let ed = self.ed;
+        let range = ed.and_then(|e| Self::sel_range(&e));
+        if self.target_doc().is_none() {
             return;
         }
         self.snapshot();
-        let range = match self.ed {
-            Some(ed) => Self::sel_range(&ed),
-            None => None,
-        };
-        let c = self.cur;
-        let sh = &mut self.deck.slides[c].shapes[i];
-        let (a, b) = range.unwrap_or((Pos::new(0, 0), sh.text.end()));
+        let Some(doc) = self.target_doc() else { return };
+        let (a, b) = range.unwrap_or((Pos::new(0, 0), doc.end()));
         if a == b {
-            // nothing selected: the next characters typed (the word at the caret)
-            if let Some(ed) = self.ed {
-                let (ws, we) = sh.text.word_at(ed.caret);
+            // nothing selected: the word at the caret
+            if let Some(ed) = ed {
+                let (ws, we) = doc.word_at(ed.caret);
                 if ws != we {
-                    let on = !sh.text.all_have(ws, we, bit);
-                    sh.text.set_fmt(ws, we, bit, on);
+                    let on = !doc.all_have(ws, we, bit);
+                    doc.set_fmt(ws, we, bit, on);
                 }
             }
         } else {
-            let on = !sh.text.all_have(a, b, bit);
-            sh.text.set_fmt(a, b, bit, on);
+            let on = !doc.all_have(a, b, bit);
+            doc.set_fmt(a, b, bit, on);
         }
         self.touch();
     }
 
     /// Paragraphs the caret / selection touches (all, when the shape is only selected).
-    fn para_range(&self) -> Option<(usize, usize, usize)> {
-        let i = self.sel?;
-        let sh = self.slide().shapes.get(i)?;
+    fn para_range(&self) -> Option<(usize, usize)> {
+        if let Some(ed) = self.ed {
+            let a = ed.anchor.unwrap_or(ed.caret);
+            return Some((a.p.min(ed.caret.p), a.p.max(ed.caret.p)));
+        }
+        let sh = self.shape()?;
         if !sh.kind.has_text() {
             return None;
         }
-        Some(match self.ed {
-            Some(ed) => {
-                let a = ed.anchor.unwrap_or(ed.caret);
-                (i, a.p.min(ed.caret.p), a.p.max(ed.caret.p))
-            }
-            None => (i, 0, sh.text.paras.len() - 1),
-        })
+        Some((0, sh.text.paras.len() - 1))
+    }
+
+    /// The paragraph the toolbar shows the state of.
+    fn cur_para(&self) -> Option<crate::doc::Para> {
+        let (a, _) = self.para_range()?;
+        self.text_target().or_else(|| self.shape().cloned()).and_then(|s| s.text.paras.get(a).cloned())
     }
 
     fn each_para(&mut self, f: impl Fn(&mut crate::doc::Para)) {
-        let Some((i, a, b)) = self.para_range() else { return };
+        let Some((a, b)) = self.para_range() else { return };
+        if self.target_doc().is_none() {
+            return;
+        }
         self.snapshot();
-        let c = self.cur;
-        for p in self.deck.slides[c].shapes[i].text.paras[a..=b].iter_mut() {
-            f(p);
+        if let Some(doc) = self.target_doc() {
+            let b = b.min(doc.paras.len() - 1);
+            for p in doc.paras[a.min(b)..=b].iter_mut() {
+                f(p);
+            }
         }
         self.touch();
     }
 
     fn set_list(&mut self, style: Style) {
-        let Some((i, a, _)) = self.para_range() else { return };
-        let on = self.slide().shapes[i].text.paras[a].style != style;
+        let Some(p) = self.cur_para() else { return };
+        let on = p.style != style;
         self.each_para(move |p| p.style = if on { style } else { Style::Body });
     }
 
@@ -940,29 +842,10 @@ impl Slides {
         self.touch();
     }
 
-    fn set_color(&mut self, col: Option<u32>) {
-        let Some(i) = self.sel else {
-            // no shape: the slide's background
-            self.snapshot();
-            self.slide_mut().bg = col;
-            self.touch();
-            return;
-        };
-        self.snapshot();
-        let c = self.cur;
-        let sh = &mut self.deck.slides[c].shapes[i];
-        match sh.kind {
-            Kind::Rect | Kind::Ellipse => sh.fill = col,
-            Kind::Picture => sh.line = col,
-            _ => sh.color = col,
-        }
-        self.touch();
-    }
-
     fn copy(&mut self, sys: &mut Sys) {
         if let Some(ed) = self.ed {
             if let Some((a, b)) = Self::sel_range(&ed) {
-                let sh = &self.slide().shapes[ed.shape];
+                let Some(sh) = self.text_target() else { return };
                 sys.clipboard = Doc::plain(&sh.text.slice(a, b));
                 self.clip_shape = None;
             }
@@ -1167,16 +1050,32 @@ impl Slides {
         self.notes = None;
         self.overlay = Overlay::None;
         let idx = if from_start { 0 } else { self.cur };
-        self.show = Some(Show { idx, from: None, end: false, black: false, frame: None });
+        self.show = Some(Show { idx, from: None, end: false, black: false, frame: None, step: 0, playing: None, before: None, presenter: false, started: self.ticks, next: None });
     }
 
     fn show_step(&mut self, forward: bool) {
         let n = self.deck.slides.len();
+        let ticks = self.ticks;
         let Some(sh) = self.show.as_mut() else { return };
         sh.black = false;
+        let steps = anim_steps(&self.deck.slides[sh.idx.min(n - 1)]).len();
         if forward {
             if sh.end {
+                let idx = sh.idx;
                 self.show = None;
+                self.go(idx.min(n - 1));
+                return;
+            }
+            if sh.playing.is_some() {
+                // a click during an animation finishes it
+                sh.playing = None;
+                sh.before = None;
+                return;
+            }
+            if sh.step < steps {
+                sh.before = sh.frame.as_ref().map(|f| clone_canvas(&f.5));
+                sh.step += 1;
+                sh.playing = Some(ticks);
                 return;
             }
             if sh.idx + 1 >= n {
@@ -1184,20 +1083,24 @@ impl Slides {
                 sh.from = None;
                 return;
             }
-            let prev = sh.frame.take().map(|f| f.4);
+            let prev = sh.frame.take().map(|f| f.5);
             sh.idx += 1;
-            if self.deck.slides[sh.idx].trans != Trans::None {
-                sh.from = prev.map(|c| (c, self.ticks));
-            } else {
-                sh.from = None;
-            }
+            sh.step = 0;
+            sh.from = if self.deck.slides[sh.idx].trans != Trans::None { prev.map(|c| (c, ticks)) } else { None };
         } else {
             if sh.end {
                 sh.end = false;
                 return;
             }
+            sh.playing = None;
+            sh.before = None;
+            if sh.step > 0 {
+                sh.step -= 1;
+                return;
+            }
             if sh.idx > 0 {
                 sh.idx -= 1;
+                sh.step = anim_steps(&self.deck.slides[sh.idx]).len();
                 sh.from = None;
                 sh.frame = None;
             }
@@ -1209,8 +1112,11 @@ impl Slides {
         let full = r.scale(s);
         ui.c.fill_rect(full, Color::rgb(0));
         ui.zone(r, Action::App(inst, C_SHOW));
-        let ticks = self.ticks;
-        let Some(show) = self.show.as_mut() else { return };
+        let Some(show) = self.show.as_ref() else { return };
+        if show.presenter {
+            self.render_presenter(ui, r);
+            return;
+        }
         if show.end || show.black {
             if show.end {
                 ui.text_in(Rect::new(r.x, r.y + r.h / 2 - 20, r.w, 40), Face::Regular, 15, "End of slideshow. Click or press Esc to leave.", Color::rgb(0xB8B4C4), 1);
@@ -1225,51 +1131,148 @@ impl Slides {
             w = h * dw / dh;
         }
         let (w, h) = (w as i32, h as i32);
-        let (x, y) = (full.x + (full.w - w) / 2, full.y + (full.h - h) / 2);
+        self.draw_current(ui.c, full.x + (full.w - w) / 2, full.y + (full.h - h) / 2, w, h);
+    }
+
+    /// The slide being shown, drawn at (x, y) w × h pixels: its animations
+    /// and the transition into it.
+    fn draw_current(&mut self, c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+        let ticks = self.ticks;
+        let gen = self.gen;
+        let Some(show) = self.show.as_mut() else { return };
         let idx = show.idx.min(self.deck.slides.len() - 1);
-        let fresh = !matches!(&show.frame, Some((i, fw, fh, g, _)) if *i == idx && *fw == w && *fh == h && *g == self.gen);
+        let slide = &self.deck.slides[idx];
+        let steps = anim_steps(slide);
+        let step = show.step.min(steps.len());
+        let fresh = !matches!(&show.frame, Some((i, fw, fh, g, st, _)) if *i == idx && *fw == w && *fh == h && *g == gen && *st == step);
         if fresh {
-            let mut c = Canvas::new(w, h);
-            draw_slide(&mut c, 0, 0, w, &self.deck, &self.deck.slides[idx], &mut self.pics, None);
-            show.frame = Some((idx, w, h, self.gen, c));
+            let mut cv = Canvas::new(w, h);
+            let o = Opts { number: idx + 1, shown: Some(step), ..Opts::default() };
+            draw_slide(&mut cv, 0, 0, w, &self.deck, slide, &mut self.pics, &o);
+            show.frame = Some((idx, w, h, gen, step, cv));
         }
-        let cur = &show.frame.as_ref().unwrap().4;
-        match &show.from {
-            Some((prev, t0)) if prev.w == w && prev.h == h && ticks < t0 + TRANS_TICKS => {
-                let p = ((ticks - t0) * 256 / TRANS_TICKS) as u32;
-                // ease in-out
-                let e = if p < 128 { p * p / 64 } else { 256 - (256 - p) * (256 - p) / 64 };
-                match self.deck.slides[idx].trans {
-                    Trans::Push => {
-                        let off = (h as u32 * e / 256) as i32;
-                        let old = ui.c.set_clip(ui.c.clip.intersect(&Rect::new(x, y, w, h)));
-                        blit(ui.c, prev, x, y - off);
-                        blit(ui.c, cur, x, y + h - off);
-                        ui.c.set_clip(old);
+        // an animation playing
+        if let Some(t0) = show.playing {
+            let p = ((ticks.saturating_sub(t0)) * 256 / ANIM_TICKS).min(256) as u32;
+            let e = if p < 128 { p * p / 128 } else { 256 - (256 - p) * (256 - p) / 128 };
+            let who = steps.get(step.wrapping_sub(1)).copied();
+            if p >= 256 || who.is_none() {
+                show.playing = None;
+                show.before = None;
+            } else {
+                let who = who.unwrap();
+                match slide.shapes[who].anim {
+                    Anim::Fly => {
+                        let dy = ((self.deck.h - slide.shapes[who].y) as i64 * (256 - e) as i64 / 256) as i32;
+                        let mut cv = Canvas::new(w, h);
+                        let o = Opts { number: idx + 1, shown: Some(step - 1), flying: Some((who, dy)), ..Opts::default() };
+                        draw_slide(&mut cv, 0, 0, w, &self.deck, slide, &mut self.pics, &o);
+                        blit(c, &cv, x, y);
+                        return;
                     }
-                    _ => {
-                        let a = e.min(256);
-                        let clip = ui.c.clip;
-                        for yy in 0..h {
-                            let py = y + yy;
-                            if py < clip.y || py >= clip.b() {
-                                continue;
-                            }
-                            let row = (py * ui.c.w + x) as usize;
-                            let src = (yy * w) as usize;
-                            for xx in 0..w as usize {
-                                let (pa, pb) = (prev.px[src + xx], cur.px[src + xx]);
-                                ui.c.px[row + xx] = mixp(pa, pb, a);
+                    Anim::Fade => {
+                        if let (Some(before), Some(f)) = (&show.before, &show.frame) {
+                            if before.w == w && before.h == h {
+                                blend(c, before, &f.5, x, y, e);
+                                return;
                             }
                         }
                     }
+                    _ => {
+                        show.playing = None;
+                    }
+                }
+            }
+        }
+        let cur = &show.frame.as_ref().unwrap().5;
+        match &show.from {
+            Some((prev, t0)) if prev.w == w && prev.h == h && ticks < t0 + TRANS_TICKS => {
+                let p = ((ticks - t0) * 256 / TRANS_TICKS) as u32;
+                let e = if p < 128 { p * p / 128 } else { 256 - (256 - p) * (256 - p) / 128 };
+                if slide.trans == Trans::Push {
+                    let off = (h as u32 * e / 256) as i32;
+                    let old = c.set_clip(c.clip.intersect(&Rect::new(x, y, w, h)));
+                    blit(c, prev, x, y - off);
+                    blit(c, cur, x, y + h - off);
+                    c.set_clip(old);
+                } else {
+                    blend(c, prev, cur, x, y, e);
                 }
             }
             _ => {
                 show.from = None;
-                blit(ui.c, cur, x, y);
+                blit(c, cur, x, y);
             }
         }
+    }
+
+    /// Presenter view: this slide, the next one, the notes and a clock.
+    fn render_presenter(&mut self, ui: &mut Ui, r: Rect) {
+        let s = ui.s;
+        let (bg, text, dim) = (Color::rgb(0x16151D), Color::rgb(0xECE8F4), Color::rgb(0x9C98AC));
+        ui.rect(r, bg);
+        let n = self.deck.slides.len();
+        let Some(show) = self.show.as_ref() else { return };
+        let (idx, end, step, started) = (show.idx.min(n - 1), show.end, show.step, show.started);
+        let secs = (self.ticks.saturating_sub(started) / 100) as u32;
+        let clock = format!("{:02}:{:02}", secs / 60, secs % 60);
+        ui.text(r.x + 24, r.y + 34, Face::Semibold, 15, &format!("Slide {} of {}", idx + 1, n), text);
+        let cw = ui.tw(Face::Semibold, 22, &clock);
+        ui.text(r.x + (r.w - cw) / 2, r.y + 36, Face::Semibold, 22, &clock, Color::rgb(0xF2B544));
+        let hint = "Click or → next  ·  ← back  ·  V audience view  ·  Esc end";
+        let hw = ui.tw(Face::Regular, 12, hint);
+        ui.text(r.r() - hw - 24, r.y + 33, Face::Regular, 12, hint, dim);
+        // this slide
+        let mw = r.w * 62 / 100 - 36;
+        let mh = (mw * self.deck.h / self.deck.w).min(r.h - 64 - 150);
+        let mw = mh * self.deck.w / self.deck.h;
+        let main = Rect::new(r.x + 24, r.y + 64, mw, mh);
+        if end {
+            ui.rect(main, Color::rgb(0));
+            ui.text_in(main, Face::Regular, 15, "End of slideshow", dim, 1);
+        } else {
+            self.draw_current(ui.c, main.x * s, main.y * s, main.w * s, main.h * s);
+        }
+        // next
+        let col = Rect::new(main.r() + 24, main.y, r.r() - main.r() - 48, 0);
+        ui.text(col.x, col.y + 14, Face::Semibold, 13, "NEXT", dim);
+        let nh = col.w * self.deck.h / self.deck.w;
+        let nr = Rect::new(col.x, col.y + 26, col.w, nh);
+        let steps = anim_steps(&self.deck.slides[idx]).len();
+        if step < steps && !end {
+            ui.rect(nr, Color::rgb(0x24222E));
+            ui.text_in(nr, Face::Regular, 14, &format!("{} more on this slide", steps - step), dim, 1);
+        } else if idx + 1 < n && !end {
+            let key = (idx + 1, nr.w * s, self.gen);
+            let stale = !matches!(&self.show.as_ref().unwrap().next, Some((i, w, g, _)) if (*i, *w, *g) == key);
+            if stale {
+                let mut cv = Canvas::new(nr.w * s, nr.h * s);
+                let o = Opts { number: idx + 2, ..Opts::default() };
+                draw_slide(&mut cv, 0, 0, nr.w * s, &self.deck, &self.deck.slides[idx + 1], &mut self.pics, &o);
+                self.show.as_mut().unwrap().next = Some((key.0, key.1, key.2, cv));
+            }
+            if let Some((_, _, _, cv)) = &self.show.as_ref().unwrap().next {
+                blit(ui.c, cv, nr.x * s, nr.y * s);
+            }
+        } else {
+            ui.rect(nr, Color::rgb(0x24222E));
+            ui.text_in(nr, Face::Regular, 14, "End of slideshow", dim, 1);
+        }
+        // notes
+        let notes = self.deck.slides[idx].notes.clone();
+        let ny = main.b() + 24;
+        ui.text(main.x, ny + 14, Face::Semibold, 13, "NOTES", dim);
+        let area = Rect::new(main.x, ny + 24, r.r() - main.x - 24, r.b() - ny - 36);
+        let old = ui.clip_in(area);
+        let mut y = area.y + 20;
+        if notes.is_empty() {
+            ui.text(area.x, y, Face::Regular, 16, "No notes for this slide.", dim);
+        }
+        for line in ui.wrap(Face::Regular, 18, &notes, area.w) {
+            ui.text(area.x, y, Face::Regular, 18, &line, text);
+            y += 26;
+        }
+        ui.set_clip(old);
     }
 
     // ---- drawing the editor ---------------------------------------------------------
@@ -1289,10 +1292,6 @@ impl Slides {
         Rect::new(x, y, self.canvas.x + self.to_screen(sh.x + sh.w) - x, self.canvas.y + self.to_screen(sh.y + sh.h) - y)
     }
 
-    fn handles(r: Rect) -> [(i32, i32); 8] {
-        let (cx, cy) = (r.x + r.w / 2, r.y + r.h / 2);
-        [(r.x, r.y), (cx, r.y), (r.r(), r.y), (r.r(), cy), (r.r(), r.b()), (cx, r.b()), (r.x, r.b()), (r.x, cy)]
-    }
 
     fn tool(&self, ui: &mut Ui, r: Rect, label: &str, icon: Option<Icon>, face: Face, code: u32, inst: u32, on: bool, enabled: bool) {
         let t = ui.t;
@@ -1317,10 +1316,12 @@ impl Slides {
     }
 
     fn cur_fmt(&self) -> u8 {
-        let Some(sh) = self.shape() else { return 0 };
+        let Some(sh) = self.text_target().or_else(|| self.shape().cloned()) else { return 0 };
+        let sh = &sh;
         match self.ed {
             Some(ed) => {
                 let (a, b) = Self::sel_range(&ed).unwrap_or((ed.caret, ed.caret));
+                let a = sh.text.clamp(a);
                 if a == b {
                     sh.text.fmt_at(a)
                 } else {
@@ -1340,7 +1341,7 @@ impl Slides {
         let sep = |ui: &mut Ui, x: i32| ui.rect(Rect::new(x, y + 12, 1, 20), t.line);
         let text_on = self.shape().map_or(false, |s| s.kind.has_text());
         let fmt = self.cur_fmt();
-        let para = self.para_range().map(|(i, a, _)| self.slide().shapes[i].text.paras[a].clone());
+        let para = self.cur_para();
         let mut x = r.x + 10;
         // new slide
         let nr = b(x, if compact { 34 } else { 92 });
@@ -1355,7 +1356,11 @@ impl Slides {
         ui.zone(nr, na);
         x = nr.r() + 6;
         if !compact {
-            self.tool(ui, b(x, 64), "Layout", None, Face::Medium, C_LAYOUT, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Layout, _)), true);
+            match self.shape().map(|s| s.kind) {
+                Some(Kind::Table) => self.tool(ui, b(x, 64), "Table ›", None, Face::Medium, C_OBJECT, inst, matches!(self.overlay, Overlay::Menu(MenuKind::TableEdit, _)), true),
+                Some(Kind::Chart) => self.tool(ui, b(x, 64), "Chart ›", None, Face::Medium, C_OBJECT, inst, matches!(self.overlay, Overlay::Menu(MenuKind::ChartEdit, _)), true),
+                _ => self.tool(ui, b(x, 64), "Layout", None, Face::Medium, C_LAYOUT, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Layout, _)), true),
+            }
             x += 70;
         }
         sep(ui, x - 3);
@@ -1387,16 +1392,12 @@ impl Slides {
         }
         self.tool(ui, b(x, 30), "", Some(Icon::TextBox), Face::Regular, C_TEXTBOX, inst, false, true);
         x += 32;
-        self.tool(ui, b(x, 30), "", Some(Icon::Shapes), Face::Regular, C_RECT, inst, false, true);
+        self.tool(ui, b(x, 30), "", Some(Icon::Shapes), Face::Regular, C_RECT, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Shapes, _)), true);
         x += 32;
         if !compact {
-            let er = b(x, 30);
-            let a = Action::App(inst, C_ELLIPSE);
-            if ui.hot(a) {
-                ui.rrect(er, 8, t.hover);
-            }
-            ui.c.stroke_rrect(Rect::new(er.x + 7, er.y + 8, 16, 16).scale(ui.s), 8 * ui.s, 2 * ui.s, t.text);
-            ui.zone(er, a);
+            self.tool(ui, b(x, 30), "", Some(Icon::Table), Face::Regular, C_TABLE, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Table, _)), true);
+            x += 32;
+            self.tool(ui, b(x, 30), "", Some(Icon::Chart), Face::Regular, C_CHART, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Chart, _)), true);
             x += 32;
         }
         self.tool(ui, b(x, 30), "", Some(Icon::Image), Face::Regular, C_PICTURE, inst, false, true);
@@ -1411,6 +1412,8 @@ impl Slides {
         let swatch = match self.shape() {
             Some(sh) if matches!(sh.kind, Kind::Rect | Kind::Ellipse) => sh.fill.unwrap_or(self.deck.theme.accent),
             Some(sh) if sh.kind == Kind::Picture => sh.line.unwrap_or(0xFFFFFF),
+            Some(sh) if sh.kind == Kind::Line => sh.line.unwrap_or(self.deck.theme.text),
+            Some(sh) if sh.kind == Kind::Chart => self.deck.theme.accent,
             Some(sh) => deckio::text_color(sh, &self.deck.theme),
             None => self.slide().bg.unwrap_or(self.deck.theme.bg),
         };
@@ -1425,6 +1428,11 @@ impl Slides {
             if x + 150 < r.r() {
                 self.tool(ui, b(x, 84), "Transition", None, Face::Medium, C_TRANS, inst, matches!(self.overlay, Overlay::Menu(MenuKind::Trans, _)), true);
                 x += 88;
+            }
+            if x + 140 < r.r() {
+                let animated = self.shape().map_or(false, |s| s.anim != Anim::None);
+                self.tool(ui, b(x, 70), "Animate", None, Face::Medium, C_ANIM, inst, animated || matches!(self.overlay, Overlay::Menu(MenuKind::Anim, _)), self.sel.is_some());
+                x += 74;
             }
             sep(ui, x - 3);
             if x + 70 < r.r() {
@@ -1467,7 +1475,7 @@ impl Slides {
             if stale {
                 let big = (pw * 3).max(360);
                 let mut c = Canvas::new(big, big * self.deck.h / self.deck.w);
-                draw_slide(&mut c, 0, 0, big, &self.deck, &self.deck.slides[i], &mut self.pics, None);
+                draw_slide(&mut c, 0, 0, big, &self.deck, &self.deck.slides[i], &mut self.pics, &Opts { number: i + 1, ..Opts::default() });
                 let mut small = Canvas::new(pw, th * s);
                 let b = small.bounds();
                 small.blit_scaled(&c, b, 0);
@@ -1513,7 +1521,8 @@ impl Slides {
         let key = (self.gen, self.cur, r.w * s, editing);
         if self.view.as_ref().map_or(true, |(k, _)| *k != key) {
             let mut c = Canvas::new(r.w * s, r.h * s);
-            draw_slide(&mut c, 0, 0, r.w * s, &self.deck, &self.deck.slides[self.cur], &mut self.pics, Some(editing));
+            let o = Opts { prompts: true, editing, number: self.cur + 1, ..Opts::default() };
+            draw_slide(&mut c, 0, 0, r.w * s, &self.deck, &self.deck.slides[self.cur], &mut self.pics, &o);
             self.view = Some((key, c));
         }
         if let Some((_, c)) = &self.view {
@@ -1522,46 +1531,92 @@ impl Slides {
             ui.set_clip(old);
         }
         let old = ui.clip_in(area);
+        // animation order badges
+        let steps = anim_steps(self.slide());
+        for (k, &i) in steps.iter().enumerate() {
+            let sh = &self.slide().shapes[i];
+            let (bx, by) = (self.canvas.x + self.to_screen(sh.x) - 6, self.canvas.y + self.to_screen(sh.y) - 6);
+            ui.circle(bx, by, 9, t.accent);
+            ui.text_in(Rect::new(bx - 9, by - 9, 18, 18), Face::Semibold, 11, &format!("{}", k + 1), t.on_accent, 1);
+        }
         // selection, caret
-        if let Some(i) = self.sel {
-            if let Some(sh) = self.slide().shapes.get(i).cloned() {
-                let sr = self.shape_rect(&sh);
-                if let Some(ed) = self.ed.filter(|e| e.shape == i) {
-                    ui.stroke(sr.inset(-2), 0, 1, t.accent);
-                    let tb = layout(&sh);
-                    // selection highlight
-                    if let Some((a, b)) = Self::sel_range(&ed) {
-                        for l in &tb.lines {
-                            let (ls, le) = (Pos::new(l.p, l.start), Pos::new(l.p, l.end));
-                            if le < a || ls > b {
-                                continue;
-                            }
-                            let p = &sh.text.paras[l.p];
-                            let s0 = if a > ls { a.i } else { l.start };
-                            let e0 = if b < le { b.i } else { l.end };
-                            let x0 = l.x + span_w(sh.kind, p, l.start, s0, l.px);
-                            let x1 = l.x + span_w(sh.kind, p, l.start, e0, l.px).max(x0 - l.x + l.x + if b > le { 6 } else { 0 });
-                            let hr = Rect::new(sr.x + self.to_screen(x0), sr.y + self.to_screen(l.top), self.to_screen(x1 - x0).max(2), self.to_screen(l.h).max(2));
-                            ui.rect(hr, t.accent.with_alpha(70));
-                        }
+        if let (Some(ed), Some(sh)) = (self.ed, self.text_target()) {
+            let sr = self.shape_rect(&sh);
+            ui.stroke(sr.inset(-2), 0, 1, t.accent);
+            let tb = layout(&sh);
+            if let Some((a, b)) = Self::sel_range(&ed) {
+                for l in &tb.lines {
+                    let (ls, le) = (Pos::new(l.p, l.start), Pos::new(l.p, l.end));
+                    if le < a || ls > b {
+                        continue;
                     }
-                    if (ui.ticks / 50) % 2 == 0 || self.ticks < 10 {
-                        let (li, cx) = caret_xy(&sh, &tb, ed.caret);
-                        let (top, h) = tb.lines.get(li).map(|l| (l.top, l.h)).unwrap_or((INSET_Y, 30));
-                        let col = Color::rgb(deckio::text_color(&sh, &self.deck.theme));
-                        ui.rect(Rect::new(sr.x + self.to_screen(cx), sr.y + self.to_screen(top), 2, self.to_screen(h).max(8)), col);
-                    }
-                } else {
-                    ui.stroke(sr.inset(-1), 0, 2, t.accent);
-                    for (hx, hy) in Self::handles(sr) {
-                        let hr = Rect::new(hx - 4, hy - 4, 9, 9);
-                        ui.rect(hr, Color::rgb(0xFFFFFF));
-                        ui.stroke(hr, 0, 1, t.accent);
-                    }
+                    let p = &sh.text.paras[l.p];
+                    let s0 = if a > ls { a.i } else { l.start };
+                    let e0 = if b < le { b.i } else { l.end };
+                    let x0 = l.x + span_w(sh.kind, p, l.start, s0, l.px);
+                    let x1 = (l.x + span_w(sh.kind, p, l.start, e0, l.px)).max(x0 + if b > le { 6 } else { 0 });
+                    let hr = Rect::new(sr.x + self.to_screen(x0), sr.y + self.to_screen(l.top), self.to_screen(x1 - x0).max(2), self.to_screen(l.h).max(2));
+                    ui.rect(hr, t.accent.with_alpha(70));
+                }
+            }
+            if (ui.ticks / 50) % 2 == 0 || self.ticks < 10 {
+                let (li, cx) = caret_xy(&sh, &tb, ed.caret);
+                let (top, h) = tb.lines.get(li).map(|l| (l.top, l.h)).unwrap_or((INSET_Y, 30));
+                let col = match ed.cell {
+                    Some((r, _)) => self.slide().shapes.get(ed.shape).and_then(|t| t.table.as_ref()).map(|tb| cell_style(&self.deck.theme, tb, r).1).unwrap_or(0),
+                    None => deckio::text_color(&sh, &self.deck.theme),
+                };
+                ui.rect(Rect::new(sr.x + self.to_screen(cx), sr.y + self.to_screen(top), 2, self.to_screen(h).max(8)), Color::rgb(col));
+            }
+        } else if let Some(sh) = self.shape().cloned() {
+            let s = ui.s;
+            let acc = t.accent.0 & 0xFFFFFF;
+            if sh.kind == Kind::Line {
+                for (hx, hy) in self.line_handles(&sh) {
+                    ui.circle(hx, hy, 6, Color::rgb(0xFFFFFF));
+                    ui.stroke(Rect::new(hx - 6, hy - 6, 12, 12), 6, 2, t.accent);
+                }
+            } else {
+                let (hs, rh) = self.handle_points(&sh);
+                // the outline, turned with the shape
+                let corners: Vec<(i32, i32)> = [hs[0], hs[2], hs[4], hs[6]].iter().map(|&(x, y)| (x * s * 16, y * s * 16)).collect();
+                slidedraw::stroke_poly(ui.c, &corners, 2 * s * 16, acc);
+                // the turning handle
+                let top = hs[1];
+                ui.c.fill_rect(Rect::new(top.0 * s, rh.1.min(top.1) * s, s, (rh.1 - top.1).abs() * s), Color::rgb(acc));
+                let _ = top;
+                ui.circle(rh.0, rh.1, 7, Color::rgb(0xFFFFFF));
+                ui.stroke(Rect::new(rh.0 - 7, rh.1 - 7, 14, 14), 7, 2, t.accent);
+                for (hx, hy) in hs {
+                    let hr = Rect::new(hx - 4, hy - 4, 9, 9);
+                    ui.rect(hr, Color::rgb(0xFFFFFF));
+                    ui.stroke(hr, 0, 1, t.accent);
                 }
             }
         }
         ui.set_clip(old);
+    }
+
+    /// Screen positions of a line's two ends.
+    fn line_handles(&self, sh: &Shape) -> [(i32, i32); 2] {
+        let (a, b) = line_ends(sh);
+        [(self.canvas.x + self.to_screen(a.0), self.canvas.y + self.to_screen(a.1)), (self.canvas.x + self.to_screen(b.0), self.canvas.y + self.to_screen(b.1))]
+    }
+
+    /// Screen positions of a shape's eight sizing handles (turned with it),
+    /// and of its turning handle.
+    fn handle_points(&self, sh: &Shape) -> ([(i32, i32); 8], (i32, i32)) {
+        let (cx, cy) = (sh.x + sh.w / 2, sh.y + sh.h / 2);
+        let (l, t, r, b) = (sh.x, sh.y, sh.x + sh.w, sh.y + sh.h);
+        let local = [(l, t), (cx, t), (r, t), (r, cy), (r, b), (cx, b), (l, b), (l, cy)];
+        let scr = |(x, y): (i32, i32)| {
+            let (x, y) = rotate(x, y, cx, cy, sh.rot);
+            (self.canvas.x + self.to_screen(x), self.canvas.y + self.to_screen(y))
+        };
+        let hs = local.map(scr);
+        // the turning handle sits 26 px above the top edge
+        let up = (26i64 * self.deck.w as i64 / self.canvas.w.max(1) as i64) as i32;
+        (hs, scr((cx, t - up)))
     }
 
     fn render_notes(&mut self, ui: &mut Ui, area: Rect, inst: u32) {
@@ -1668,6 +1723,21 @@ impl Slides {
                 ui.zone(r, Action::App(inst, C_DISMISS));
                 self.render_menu(ui, r, *kind, *at, inst);
             }
+            Overlay::ChartData(de) => self.render_data(ui, r, de, inst),
+            Overlay::Footer(dlg) => {
+                ui.zone(r, Action::App(inst, C_DISMISS));
+                let m = Rect::new(r.x + (r.w - 420) / 2, r.y + HEADER + 60, 420, 236);
+                ui.shadow(m, 14, 18, 6, 70);
+                ui.rrect(m, 14, t.surface);
+                ui.zone(m, Action::App(inst, C_DLG_TEXT));
+                ui.text(m.x + 20, m.y + 34, Face::Semibold, 16, "Header & footer", t.text);
+                ui.text(m.x + 20, m.y + 66, Face::Medium, 13, "Footer text", t.text2);
+                ui.field(Rect::new(m.x + 20, m.y + 76, m.w - 40, 34), &dlg.text.text, "e.g. Hydatek · Lagos", true, Action::App(inst, C_DLG_TEXT));
+                ui.text(m.x + 20, m.y + 142, Face::Medium, 13, "Slide numbers", t.text);
+                ui.switch(m.r() - 70, m.y + 126, dlg.numbers, Action::App(inst, C_DLG_NUMBERS));
+                ui.text(m.x + 20, m.y + 172, Face::Regular, 12, "Shown on every slide except title slides.", t.text3);
+                ui.button(Rect::new(m.r() - 120, m.b() - 50, 100, 34), "Apply", Action::App(inst, C_DLG_OK), true);
+            }
             _ => {}
         }
     }
@@ -1734,7 +1804,7 @@ impl Slides {
                         let dr = Rect::new(cell.x + s(x), cell.y + s(y), s(x + w) - s(x), (s(y + h) - s(y)).max(1));
                         if dc.ellipse {
                             let sc = ui.s;
-                            ellipse(ui.c, dr.scale(sc), Color::rgb(dc.color), 0);
+                            ellipse(ui.c, dr.scale(sc), Color::rgb(dc.color));
                         } else {
                             ui.rect(dr, Color::rgb(dc.color));
                         }
@@ -1749,30 +1819,174 @@ impl Slides {
                 }
             }
             MenuKind::Color => {
-                let m = place(6 * 34 + 20, 2 * 34 + 70);
+                let kind = self.shape().map(|s| s.kind);
+                // sections: (title, section number, with a "none" choice)
+                let mut secs: Vec<(&str, usize, &str)> = Vec::new();
+                match kind {
+                    Some(Kind::Rect | Kind::Ellipse) => {
+                        secs.push(("Fill", 0, "Theme accent"));
+                        secs.push(("Gradient to", 1, "No gradient"));
+                        secs.push(("Outline", 2, "No outline"));
+                    }
+                    Some(Kind::Line) => secs.push(("Line colour", 0, "Theme text colour")),
+                    Some(Kind::Picture) => secs.push(("Border", 0, "No border")),
+                    Some(Kind::Chart) => {}
+                    Some(Kind::Table) => secs.push(("Text colour", 0, "Theme colours")),
+                    Some(_) => {
+                        secs.push(("Text colour", 0, "Theme text colour"));
+                        secs.push(("Fill", 3, "No fill"));
+                    }
+                    None => {
+                        secs.push(("Slide background", 0, "Theme background"));
+                        secs.push(("Gradient to", 1, "No gradient"));
+                    }
+                }
+                let widths = matches!(kind, Some(Kind::Line | Kind::Rect | Kind::Ellipse | Kind::Picture));
+                let h = secs.len() as i32 * 116 + if widths { 58 } else { 0 } + if kind == Some(Kind::Line) { 58 } else { 0 } + if kind == Some(Kind::Chart) { 40 } else { 0 } + 8;
+                let m = place(6 * 34 + 20, h);
                 ui.shadow(m, 12, 16, 6, 60);
                 ui.rrect(m, 12, t.surface);
-                let what = match self.shape().map(|s| s.kind) {
-                    Some(Kind::Rect | Kind::Ellipse) => "Fill colour",
-                    Some(Kind::Picture) => "Border colour",
-                    Some(_) => "Text colour",
-                    None => "Slide background",
+                let mut y = m.y + 8;
+                if kind == Some(Kind::Chart) {
+                    ui.text(m.x + 12, y + 26, Face::Regular, 12, "Charts take the theme's colours.", t.text2);
+                    y += 40;
+                }
+                for (title, sec, none) in secs {
+                    ui.text(m.x + 12, y + 14, Face::Semibold, 13, title, t.text);
+                    for (k, c) in PALETTE.iter().enumerate() {
+                        let cell = Rect::new(m.x + 12 + (k as i32 % 6) * 34, y + 24 + (k as i32 / 6) * 34, 28, 28);
+                        let a = item(sec * 100 + k);
+                        ui.rrect(cell, 6, Color::rgb(*c));
+                        ui.stroke(cell, 6, if ui.hot(a) { 2 } else { 1 }, if ui.hot(a) { t.accent } else { t.line });
+                        ui.zone(cell, a);
+                    }
+                    let ar = Rect::new(m.x + 8, y + 92, m.w - 16, 22);
+                    let a = item(sec * 100 + 12);
+                    if ui.hot(a) {
+                        ui.rrect(ar, 6, t.hover);
+                    }
+                    ui.text(ar.x + 6, ar.y + 16, Face::Medium, 12, none, t.text2);
+                    ui.zone(ar, a);
+                    y += 116;
+                }
+                if widths {
+                    ui.text(m.x + 12, y + 14, Face::Semibold, 13, "Width", t.text);
+                    for (k, w) in [2, 3, 6, 10].iter().enumerate() {
+                        let cell = Rect::new(m.x + 12 + k as i32 * 50, y + 24, 44, 26);
+                        let a = item(400 + k);
+                        let on = self.shape().map_or(false, |s| s.line_w == *w);
+                        ui.rrect(cell, 6, if on { t.accent.with_alpha(40) } else if ui.hot(a) { t.hover } else { t.chip });
+                        ui.rect(Rect::new(cell.x + 8, cell.y + 13 - w / 4, cell.w - 16, (w / 2).max(1)), t.text);
+                        ui.zone(cell, a);
+                    }
+                    y += 58;
+                }
+                if kind == Some(Kind::Line) {
+                    ui.text(m.x + 12, y + 14, Face::Semibold, 13, "Arrows", t.text);
+                    let sh = self.shape().unwrap();
+                    for (k, label) in ["—", "→", "←", "←→"].iter().enumerate() {
+                        let cell = Rect::new(m.x + 12 + k as i32 * 50, y + 24, 44, 26);
+                        let a = item(500 + k);
+                        let on = (sh.tail, sh.head) == [(false, false), (true, false), (false, true), (true, true)][k];
+                        ui.rrect(cell, 6, if on { t.accent.with_alpha(40) } else if ui.hot(a) { t.hover } else { t.chip });
+                        ui.text_in(cell, Face::Semibold, 14, label, t.text, 1);
+                        ui.zone(cell, a);
+                    }
+                }
+            }
+            MenuKind::Shapes => {
+                let cols = 5;
+                let n = GEOMS.len() + 3;
+                let rows = (n as i32 + cols - 1) / cols;
+                let m = place(cols * 46 + 20, rows * 46 + 44);
+                ui.shadow(m, 12, 16, 6, 60);
+                ui.rrect(m, 12, t.surface);
+                let hot = (0..n).find(|&k| ui.hot(item(k)));
+                let label = match hot {
+                    Some(k) if k < GEOMS.len() => GEOMS[k].name(),
+                    Some(k) if k == GEOMS.len() => "Ellipse",
+                    Some(k) if k == GEOMS.len() + 1 => "Line",
+                    Some(_) => "Arrow",
+                    None => "Shapes, lines and arrows",
                 };
-                ui.text(m.x + 12, m.y + 22, Face::Semibold, 13, what, t.text);
-                for (k, c) in PALETTE.iter().enumerate() {
-                    let cell = Rect::new(m.x + 12 + (k as i32 % 6) * 34, m.y + 32 + (k as i32 / 6) * 34, 28, 28);
-                    ui.rrect(cell, 6, Color::rgb(*c));
-                    ui.stroke(cell, 6, if ui.hot(item(k)) { 2 } else { 1 }, if ui.hot(item(k)) { t.accent } else { t.line });
-                    ui.zone(cell, item(k));
+                ui.text(m.x + 12, m.y + 24, Face::Semibold, 13, label, t.text);
+                let sc = ui.s;
+                for k in 0..n {
+                    let cell = Rect::new(m.x + 10 + (k as i32 % cols) * 46, m.y + 34 + (k as i32 / cols) * 46, 42, 42);
+                    let a = item(k);
+                    if ui.hot(a) {
+                        ui.rrect(cell, 8, t.hover);
+                    }
+                    let ink = t.text.0 & 0xFFFFFF;
+                    let inner = Rect::new(cell.x + 9, cell.y + 11, 24, 20).scale(sc);
+                    if k < GEOMS.len() + 1 {
+                        let (kind, geom) = if k < GEOMS.len() { (Kind::Rect, GEOMS[k]) } else { (Kind::Ellipse, Geom::Rect) };
+                        let pts: Vec<(i32, i32)> = outline(kind, geom, inner.w, inner.h).into_iter().map(|(x, y)| (inner.x * 16 + x, inner.y * 16 + y)).collect();
+                        slidedraw::fill_poly(ui.c, &pts, &slidedraw::Paint::Solid(ink), 255);
+                    } else {
+                        let (a0, b0) = ((inner.x * 16, inner.b() * 16), (inner.r() * 16, inner.y * 16));
+                        slidedraw::fill_poly(ui.c, &slidedraw::segment(a0, b0, 2 * sc * 16), &slidedraw::Paint::Solid(ink), 255);
+                        if k == GEOMS.len() + 2 {
+                            let h = 7 * sc * 16;
+                            slidedraw::fill_poly(ui.c, &[b0, (b0.0 - h, b0.1 + h / 4), (b0.0 - h / 4, b0.1 + h)], &slidedraw::Paint::Solid(ink), 255);
+                        }
+                    }
+                    ui.zone(cell, a);
                 }
-                let ar = Rect::new(m.x + 8, m.b() - 36, m.w - 16, 30);
-                let a = item(PALETTE.len());
-                if ui.hot(a) {
-                    ui.rrect(ar, 8, t.hover);
+            }
+            MenuKind::Table => {
+                let (cols, rows) = (8, 6);
+                let m = place(cols * 26 + 24, rows * 26 + 50);
+                ui.shadow(m, 12, 16, 6, 60);
+                ui.rrect(m, 12, t.surface);
+                let hot = (0..cols * rows).find(|&k| ui.hot(item(k as usize)));
+                let label = match hot {
+                    Some(k) => format!("{} × {} table", k / cols + 1, k % cols + 1),
+                    None => String::from("Insert a table"),
+                };
+                ui.text(m.x + 12, m.y + 24, Face::Semibold, 13, &label, t.text);
+                for k in 0..cols * rows {
+                    let (r, c) = (k / cols, k % cols);
+                    let cell = Rect::new(m.x + 12 + c * 26, m.y + 36 + r * 26, 22, 22);
+                    let lit = hot.map_or(false, |h| r <= h / cols && c <= h % cols);
+                    ui.rrect(cell, 4, if lit { t.accent.with_alpha(90) } else { t.chip });
+                    ui.zone(cell, item(k as usize));
                 }
-                let label = if self.shape().map_or(false, |s| s.kind == Kind::Picture) { "No border" } else { "Automatic (the theme's)" };
-                ui.text(ar.x + 8, ar.y + 20, Face::Medium, 13, label, t.text);
-                ui.zone(ar, a);
+            }
+            MenuKind::Chart => {
+                let m = place(200, 20 + CHART_KINDS.len() as i32 * 36);
+                ui.shadow(m, 12, 16, 6, 60);
+                ui.rrect(m, 12, t.surface);
+                for (k, ck) in CHART_KINDS.iter().enumerate() {
+                    let row = Rect::new(m.x + 8, m.y + 10 + k as i32 * 36, m.w - 16, 34);
+                    if ui.hot(item(k)) {
+                        ui.rrect(row, 8, t.hover);
+                    }
+                    ui.icon(Icon::Chart, row.x + 8, row.y + 9, 16, t.accent);
+                    ui.text(row.x + 34, row.y + 22, Face::Medium, 13, &format!("{} chart", ck.name()), t.text);
+                    ui.zone(row, item(k));
+                }
+            }
+            MenuKind::TableEdit | MenuKind::ChartEdit | MenuKind::Anim => {
+                let items = self.list_menu(kind);
+                let m = place(230, 20 + items.len() as i32 * 34);
+                ui.shadow(m, 12, 16, 6, 60);
+                ui.rrect(m, 12, t.surface);
+                for (k, (name, on)) in items.iter().enumerate() {
+                    let row = Rect::new(m.x + 8, m.y + 10 + k as i32 * 34, m.w - 16, 32);
+                    if name.is_empty() {
+                        ui.rect(Rect::new(row.x, row.y + 16, row.w, 1), t.line);
+                        continue;
+                    }
+                    if ui.hot(item(k)) {
+                        ui.rrect(row, 8, t.hover);
+                    }
+                    if *on {
+                        ui.icon(Icon::Check, row.x + 8, row.y + 9, 14, t.accent);
+                    }
+                    ui.text(row.x + 30, row.y + 21, Face::Medium, 13, name, t.text);
+                    ui.zone(row, item(k));
+                }
             }
             MenuKind::Trans => {
                 let items = ["None", "Fade", "Push up", "Apply to all slides"];
@@ -1824,7 +2038,43 @@ impl Slides {
                     self.touch_all();
                 }
             }
-            MenuKind::Color => self.set_color(PALETTE.get(k).copied()),
+            MenuKind::Color => self.pick_color(k / 100, k % 100),
+            MenuKind::Shapes => {
+                if k < GEOMS.len() {
+                    self.add_shape(Kind::Rect);
+                    let g = GEOMS[k];
+                    if let Some(i) = self.sel {
+                        let sh = &mut self.slide_mut().shapes[i];
+                        sh.geom = g;
+                        if matches!(g, Geom::RightArrow | Geom::LeftArrow | Geom::Chevron | Geom::Parallelogram) {
+                            sh.h = 140;
+                        }
+                    }
+                } else if k == GEOMS.len() {
+                    self.add_shape(Kind::Ellipse);
+                } else {
+                    self.add_shape(Kind::Line);
+                    let arrow = k == GEOMS.len() + 2;
+                    if let Some(i) = self.sel {
+                        self.slide_mut().shapes[i].tail = arrow;
+                    }
+                }
+                self.touch();
+            }
+            MenuKind::Table => self.insert_table(k / 8 + 1, k % 8 + 1),
+            MenuKind::Chart => {
+                if let Some(ck) = CHART_KINDS.get(k) {
+                    self.add_shape(Kind::Chart);
+                    if let Some(i) = self.sel {
+                        self.slide_mut().shapes[i].chart = Some(Chart::sample(*ck));
+                        self.touch();
+                        self.open_data(i);
+                    }
+                }
+            }
+            MenuKind::TableEdit => self.table_op(k),
+            MenuKind::ChartEdit => self.chart_op(k),
+            MenuKind::Anim => self.anim_op(k),
             MenuKind::Trans => {
                 self.snapshot();
                 if k == 3 {
@@ -1855,32 +2105,60 @@ impl Slides {
 
     // ---- canvas clicks -------------------------------------------------------------
 
+    /// The handle under (x, y): 0-7 sizing, 8 turning, 10 / 11 a line's ends.
     fn handle_at(&self, x: i32, y: i32) -> Option<u8> {
         let sh = self.shape()?;
         if self.ed.is_some() {
             return None;
         }
-        let r = self.shape_rect(sh);
-        Self::handles(r).iter().position(|&(hx, hy)| (x - hx).abs() <= 6 && (y - hy).abs() <= 6).map(|i| i as u8)
+        let near = |(hx, hy): (i32, i32)| (x - hx).abs() <= 7 && (y - hy).abs() <= 7;
+        if sh.kind == Kind::Line {
+            return self.line_handles(sh).iter().position(|&p| near(p)).map(|i| 10 + i as u8);
+        }
+        let (hs, rh) = self.handle_points(sh);
+        if near(rh) {
+            return Some(8);
+        }
+        hs.iter().position(|&p| near(p)).map(|i| i as u8)
     }
 
     fn shape_at(&self, ux: i32, uy: i32) -> Option<usize> {
         let slide = self.slide();
-        // pictures and shapes: their box; text: only where there's text or a prompt
         slide.shapes.iter().enumerate().rev().find(|(_, s)| s.contains(ux, uy)).map(|(i, _)| i)
+    }
+
+    /// The table cell at a point (slide units) of table shape `i`.
+    fn cell_at(&self, i: usize, ux: i32, uy: i32) -> Option<(usize, usize)> {
+        let sh = self.slide().shapes.get(i)?;
+        let t = sh.table.as_ref()?;
+        let (x, y) = sh.to_local(ux, uy);
+        let (mut cx, mut cy) = (sh.x, sh.y);
+        let c = t.cols.iter().position(|w| {
+            cx += w;
+            x < cx
+        })?;
+        let r = t.rows.iter().position(|h| {
+            cy += h;
+            y < cy
+        })?;
+        Some((r, c))
     }
 
     fn canvas_click(&mut self, double: bool) {
         let (mx, my) = self.mouse;
         if let Some(h) = self.handle_at(mx, my) {
-            let sh = self.shape().unwrap();
-            self.press = Some(Press::Resize { handle: h, start: (mx, my), orig: (sh.x, sh.y, sh.w, sh.h), moved: false });
+            let sh = self.shape().unwrap().clone();
+            self.press = Some(match h {
+                8 => Press::Rotate { centre: (self.canvas.x + self.to_screen(sh.x + sh.w / 2), self.canvas.y + self.to_screen(sh.y + sh.h / 2)), orig: sh.rot, moved: false },
+                10 | 11 => Press::LineEnd { end: h - 10, moved: false },
+                _ => Press::Resize { handle: h, start: (mx, my), orig: (sh.x, sh.y, sh.w, sh.h), moved: false },
+            });
             return;
         }
         let (ux, uy) = self.to_units(mx, my);
         // in the text being edited: place the caret
-        if let Some(ed) = self.ed {
-            let sh = self.slide().shapes[ed.shape].clone();
+        if let (Some(ed), Some(mut sh)) = (self.ed, self.text_target()) {
+            sh.rot = 0;
             if sh.contains(ux, uy) {
                 let tb = layout(&sh);
                 let p = hit(&sh, &tb, ux - sh.x, uy - sh.y);
@@ -1902,16 +2180,43 @@ impl Slides {
                 self.press = Some(Press::Text);
                 return;
             }
+            // another cell of the same table
+            if ed.cell.is_some() {
+                if let Some((r, c)) = self.cell_at(ed.shape, ux, uy) {
+                    let cs = self.slide().shapes[ed.shape].cell_shape(r, c).unwrap();
+                    let p = hit(&cs, &layout(&cs), ux - cs.x, uy - cs.y);
+                    self.start_cell_edit(ed.shape, r, c, Some(p));
+                    self.press = Some(Press::Text);
+                    return;
+                }
+            }
             self.stop_edit();
         }
         self.notes = None;
         match self.shape_at(ux, uy) {
             Some(i) => {
                 let sh = self.slide().shapes[i].clone();
-                let enter_text = sh.kind.has_text() && (double || (self.sel == Some(i) && sh.kind != Kind::Rect && sh.kind != Kind::Ellipse) || (sh.kind.placeholder() && sh.is_empty()) || (self.sel == Some(i) && double));
+                if sh.kind == Kind::Table && (self.sel == Some(i) || double) {
+                    if let Some((r, c)) = self.cell_at(i, ux, uy) {
+                        let cs = sh.cell_shape(r, c).unwrap();
+                        let p = hit(&cs, &layout(&cs), ux - cs.x, uy - cs.y);
+                        self.start_cell_edit(i, r, c, Some(p));
+                        self.press = Some(Press::Text);
+                        return;
+                    }
+                }
+                if sh.kind == Kind::Chart && double {
+                    self.sel = Some(i);
+                    self.open_data(i);
+                    return;
+                }
+                let enter_text = sh.kind.has_text() && (double || (self.sel == Some(i) && sh.kind != Kind::Rect && sh.kind != Kind::Ellipse) || (sh.kind.placeholder() && sh.is_empty()));
                 if enter_text && (self.sel == Some(i) || double || sh.is_empty()) {
-                    let tb = layout(&sh);
-                    let p = hit(&sh, &tb, ux - sh.x, uy - sh.y);
+                    let mut st = sh.clone();
+                    st.rot = 0;
+                    let (lx, ly) = sh.to_local(ux, uy);
+                    let tb = layout(&st);
+                    let p = hit(&st, &tb, lx - sh.x, ly - sh.y);
                     self.start_edit(i, Some(p));
                     self.press = Some(Press::Text);
                     return;
@@ -1984,12 +2289,624 @@ impl Slides {
     }
 }
 
-fn mixp(a: u32, b: u32, t: u32) -> u32 {
-    let f = |s: u32| {
-        let (x, y) = ((a >> s) & 255, (b >> s) & 255);
-        ((x * (256 - t) + y * t) >> 8) << s
-    };
-    f(16) | f(8) | f(0)
+fn clone_canvas(c: &Canvas) -> Canvas {
+    let mut n = Canvas::new(c.w, c.h);
+    n.px.copy_from_slice(&c.px);
+    n
+}
+
+/// Draw `a` blended into `b` by `t`/256 at (x, y).
+fn blend(dst: &mut Canvas, a: &Canvas, b: &Canvas, x: i32, y: i32, t: u32) {
+    let clip = dst.clip;
+    for yy in 0..a.h.min(b.h) {
+        let py = y + yy;
+        if py < clip.y || py >= clip.b() {
+            continue;
+        }
+        for xx in 0..a.w.min(b.w) {
+            let px = x + xx;
+            if px < clip.x || px >= clip.r() {
+                continue;
+            }
+            let i = (yy * a.w + xx) as usize;
+            dst.px[(py * dst.w + px) as usize] = mixp(a.px[i], b.px[i], t);
+        }
+    }
+}
+
+impl Slides {
+    // ---- colours, tables, charts, animations ---------------------------------------
+
+    /// Tab / Shift+Tab between table cells; Tab in the last cell adds a row.
+    fn next_cell(&mut self, forward: bool) {
+        let Some(TextEd { shape, cell: Some((r, c)), .. }) = self.ed else { return };
+        let Some(t) = self.slide().shapes.get(shape).and_then(|s| s.table.clone()) else { return };
+        let (nr, nc) = (t.nrows(), t.ncols());
+        let idx = r * nc + c;
+        let next = if forward {
+            if idx + 1 >= nr * nc {
+                self.touch();
+                self.snapshot();
+                let cur = self.cur;
+                let sh = &mut self.deck.slides[cur].shapes[shape];
+                if let Some(t) = sh.table.as_mut() {
+                    t.insert_row(nr);
+                }
+                sh.fit_table();
+            }
+            idx + 1
+        } else {
+            match idx.checked_sub(1) {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        self.start_cell_edit(shape, next / nc, next % nc, None);
+        if let Some(ed) = self.ed.as_mut() {
+            // select the cell's text, as other programs do
+            let end = self.cell_sh.as_ref().map(|c| c.text.end()).unwrap_or_default();
+            ed.anchor = Some(Pos::new(0, 0));
+            ed.caret = end;
+        }
+    }
+
+    fn pick_color(&mut self, sec: usize, k: usize) {
+        let col = PALETTE.get(k).copied();
+        self.snapshot();
+        let c = self.cur;
+        match self.sel {
+            None => {
+                let s = &mut self.deck.slides[c];
+                match sec {
+                    0 => s.bg = col,
+                    _ => s.bg_grad = col.map(|to| (to, 90)),
+                }
+            }
+            Some(i) => {
+                let theme_accent = self.deck.theme.accent;
+                let sh = &mut self.deck.slides[c].shapes[i];
+                match (sec, sh.kind) {
+                    (0, Kind::Rect | Kind::Ellipse) => sh.fill = col,
+                    (0, Kind::Line | Kind::Picture) => sh.line = col,
+                    (0, _) => sh.color = col,
+                    (1, _) => {
+                        if sh.fill.is_none() {
+                            sh.fill = Some(theme_accent);
+                        }
+                        sh.grad = col.map(|to| (to, 90));
+                    }
+                    (2, _) => sh.line = col,
+                    (3, _) => sh.fill = col,
+                    (4, _) => sh.line_w = [2, 3, 6, 10][k.min(3)],
+                    (5, _) => {
+                        let (tail, head) = [(false, false), (true, false), (false, true), (true, true)][k.min(3)];
+                        sh.tail = tail;
+                        sh.head = head;
+                    }
+                    _ => {}
+                }
+                if sec == 4 && sh.kind != Kind::Line && sh.line.is_none() {
+                    sh.line = Some(0x1E1B2C);
+                }
+            }
+        }
+        self.touch();
+    }
+
+    fn insert_table(&mut self, rows: usize, cols: usize) {
+        self.stop_edit();
+        self.snapshot();
+        let w = (self.deck.w * 3 / 4).min(cols as i32 * 220);
+        let mut sh = Shape::new(Kind::Table, (self.deck.w - w) / 2, 180, w, rows as i32 * 50);
+        sh.table = Some(Table::new(rows, cols, w, rows as i32 * 50));
+        sh.fit_table();
+        self.slide_mut().shapes.push(sh);
+        let i = self.slide().shapes.len() - 1;
+        self.sel = Some(i);
+        self.touch();
+        self.start_cell_edit(i, 0, 0, None);
+    }
+
+    /// The cell a table command applies to: the one being typed in, else the last.
+    fn table_cell(&self, i: usize) -> (usize, usize) {
+        match self.ed {
+            Some(TextEd { shape, cell: Some(rc), .. }) if shape == i => rc,
+            _ => self.slide().shapes[i].table.as_ref().map(|t| (t.nrows() - 1, t.ncols() - 1)).unwrap_or((0, 0)),
+        }
+    }
+
+    fn list_menu(&self, kind: MenuKind) -> Vec<(&'static str, bool)> {
+        let sh = self.shape();
+        match kind {
+            MenuKind::TableEdit => {
+                let t = sh.and_then(|s| s.table.as_ref());
+                vec![
+                    ("Insert row above", false),
+                    ("Insert row below", false),
+                    ("Insert column left", false),
+                    ("Insert column right", false),
+                    ("", false),
+                    ("Delete row", false),
+                    ("Delete column", false),
+                    ("", false),
+                    ("Heading row", t.map_or(false, |t| t.header)),
+                    ("Banded rows", t.map_or(false, |t| t.banded)),
+                ]
+            }
+            MenuKind::ChartEdit => {
+                let c = sh.and_then(|s| s.chart.as_ref());
+                let mut v = vec![("Edit data…", false), ("", false)];
+                for (k, name) in ["Column", "Bar", "Line", "Area", "Pie"].iter().enumerate() {
+                    v.push((*name, c.map_or(false, |c| c.kind == CHART_KINDS[k])));
+                }
+                v.push(("", false));
+                v.push(("Legend", c.map_or(false, |c| c.legend)));
+                v
+            }
+            _ => {
+                let a = sh.map(|s| s.anim).unwrap_or(Anim::None);
+                vec![("No animation", a == Anim::None), ("Appear", a == Anim::Appear), ("Fade in", a == Anim::Fade), ("Fly in from below", a == Anim::Fly), ("", false), ("Play earlier", false), ("Play later", false)]
+            }
+        }
+    }
+
+    fn table_op(&mut self, k: usize) {
+        let Some(i) = self.sel else { return };
+        let (r, c) = self.table_cell(i);
+        self.stop_edit();
+        self.snapshot();
+        let cur = self.cur;
+        let sh = &mut self.deck.slides[cur].shapes[i];
+        let Some(t) = sh.table.as_mut() else { return };
+        match k {
+            0 => t.insert_row(r),
+            1 => t.insert_row(r + 1),
+            2 => t.insert_col(c),
+            3 => t.insert_col(c + 1),
+            5 => t.delete_row(r),
+            6 => t.delete_col(c),
+            8 => t.header = !t.header,
+            9 => t.banded = !t.banded,
+            _ => {}
+        }
+        sh.fit_table();
+        self.touch();
+    }
+
+    fn chart_op(&mut self, k: usize) {
+        let Some(i) = self.sel else { return };
+        match k {
+            0 => self.open_data(i),
+            2..=6 => {
+                self.snapshot();
+                let cur = self.cur;
+                if let Some(c) = self.deck.slides[cur].shapes[i].chart.as_mut() {
+                    c.kind = CHART_KINDS[k - 2];
+                }
+                self.touch();
+            }
+            8 => {
+                self.snapshot();
+                let cur = self.cur;
+                if let Some(c) = self.deck.slides[cur].shapes[i].chart.as_mut() {
+                    c.legend = !c.legend;
+                }
+                self.touch();
+            }
+            _ => {}
+        }
+    }
+
+    fn anim_op(&mut self, k: usize) {
+        let Some(i) = self.sel else { return };
+        self.snapshot();
+        let steps = anim_steps(self.slide());
+        let next = self.slide().shapes.iter().map(|s| s.anim_order).max().unwrap_or(0) + 1;
+        let cur = self.cur;
+        let shapes = &mut self.deck.slides[cur].shapes;
+        match k {
+            0..=3 => {
+                let a = [Anim::None, Anim::Appear, Anim::Fade, Anim::Fly][k];
+                if shapes[i].anim == Anim::None && a != Anim::None {
+                    shapes[i].anim_order = next;
+                }
+                shapes[i].anim = a;
+            }
+            5 | 6 => {
+                // swap places with the neighbour in the play order
+                if let Some(pos) = steps.iter().position(|&s| s == i) {
+                    let other = if k == 5 { pos.checked_sub(1) } else { Some(pos + 1).filter(|&p| p < steps.len()) };
+                    if let Some(o) = other {
+                        // renumber everything in order, then swap the two
+                        for (n, &s) in steps.iter().enumerate() {
+                            shapes[s].anim_order = n as u16 + 1;
+                        }
+                        let j = steps[o];
+                        let (a, b) = (shapes[i].anim_order, shapes[j].anim_order);
+                        shapes[i].anim_order = b;
+                        shapes[j].anim_order = a;
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.touch();
+    }
+
+    fn rotate_by(&mut self, deg: i32) {
+        let Some(i) = self.sel else { return };
+        self.stop_edit();
+        self.snapshot();
+        let sh = &mut self.slide_mut().shapes[i];
+        if sh.kind == Kind::Line {
+            let ((x0, y0), (x1, y1)) = line_ends(sh);
+            let (cx, cy) = (sh.x + sh.w / 2, sh.y + sh.h / 2);
+            set_line_ends(sh, rotate(x0, y0, cx, cy, deg), rotate(x1, y1, cx, cy, deg));
+        } else {
+            sh.rot = (sh.rot + deg).rem_euclid(360);
+        }
+        self.touch();
+    }
+
+    fn flip(&mut self, horizontal: bool) {
+        let Some(i) = self.sel else { return };
+        self.snapshot();
+        let sh = &mut self.slide_mut().shapes[i];
+        if horizontal {
+            sh.flip_h = !sh.flip_h;
+        } else {
+            sh.flip_v = !sh.flip_v;
+        }
+        self.touch();
+    }
+
+    // ---- the chart's data sheet -------------------------------------------------------
+
+    fn open_data(&mut self, i: usize) {
+        self.stop_edit();
+        if self.slide().shapes.get(i).and_then(|s| s.chart.as_ref()).is_none() {
+            return;
+        }
+        self.snapshot();
+        self.overlay = Overlay::ChartData(DataEd { shape: i, cur: (1, 1), text: None, title: false });
+    }
+
+    fn chart_mut(&mut self, i: usize) -> Option<&mut Chart> {
+        let c = self.cur;
+        self.deck.slides[c].shapes.get_mut(i)?.chart.as_mut()
+    }
+
+    /// What a data cell shows.
+    fn data_cell(ch: &Chart, r: usize, c: usize) -> String {
+        match (r, c) {
+            (0, 0) => String::new(),
+            (0, c) => ch.series.get(c - 1).map(|s| s.name.clone()).unwrap_or_default(),
+            (r, 0) => ch.cats.get(r - 1).cloned().unwrap_or_default(),
+            (r, c) => ch.series.get(c - 1).and_then(|s| s.vals.get(r - 1)).map(|v| fmt_num(*v)).unwrap_or_default(),
+        }
+    }
+
+    /// Put the typed text into the chart.
+    fn data_commit(&mut self) {
+        let Overlay::ChartData(de) = &mut self.overlay else { return };
+        let Some(text) = de.text.take() else { return };
+        let (i, (r, c), title) = (de.shape, de.cur, de.title);
+        de.title = false;
+        let Some(ch) = self.chart_mut(i) else { return };
+        if title {
+            ch.title = text;
+        } else {
+            match (r, c) {
+                (0, 0) => {}
+                (0, c) => {
+                    if let Some(s) = ch.series.get_mut(c - 1) {
+                        s.name = text;
+                    }
+                }
+                (r, 0) => {
+                    if let Some(x) = ch.cats.get_mut(r - 1) {
+                        *x = text;
+                    }
+                }
+                (r, c) => {
+                    if let Some(v) = ch.series.get_mut(c - 1).and_then(|s| s.vals.get_mut(r - 1)) {
+                        *v = parse_num(&text).unwrap_or(*v);
+                    }
+                }
+            }
+        }
+        self.touch();
+    }
+
+    fn data_move(&mut self, dr: i32, dc: i32) {
+        self.data_commit();
+        let Overlay::ChartData(de) = &self.overlay else { return };
+        let i = de.shape;
+        let Some(ch) = self.slide().shapes.get(i).and_then(|s| s.chart.as_ref()) else { return };
+        let (rows, cols) = (ch.cats.len() + 1, ch.series.len() + 1);
+        if let Overlay::ChartData(de) = &mut self.overlay {
+            de.cur = ((de.cur.0 as i32 + dr).clamp(0, rows as i32 - 1) as usize, (de.cur.1 as i32 + dc).clamp(0, cols as i32 - 1) as usize);
+        }
+    }
+
+    fn data_action(&mut self, code: u32) {
+        let Overlay::ChartData(de) = &self.overlay else { return };
+        let i = de.shape;
+        if code != C_DATA_TITLE {
+            self.data_commit();
+        }
+        match code {
+            C_DATA_DONE => {
+                self.overlay = Overlay::None;
+                return;
+            }
+            C_DATA_TITLE => {
+                self.data_commit();
+                let t = self.slide().shapes.get(i).and_then(|s| s.chart.as_ref()).map(|c| c.title.clone()).unwrap_or_default();
+                if let Overlay::ChartData(de) = &mut self.overlay {
+                    de.title = true;
+                    de.text = Some(t);
+                }
+                return;
+            }
+            c if c >= C_DATA_CELL => {
+                let (r, col) = (((c - C_DATA_CELL) / 100) as usize, ((c - C_DATA_CELL) % 100) as usize);
+                if let Overlay::ChartData(de) = &mut self.overlay {
+                    de.cur = (r, col);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let Some(ch) = self.chart_mut(i) else { return };
+        match code {
+            C_DATA_ADD_ROW => {
+                ch.cats.push(format!("Item {}", ch.cats.len() + 1));
+                for s in ch.series.iter_mut() {
+                    s.vals.push(0.0);
+                }
+            }
+            C_DATA_DEL_ROW => {
+                if ch.cats.len() > 1 {
+                    ch.cats.pop();
+                    for s in ch.series.iter_mut() {
+                        s.vals.pop();
+                    }
+                }
+            }
+            C_DATA_ADD_SER => {
+                let n = ch.cats.len();
+                ch.series.push(Series { name: format!("Series {}", ch.series.len() + 1), vals: vec![0.0; n] });
+            }
+            C_DATA_DEL_SER => {
+                if ch.series.len() > 1 {
+                    ch.series.pop();
+                }
+            }
+            C_DATA_LEGEND => ch.legend = !ch.legend,
+            c if (C_DATA_KIND..C_DATA_KIND + 5).contains(&c) => ch.kind = CHART_KINDS[(c - C_DATA_KIND) as usize],
+            _ => {}
+        }
+        self.data_move(0, 0);
+        self.touch();
+    }
+
+    fn data_key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+        let shift = crate::input::shift();
+        let Overlay::ChartData(de) = &mut self.overlay else { return };
+        match k {
+            Key::Esc | Key::F(5) => {
+                self.data_commit();
+                self.overlay = Overlay::None;
+            }
+            Key::Char(c) if ctrl && c.to_ascii_lowercase() == 'v' => {
+                let t = sys.clipboard.lines().next().unwrap_or("").to_string();
+                de.text.get_or_insert_with(String::new).push_str(&t);
+            }
+            Key::Char(c) if !ctrl && !c.is_control() => {
+                de.text.get_or_insert_with(String::new).push(c);
+            }
+            Key::Backspace => {
+                if de.text.is_none() && !de.title {
+                    de.text = Some(String::new());
+                } else if let Some(t) = de.text.as_mut() {
+                    t.pop();
+                }
+            }
+            Key::Enter => {
+                if de.title {
+                    self.data_commit();
+                } else {
+                    self.data_move(if shift { -1 } else { 1 }, 0);
+                }
+            }
+            Key::Tab => self.data_move(0, if shift { -1 } else { 1 }),
+            Key::Up => self.data_move(-1, 0),
+            Key::Down => self.data_move(1, 0),
+            Key::Left if de.text.is_none() => self.data_move(0, -1),
+            Key::Right if de.text.is_none() => self.data_move(0, 1),
+            Key::Delete => {
+                de.text = Some(String::new());
+                self.data_commit();
+            }
+            _ => {}
+        }
+    }
+
+    fn render_data(&self, ui: &mut Ui, r: Rect, de: &DataEd, inst: u32) {
+        let t = ui.t;
+        let Some(ch) = self.slide().shapes.get(de.shape).and_then(|s| s.chart.as_ref()) else { return };
+        ui.zone(r, Action::App(inst, C_DISMISS));
+        let (rows, cols) = (ch.cats.len() + 1, ch.series.len() + 1);
+        let (cw0, cw, rh) = (150, 104, 30);
+        let gw = cw0 + cw * (cols as i32 - 1);
+        let w = (gw + 40).max(600).min(r.w - 20);
+        let vis_rows = rows.min(9) as i32;
+        let h = 170 + vis_rows * rh;
+        let m = Rect::new(r.x + (r.w - w) / 2, r.y + HEADER + 30, w, h);
+        ui.shadow(m, 14, 18, 6, 70);
+        ui.rrect(m, 14, t.surface);
+        ui.zone(m, Action::App(inst, C_DLG_TEXT));
+        ui.text(m.x + 20, m.y + 32, Face::Semibold, 16, "Chart data", t.text);
+        // chart kinds
+        let mut x = m.x + 130;
+        for (k, ck) in CHART_KINDS.iter().enumerate() {
+            let a = Action::App(inst, C_DATA_KIND + k as u32);
+            let bw = ui.tw(Face::Medium, 12, ck.name()) + 18;
+            let b = Rect::new(x, m.y + 14, bw, 26);
+            ui.rrect(b, 8, if ch.kind == *ck { t.accent.with_alpha(45) } else if ui.hot(a) { t.hover } else { t.chip });
+            ui.text_in(b, Face::Medium, 12, ck.name(), if ch.kind == *ck { t.accent } else { t.text }, 1);
+            ui.zone(b, a);
+            x += bw + 6;
+        }
+        // title
+        let tr = Rect::new(m.x + 20, m.y + 50, m.w - 40, 30);
+        let title = if de.title { de.text.clone().unwrap_or_default() } else { ch.title.clone() };
+        ui.field(tr, &title, "Chart title (optional)", de.title, Action::App(inst, C_DATA_TITLE));
+        // the grid
+        let gx = m.x + 20;
+        let gy = m.y + 92;
+        let old = ui.clip_in(Rect::new(gx, gy, m.w - 40, vis_rows * rh + 1));
+        let first = de.cur.0.saturating_sub(vis_rows as usize - 1);
+        for (vr, row) in (0..rows).skip(if de.cur.0 >= vis_rows as usize { first } else { 0 }).take(vis_rows as usize).enumerate() {
+            let row_ix = if de.cur.0 >= vis_rows as usize { row } else { vr };
+            let y = gy + vr as i32 * rh;
+            for col in 0..cols {
+                let cx = gx + if col == 0 { 0 } else { cw0 + cw * (col as i32 - 1) };
+                let wcol = if col == 0 { cw0 } else { cw };
+                let cell = Rect::new(cx, y, wcol, rh);
+                let header = row_ix == 0 || col == 0;
+                ui.rect(cell, if header { t.chip } else { Color::rgb(0xFFFFFF) });
+                ui.stroke(cell, 0, 1, t.line);
+                let on = de.cur == (row_ix, col) && !de.title;
+                let text = if on { de.text.clone().unwrap_or_else(|| Self::data_cell(ch, row_ix, col)) } else { Self::data_cell(ch, row_ix, col) };
+                let ink = if header { t.text } else { Color::rgb(0x1E1B2C) };
+                let face = if header { Face::Semibold } else { Face::Regular };
+                let label = ui.fit(face, 13, &text, wcol - 14);
+                if col == 0 || row_ix == 0 {
+                    ui.text(cell.x + 8, cell.y + 20, face, 13, &label, ink);
+                } else {
+                    let tw = ui.tw(face, 13, &label);
+                    ui.text(cell.r() - tw - 8, cell.y + 20, face, 13, &label, ink);
+                }
+                if on {
+                    ui.stroke(Rect::new(cell.x, cell.y, cell.w + 1, cell.h + 1), 0, 2, t.accent);
+                    if de.text.is_some() && (ui.ticks / 50) % 2 == 0 {
+                        let tw = ui.tw(face, 13, &label);
+                        let cx = if col == 0 || row_ix == 0 { cell.x + 8 + tw } else { cell.r() - 8 };
+                        ui.rect(Rect::new(cx, cell.y + 7, 1, 16), t.accent);
+                    }
+                }
+                if (row_ix, col) != (0, 0) {
+                    ui.zone(cell, Action::App(inst, C_DATA_CELL + row_ix as u32 * 100 + col as u32));
+                }
+            }
+        }
+        ui.set_clip(old);
+        // buttons
+        let by = m.b() - 52;
+        let mut x = m.x + 20;
+        for (label, code) in [("+ Row", C_DATA_ADD_ROW), ("– Row", C_DATA_DEL_ROW), ("+ Series", C_DATA_ADD_SER), ("– Series", C_DATA_DEL_SER)] {
+            let bw = ui.tw(Face::Medium, 12, label) + 20;
+            let b = Rect::new(x, by + 6, bw, 28);
+            let a = Action::App(inst, code);
+            ui.rrect(b, 8, if ui.hot(a) { t.hover } else { t.chip });
+            ui.text_in(b, Face::Medium, 12, label, t.text, 1);
+            ui.zone(b, a);
+            x += bw + 6;
+        }
+        ui.text(x + 8, by + 25, Face::Medium, 12, "Legend", t.text);
+        ui.switch(x + 62, by + 8, ch.legend, Action::App(inst, C_DATA_LEGEND));
+        ui.button(Rect::new(m.r() - 110, by + 2, 90, 34), "Done", Action::App(inst, C_DATA_DONE), true);
+        ui.text(m.x + 20, m.b() - 60, Face::Regular, 11, "Type to change a cell · Enter / Tab move · Esc done", t.text3);
+    }
+
+    // ---- PDF -------------------------------------------------------------------------------
+
+    /// Export the slides (or notes pages) as a PDF.
+    fn export_pdf(&mut self, sys: &mut Sys, notes: bool) {
+        self.stop_edit();
+        let dir = if self.path.is_empty() { String::from("/home/Documents/Presentations") } else { parent(&self.path) };
+        let name = if notes { format!("{} (notes)", self.title()) } else { self.title() };
+        let target = join(&dir, &format!("{}.pdf", name));
+        let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ".pdf") } else { target };
+        let data = self.pdf_bytes(notes);
+        let ok = sys.fs.write(&path, &data);
+        sys.toast("Hyda Slides", &if ok { format!("Exported {}", basename(&path)) } else { String::from("Couldn't export: the disk is read-only") });
+    }
+
+    fn pdf_bytes(&mut self, notes: bool) -> Vec<u8> {
+        let (dw, dh) = (self.deck.w, self.deck.h);
+        // slides are drawn 1600 pixels wide
+        let pw = 1600;
+        let ph = pw * dh / dw;
+        let mut pages = Vec::new();
+        for (i, slide) in self.deck.slides.iter().enumerate() {
+            let mut cv = Canvas::new(pw, ph);
+            let o = Opts { number: i + 1, ..Opts::default() };
+            draw_slide(&mut cv, 0, 0, pw, &self.deck, slide, &mut self.pics, &o);
+            let mut rgb = Vec::with_capacity((pw * ph * 3) as usize);
+            for p in &cv.px {
+                rgb.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+            }
+            // text in points: slide units are 3/4 point; the page is the slide
+            let (page_w, page_h, sx, sy, scale) = if notes { (595, 842, 50, 60, 495 * 1000 / (dw * 3 / 4)) } else { (dw * 3 / 4, dh * 3 / 4, 0, 0, 1000) };
+            let tp = |u: i32| u * 3 / 4 * scale / 1000;
+            let mut texts = Vec::new();
+            for sh in &slide.shapes {
+                if sh.rot != 0 {
+                    continue;
+                }
+                let mut boxes: Vec<Shape> = Vec::new();
+                if sh.kind.has_text() && !sh.is_empty() {
+                    boxes.push(sh.clone());
+                }
+                if let Some(t) = &sh.table {
+                    for r in 0..t.nrows() {
+                        for c in 0..t.ncols() {
+                            if let Some(cs) = sh.cell_shape(r, c) {
+                                if !cs.is_empty() {
+                                    boxes.push(cs);
+                                }
+                            }
+                        }
+                    }
+                }
+                for b in boxes {
+                    let tb = layout(&b);
+                    for l in &tb.lines {
+                        let p = &b.text.paras[l.p];
+                        let s: String = p.text[l.start..l.end].iter().collect();
+                        let s = s.trim_end().to_string();
+                        if s.is_empty() {
+                            continue;
+                        }
+                        let w = span_w(b.kind, p, l.start, l.start + s.chars().count(), l.px);
+                        texts.push(crate::pdf::Text { x: sx + tp(b.x + l.x), y: sy + tp(b.y + l.base), size: tp(l.px).max(1), s, w: tp(w), visible: false, color: 0 });
+                    }
+                }
+            }
+            if notes {
+                let (iw, ih) = (495, 495 * dh / dw);
+                let mut y = 60 + ih + 40;
+                let mut page = crate::pdf::Page { w: page_w, h: page_h, image: Some((50, 60, iw, ih, pw as u32, ph as u32, rgb)), texts };
+                page.texts.push(crate::pdf::Text { x: 50, y: 40, size: 10, s: format!("Slide {} of {}", i + 1, self.deck.slides.len()), w: 0, visible: true, color: 0x6B6780 });
+                for line in crate::pdf::wrap(&slide.notes, 12, 495) {
+                    if y > 800 {
+                        pages.push(page);
+                        page = crate::pdf::Page { w: page_w, h: page_h, image: None, texts: vec![] };
+                        y = 60;
+                    }
+                    page.texts.push(crate::pdf::Text { x: 50, y, size: 12, s: line, w: 0, visible: true, color: 0x1E1B2C });
+                    y += 17;
+                }
+                pages.push(page);
+            } else {
+                pages.push(crate::pdf::Page { w: page_w, h: page_h, image: Some((0, 0, page_w, page_h, pw as u32, ph as u32, rgb)), texts });
+            }
+        }
+        crate::pdf::write(&self.title(), &pages)
+    }
 }
 
 impl App for Slides {
@@ -2102,6 +3019,38 @@ impl App for Slides {
                 self.rename_to(&name, sys);
             }
         }
+        // the chart data sheet and the footer dialog
+        match &mut self.overlay {
+            Overlay::ChartData(_) => {
+                match code {
+                    C_DLG_TEXT => {}
+                    C_DISMISS => {
+                        self.data_commit();
+                        self.overlay = Overlay::None;
+                    }
+                    c if c == C_DATA_TITLE || (C_DATA_DONE..=C_DATA_LEGEND).contains(&c) || c >= C_DATA_KIND => self.data_action(c),
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::Footer(dlg) => {
+                match code {
+                    C_DLG_NUMBERS => dlg.numbers = !dlg.numbers,
+                    C_DLG_OK => {
+                        let (text, numbers) = (dlg.text.text.trim().to_string(), dlg.numbers);
+                        self.overlay = Overlay::None;
+                        self.snapshot();
+                        self.deck.footer = text;
+                        self.deck.numbers = numbers;
+                        self.touch_all();
+                    }
+                    C_DISMISS => self.overlay = Overlay::None,
+                    _ => {}
+                }
+                return;
+            }
+            _ => {}
+        }
         // a menu or chooser is open: pick from it, or close it
         match &self.overlay {
             Overlay::Menu(kind, _) => {
@@ -2111,7 +3060,10 @@ impl App for Slides {
                     self.menu_pick(kind, (code - C_MENU) as usize);
                     return;
                 }
-                let same = matches!((kind, code), (MenuKind::NewSlide, C_NEW_SLIDE) | (MenuKind::Layout, C_LAYOUT) | (MenuKind::Theme, C_THEME) | (MenuKind::Color, C_COLOR) | (MenuKind::Trans, C_TRANS));
+                let same = matches!(
+                    (kind, code),
+                    (MenuKind::NewSlide, C_NEW_SLIDE) | (MenuKind::Layout, C_LAYOUT) | (MenuKind::Theme, C_THEME) | (MenuKind::Color, C_COLOR) | (MenuKind::Trans, C_TRANS) | (MenuKind::Shapes, C_RECT) | (MenuKind::Table, C_TABLE) | (MenuKind::Chart, C_CHART) | (MenuKind::TableEdit | MenuKind::ChartEdit, C_OBJECT) | (MenuKind::Anim, C_ANIM)
+                );
                 self.overlay = Overlay::None;
                 if same || code == C_DISMISS {
                     return;
@@ -2127,7 +3079,7 @@ impl App for Slides {
         }
         if code != C_CANVAS && code != C_NOTES && code >= C_NEW_SLIDE && code != C_BOLD && code != C_ITALIC && code != C_UNDERLINE && !(C_LEFT..=C_BIGGER).contains(&code) && code != C_COLOR {
             // toolbar and menu commands leave text editing (formatting keeps it)
-            if !(C_MENU..C_FILE).contains(&code) && code != C_THEME && code != C_TRANS && code != C_UNDO && code != C_REDO && code != C_COPY && code != C_CUT && code != C_PASTE && code != C_ALL {
+            if !(C_MENU..C_FILE).contains(&code) && !matches!(code, C_THEME | C_TRANS | C_UNDO | C_REDO | C_COPY | C_CUT | C_PASTE | C_ALL | C_OBJECT) {
                 self.stop_edit();
             }
         }
@@ -2181,7 +3133,32 @@ impl App for Slides {
             C_SMALLER => self.resize_text(false),
             C_BIGGER => self.resize_text(true),
             C_TEXTBOX => self.add_shape(Kind::Text),
-            C_RECT => self.add_shape(Kind::Rect),
+            C_RECT => self.open_menu(MenuKind::Shapes, code),
+            C_TABLE => self.open_menu(MenuKind::Table, code),
+            C_CHART => self.open_menu(MenuKind::Chart, code),
+            C_OBJECT => match self.shape().map(|s| s.kind) {
+                Some(Kind::Table) => self.open_menu(MenuKind::TableEdit, code),
+                Some(Kind::Chart) => self.open_menu(MenuKind::ChartEdit, code),
+                _ => {}
+            },
+            C_ANIM => {
+                if self.sel.is_some() {
+                    self.open_menu(MenuKind::Anim, code);
+                }
+            }
+            C_FOOTER => self.overlay = Overlay::Footer(FooterDlg { text: LineEdit { text: self.deck.footer.clone() }, numbers: self.deck.numbers || self.deck.footer.is_empty() }),
+            C_PDF => self.export_pdf(sys, false),
+            C_PDF_NOTES => self.export_pdf(sys, true),
+            C_PRESENTER => {
+                self.play(false);
+                if let Some(s) = self.show.as_mut() {
+                    s.presenter = true;
+                }
+            }
+            C_ROT_R => self.rotate_by(90),
+            C_ROT_L => self.rotate_by(-90),
+            C_FLIP_H => self.flip(true),
+            C_FLIP_V => self.flip(false),
             C_ELLIPSE => self.add_shape(Kind::Ellipse),
             C_PICTURE => {
                 self.overlay = Overlay::Pictures(Self::list_files(sys, &[".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"], "\u{0}"));
@@ -2268,7 +3245,7 @@ impl App for Slides {
             C_FRONT => self.restack(true),
             C_BACK => self.restack(false),
             C_DISMISS => {}
-            c if c >= C_FILE => {
+            c if (C_FILE..C_FILE + FILES_MAX).contains(&c) => {
                 let (path, pic) = match &self.overlay {
                     Overlay::Open(files) => (files.get((c - C_FILE) as usize).cloned(), false),
                     Overlay::Pictures(files) => (files.get((c - C_FILE) as usize).cloned(), true),
@@ -2298,15 +3275,20 @@ impl App for Slides {
                 }
                 Key::Right | Key::Down | Key::PageDown | Key::Enter | Key::Char(' ') | Key::Char('n') => self.show_step(true),
                 Key::Left | Key::Up | Key::PageUp | Key::Backspace | Key::Char('p') => self.show_step(false),
-                Key::Home => {
+                Key::Home | Key::End => {
+                    let n = if k == Key::Home { 0 } else { self.deck.slides.len() - 1 };
                     if let Some(s) = self.show.as_mut() {
-                        *s = Show { idx: 0, from: None, end: false, black: false, frame: None };
+                        s.idx = n;
+                        s.step = 0;
+                        s.from = None;
+                        s.frame = None;
+                        s.playing = None;
+                        s.end = false;
                     }
                 }
-                Key::End => {
-                    let n = self.deck.slides.len() - 1;
+                Key::Char('v') | Key::Char('V') => {
                     if let Some(s) = self.show.as_mut() {
-                        *s = Show { idx: n, from: None, end: false, black: false, frame: None };
+                        s.presenter = !s.presenter;
                     }
                 }
                 Key::Char('b') | Key::Char('.') => {
@@ -2328,6 +3310,20 @@ impl App for Slides {
                 Key::Esc => self.overlay = Overlay::None,
                 _ => {
                     e.key(k);
+                }
+            }
+            return;
+        }
+        if matches!(self.overlay, Overlay::ChartData(_)) {
+            self.data_key(k, ctrl, sys);
+            return;
+        }
+        if let Overlay::Footer(dlg) = &mut self.overlay {
+            match k {
+                Key::Enter => self.action(C_DLG_OK, false, sys),
+                Key::Esc => self.overlay = Overlay::None,
+                _ => {
+                    dlg.text.key(k);
                 }
             }
             return;
@@ -2406,6 +3402,7 @@ impl App for Slides {
                 Key::Enter => self.enter(),
                 Key::Backspace => self.backspace(false),
                 Key::Delete => self.backspace(true),
+                Key::Tab if self.ed.map_or(false, |e| e.cell.is_some()) => self.next_cell(!shift),
                 Key::Tab => {
                     let body = self.shape().map_or(false, |s| s.kind == Kind::Body || s.text.paras.iter().any(|p| p.style != Style::Body));
                     if body {
@@ -2546,8 +3543,11 @@ impl App for Slides {
                     self.snapshot();
                     self.press = Some(Press::Resize { handle, start, orig, moved: true });
                 }
+                let Some(i) = self.sel else { return };
+                let rot = self.slide().shapes[i].rot;
                 let k = |v: i32| (v as i64 * self.deck.w as i64 / self.canvas.w.max(1) as i64) as i32;
-                let (dx, dy) = (k(x - start.0), k(y - start.1));
+                // the pointer's movement in the shape's own (turned) frame
+                let (dx, dy) = rotate(k(x - start.0), k(y - start.1), 0, 0, -rot);
                 let (ox, oy, ow, oh) = orig;
                 let (mut l, mut t, mut r, mut b) = (ox, oy, ox + ow, oy + oh);
                 match handle {
@@ -2572,7 +3572,6 @@ impl App for Slides {
                     }
                     _ => l += dx,
                 }
-                let Some(i) = self.sel else { return };
                 let keep_aspect = self.slide().shapes[i].kind == Kind::Picture && handle % 2 == 0 && !crate::input::shift();
                 if keep_aspect && oh > 0 {
                     // width leads; the opposite corner stays put
@@ -2584,17 +3583,97 @@ impl App for Slides {
                         b = t + h;
                     }
                 }
+                let (l, t) = (l.min(r - 16), t.min(b - 16));
+                let (w, h) = ((r - l).max(16), (b - t).max(16));
+                // keep the opposite side where it was on screen when turned
+                let (ocx, ocy) = (ox + ow / 2, oy + oh / 2);
+                let (ncx, ncy) = rotate(l + w / 2, t + h / 2, ocx, ocy, rot);
                 let sh = &mut self.slide_mut().shapes[i];
-                sh.x = l.min(r - 16);
-                sh.y = t.min(b - 16);
-                sh.w = (r - l).max(16);
-                sh.h = (b - t).max(16);
+                sh.x = ncx - w / 2;
+                sh.y = ncy - h / 2;
+                sh.w = w;
+                sh.h = h;
+                if sh.kind == Kind::Table {
+                    // rows share the new height, then grow to fit their text
+                    if let Some(tb) = sh.table.as_mut() {
+                        let total: i32 = tb.rows.iter().sum::<i32>().max(1);
+                        for rr in tb.rows.iter_mut() {
+                            *rr = (*rr as i64 * h as i64 / total as i64) as i32;
+                        }
+                    }
+                    sh.fit_table();
+                }
+                self.touch();
+            }
+            Press::Rotate { centre, orig, moved } => {
+                if !moved {
+                    self.snapshot();
+                    self.press = Some(Press::Rotate { centre, orig, moved: true });
+                }
+                let Some(i) = self.sel else { return };
+                let (dx, dy) = ((x - centre.0) as i64, (y - centre.1) as i64);
+                if dx == 0 && dy == 0 {
+                    return;
+                }
+                // the angle of the pointer from the centre, 0 pointing up
+                let mut best = (i64::MAX, 0);
+                for a in 0..360 {
+                    let (s, c) = (sin_deg(a) as i64, -cos_deg(a) as i64);
+                    // the direction (sin a, -cos a) nearest the pointer's
+                    let cross = (dx * c - dy * s).abs();
+                    let dot = dx * s + dy * c;
+                    if dot > 0 && cross < best.0 {
+                        best = (cross, a);
+                    }
+                }
+                let mut a = best.1;
+                if crate::input::shift() {
+                    a = (a + 7) / 15 * 15;
+                } else {
+                    for snap in [0, 90, 180, 270, 360] {
+                        if (a - snap).abs() <= 3 {
+                            a = snap;
+                        }
+                    }
+                }
+                let _ = orig;
+                self.slide_mut().shapes[i].rot = a.rem_euclid(360);
+                self.touch();
+            }
+            Press::LineEnd { end, moved } => {
+                if !moved {
+                    self.snapshot();
+                    self.press = Some(Press::LineEnd { end, moved: true });
+                }
+                let Some(i) = self.sel else { return };
+                let (ux, uy) = self.to_units(x, y);
+                let sh = &mut self.slide_mut().shapes[i];
+                let (a, b) = line_ends(sh);
+                let mut p = (ux, uy);
+                // Shift keeps it level, upright or diagonal
+                let other = if end == 0 { b } else { a };
+                if crate::input::shift() {
+                    let (dx, dy) = (p.0 - other.0, p.1 - other.1);
+                    if dy.abs() * 2 < dx.abs() {
+                        p.1 = other.1;
+                    } else if dx.abs() * 2 < dy.abs() {
+                        p.0 = other.0;
+                    } else {
+                        let m = dx.abs().max(dy.abs());
+                        p = (other.0 + m * dx.signum(), other.1 + m * dy.signum());
+                    }
+                }
+                if end == 0 {
+                    set_line_ends(sh, p, b);
+                } else {
+                    set_line_ends(sh, a, p);
+                }
                 self.touch();
             }
             Press::Text => {
                 let (ux, uy) = self.to_units(x, y);
-                if let Some(ed) = self.ed {
-                    let sh = self.slide().shapes[ed.shape].clone();
+                if let (Some(_), Some(mut sh)) = (self.ed, self.text_target()) {
+                    sh.rot = 0;
                     let tb = layout(&sh);
                     let p = hit(&sh, &tb, ux - sh.x, uy - sh.y);
                     let e = self.ed.as_mut().unwrap();
@@ -2624,9 +3703,9 @@ impl App for Slides {
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
-            0 => vec![("New Presentation", C_NEW), ("Open…", C_OPEN), ("Save", C_SAVE), ("Export as PowerPoint (.pptx)", C_EXPORT), ("Rename…", C_RENAME)],
-            1 => vec![("Undo", C_UNDO), ("Redo", C_REDO), ("Cut", C_CUT), ("Copy", C_COPY), ("Paste", C_PASTE), ("Duplicate", C_DUP), ("Delete", C_DELETE), ("Select All", C_ALL), ("Bring to Front", C_FRONT), ("Send to Back", C_BACK)],
-            2 => vec![("Play from Start", C_PLAY_START), ("Play from This Slide", C_PLAY), ("Insert Text Box", C_TEXTBOX), ("Insert Rectangle", C_RECT), ("Insert Ellipse", C_ELLIPSE), ("Insert Picture…", C_PICTURE)],
+            0 => vec![("New Presentation", C_NEW), ("Open…", C_OPEN), ("Save", C_SAVE), ("Export as PowerPoint (.pptx)", C_EXPORT), ("Export as PDF", C_PDF), ("Export Notes Pages (PDF)", C_PDF_NOTES), ("Print…", C_PDF), ("Rename…", C_RENAME)],
+            1 => vec![("Undo", C_UNDO), ("Redo", C_REDO), ("Cut", C_CUT), ("Copy", C_COPY), ("Paste", C_PASTE), ("Duplicate", C_DUP), ("Delete", C_DELETE), ("Select All", C_ALL), ("Bring to Front", C_FRONT), ("Send to Back", C_BACK), ("Rotate Right 90°", C_ROT_R), ("Rotate Left 90°", C_ROT_L), ("Flip Horizontal", C_FLIP_H), ("Flip Vertical", C_FLIP_V)],
+            2 => vec![("Play from Start", C_PLAY_START), ("Play from This Slide", C_PLAY), ("Presenter View", C_PRESENTER), ("Insert Text Box", C_TEXTBOX), ("Insert Shape…", C_RECT), ("Insert Table…", C_TABLE), ("Insert Chart…", C_CHART), ("Insert Picture…", C_PICTURE), ("Header & Footer…", C_FOOTER)],
             3 => vec![("New Slide", C_ADD_SLIDE), ("Duplicate Slide", C_DUP_SLIDE), ("Delete Slide", C_DEL_SLIDE), ("Move Slide Up", C_SLIDE_UP), ("Move Slide Down", C_SLIDE_DOWN), ("Previous Slide", C_PREV), ("Next Slide", C_NEXT)],
             _ => vec![],
         }
@@ -2640,7 +3719,7 @@ impl App for Slides {
     }
 
     fn animating(&self) -> bool {
-        self.ed.is_some() || self.notes.is_some() || self.show.as_ref().map_or(false, |s| s.from.is_some())
+        self.ed.is_some() || self.notes.is_some() || matches!(self.overlay, Overlay::ChartData(_)) || self.show.as_ref().map_or(false, |s| s.from.is_some() || s.playing.is_some() || s.presenter)
     }
 
     fn open_path(&mut self, path: &str, sys: &mut Sys) {

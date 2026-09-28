@@ -229,13 +229,40 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
   levels (**Tab** / **Shift+Tab**); **A−** / **A+** change the size. Text that
   doesn't fit shrinks until it does, as in other presentation programs.
   Double-click selects a word, drag or Shift+arrows select text.
-- **Shapes and pictures:** text boxes, rectangles and ellipses (with text
-  inside), and pictures (PNG, JPEG, GIF, BMP or WebP, from Pictures, Documents,
+- **Shapes and pictures:** text boxes, sixteen preset shapes (rectangle,
+  rounded rectangle, ellipse, triangles, diamond, pentagon, hexagon, octagon,
+  star, four arrows, chevron, parallelogram, trapezoid; all can hold text),
+  lines and arrows, and pictures (PNG, JPEG, GIF, BMP or WebP, from Pictures, Documents,
   Downloads or Shared). Drag to move (it snaps to the slide's edges and
   centre), drag the handles to resize (pictures keep their shape unless you
   hold Shift), arrow keys nudge (Shift for one unit). **A** sets the fill of a
   shape, the colour of text, a picture's border, or with nothing selected the
-  slide's background. Edit › Bring to Front / Send to Back.
+  slide's background. The same menu sets a **gradient** (a second colour and
+  an angle), the outline, the line width and arrowheads. Edit › Bring to
+  Front / Send to Back.
+
+  ![Shapes, gradients and animations](screenshots/hyda-slides-shapes.png)
+
+- **Rotation and flips:** drag the round handle above a shape to rotate it
+  (it catches at right angles; hold Shift for 15° steps), or Edit › Rotate
+  Right / Left 90° and Flip Horizontal / Vertical. Rotated shapes still
+  resize from their handles. A line has a handle at each end instead.
+- **Tables:** the table button picks a size from a grid. Click a cell to type
+  in it; **Tab** moves to the next cell and adds a row at the end. The
+  **Table ›** menu inserts and deletes rows and columns and turns the header
+  row and banded rows on or off. Dragging the bottom handle scales the rows.
+- **Charts:** column, bar, line, area and pie, with a title, axis and legend.
+  **Chart › Edit data…** opens a small sheet of categories and series: type
+  numbers, add or remove rows and series, switch the chart type.
+
+  ![Charts and a table](screenshots/hyda-slides-charts.png)
+  ![Editing a chart's data](screenshots/hyda-slides-chart-data.png)
+
+- **Animations:** **Animate** gives the selected shape an entrance: appear,
+  fade or fly in. Numbered badges show the order; in the slideshow each click
+  brings in the next one before moving to the next slide.
+- **Header & footer** (View menu): a footer line and slide numbers on every
+  slide except title slides.
 - **Speaker notes** under each slide.
 - **Slideshow:** the ▶ button or **F5** plays full screen, from the start (**F5**)
   or the current slide (**Shift+F5**, the ▶ button, or View › Play from This
@@ -244,6 +271,18 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
   Transitions: none, **fade** or **push** (Transition › Apply to all slides).
 
   ![Slideshow](screenshots/hyda-slides-show.png)
+
+- **Presenter view** (View › Presenter View, or **V** during a slideshow): the
+  current slide, the next one (or "N more on this slide" while animations
+  remain), your notes and a timer. **V** switches back to the audience view.
+
+  ![Presenter view](screenshots/hyda-slides-presenter.png)
+
+- **PDF and printing:** File › Export as PDF writes one page per slide, with
+  the text laid over the picture so it can be searched and copied. Export
+  Notes Pages makes A4 pages with the slide above its speaker notes. Print…
+  makes the PDF (HydatekOS has no printer drivers; print the PDF from another
+  computer).
 
 - **Undo and redo** (100 steps), cut, copy and paste of text or whole shapes
   (pictures included), duplicate (**Ctrl+D**).
@@ -257,12 +296,14 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
 | Keys | Action |
 |---|---|
 | F5 / Shift+F5 | Play from the start / from this slide |
+| V (in the slideshow) | Presenter view / audience view |
+| Home / End (in the slideshow) | First / last slide |
 | Ctrl+M | New slide (like the current one) |
 | Ctrl+D | Duplicate the shape, or the slide |
 | Delete | Delete the shape (a placeholder empties), or with nothing selected the slide |
 | Enter / F2 | Edit the selected shape's text; with nothing selected, a new slide |
 | Esc | Stop editing text, then deselect |
-| Tab / Shift+Tab | While editing a list: indent / outdent. Otherwise: select the next / previous shape |
+| Tab / Shift+Tab | In a table: next / previous cell (Tab adds a row at the end). While editing a list: indent / outdent. Otherwise: select the next / previous shape |
 | Arrows | Nudge the shape (Shift: finely); with nothing selected, go to the previous / next slide |
 | Ctrl+↑ / Ctrl+↓ | Move the slide up / down |
 | Ctrl+B / Ctrl+I / Ctrl+U | Bold / italic / underline |
@@ -279,20 +320,27 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
 | **Save** | `.hydp` | The only format it saves to your storage. A new presentation goes to Documents › Presentations, named after its first title; click the name at the top to rename it. Closing the window saves your changes. Pictures are kept inside the file. |
 | **Import** | `.pptx` | Opens the file to read, edit and play ("Viewing a PowerPoint file"). Saving writes a **new `.hydp` next to it**; the original is never changed. |
 | **Export** | `.pptx` | File › Export as PowerPoint writes a copy for sharing, next to the presentation. It never replaces an existing file. |
+| **Export** | `.pdf` | File › Export as PDF (slides) or Export Notes Pages (slides with notes, A4), next to the presentation. |
 
 Exported PowerPoint files are standard Office Open XML with the slides, their
-shapes, text formatting, bullets and levels, pictures, backgrounds, the theme
-(as the slide master), transitions and speaker notes, so they open in
+shapes (preset geometries, rotation, flips, gradients), lines and arrows,
+tables, charts (with their data in an embedded workbook, so PowerPoint's Edit
+Data works), entrance animations, footers and slide numbers, text formatting,
+bullets and levels, pictures, backgrounds, the theme (as the slide master),
+transitions and speaker notes, so they open in
 PowerPoint and other presentation programs. They name Figtree, HydatekOS's
 font, which other computers may replace with one of theirs.
 
 When importing PowerPoint files, Hyda Slides reads the slide size, the order of
 slides (skipping hidden ones), titles, subtitles and content placeholders (with
 the positions, sizes and alignment they inherit from the layout and master),
-text boxes, rectangles, ellipses and other shapes (as rectangles), groups,
-pictures (PNG, JPEG, GIF, BMP, WebP), bold, italic, underline, strikethrough,
+text boxes, shapes (the sixteen presets above, rotated and flipped; other
+presets become rectangles), lines and connectors with arrowheads, tables,
+charts (column, bar, line, area, pie), gradient fills, groups, pictures (PNG, JPEG, GIF, BMP, WebP), bold, italic, underline, strikethrough,
 bullets, numbering and levels, font sizes and colours, fills and outlines
-(theme colours too), backgrounds, transitions and speaker notes. The deck gets
+(theme colours too), backgrounds (gradients too), transitions, entrance
+animations (appear, fade and fly in; others play as appear), footers, slide
+numbers and speaker notes. The deck gets
 an "Imported" theme with the file's background, text and accent colours.
 
 ![A PowerPoint file in Hyda Slides](screenshots/hyda-slides-pptx.png)
@@ -325,10 +373,19 @@ pic png iVBORw0KGgo…            picture 0 (base64)
 end 1a2b3c4d                    CRC-32 of every byte before this line
 ```
 
-- **Shapes:** `title`, `subtitle`, `body`, `text`, `rect`, `ellipse` or
-  `picture`, then x, y, width and height in slide units, the text size in
+- **Shapes:** `title`, `subtitle`, `body`, `text`, `rect`, `ellipse`,
+  `picture`, `line`, `table` or `chart`, then x, y, width and height in slide units, the text size in
   points, the text's vertical anchor (`t`, `m`, `b`), and fill, outline and
-  text colours (`-` for the theme's).
+  text colours (`-` for the theme's). Optional after those: `geom=` (a
+  PowerPoint preset name such as `star5` or `chevron`), `rot=` (degrees),
+  `flip=h`/`v`/`hv`, `grad=<colour>,<angle>`, `lw=` (line width), `arrows=`
+  (`h` head, `t` tail, `-` none, e.g. `-t`), `anim=<appear|fade|fly>,<order>`.
+- **Tables:** `table <rows> <cols> <header> <banded>`, `cols` and `rows`
+  (sizes), then `cell <r> <c>` followed by that cell's `p`/`t`/`f` lines.
+- **Charts:** `chart <column|bar|line|area|pie> <legend>`, `ctitle`, one `cat`
+  line per category, and `series <name>` + `vals <numbers>` per series.
+- **Deck and slide extras:** `footer <text>`, `numbers 1`, and per slide
+  `bgrad <colour> <angle>` (a gradient background).
 - **Paragraph styles:** `body`, `bullet`, `number`; levels 0–8.
 - **Pictures** are PNG or JPEG, stored once and numbered from 0; other formats
   are converted to PNG when inserted.
@@ -336,15 +393,20 @@ end 1a2b3c4d                    CRC-32 of every byte before this line
 
 ### Limits
 
-- **Not yet:** tables, charts, lines and arrows, rotation, animations of
-  shapes within a slide, gradient fills (a gradient imports as its first
-  colour), slide numbers and footers, presenter view, printing and PDF export.
 - **One text size per shape**, reduced for deeper list levels; imported text
   with mixed sizes takes the size most of it uses. Per-run text colours become
-  one colour for the shape.
+  one colour for the shape. Table cells share their table's text size.
 - **One font** (Figtree); imported fonts are shown in Figtree.
-- Imported shapes other than rectangles and ellipses (arrows, stars…) show as
-  rectangles; charts, tables, SmartArt, video and audio are left out.
+- Only entrance animations (appear, fade, fly in from the bottom); emphasis,
+  exit and motion paths are left out. Charts have one colour per series (no
+  per-point colours or data labels except pie percentages); merged table
+  cells are shown unmerged.
+- SmartArt, video and audio are left out when importing; preset shapes
+  beyond the sixteen show as rectangles.
+- Text in a rotated shape is edited straight and shown rotated again when
+  you stop editing.
+- PDFs use Helvetica for the searchable text layer (the picture keeps
+  Figtree), so selected text may not line up exactly.
 
 ## How it's built
 
@@ -356,9 +418,11 @@ end 1a2b3c4d                    CRC-32 of every byte before this line
 | Hyda Grids: cells, formula parser and evaluator, number formats | `kernel/src/grid.rs` |
 | Hyda Grids files: `.hydg`, `.xlsx` import/export, CSV | `kernel/src/gridio.rs` |
 | The Hyda Grids app | `kernel/src/apps/grids.rs` |
-| Hyda Slides: slides, layouts, themes, text layout | `kernel/src/deck.rs` |
+| Hyda Slides: slides, layouts, themes, shapes, tables, charts, text layout | `kernel/src/deck.rs` |
 | Hyda Slides files: `.hydp`, `.pptx` import/export, the PNG writer | `kernel/src/deckio.rs` |
-| The Hyda Slides app: editor, thumbnails, slideshow | `kernel/src/apps/slides.rs` |
+| Drawing slides: anti-aliased polygons, gradients, rotation, tables, charts | `kernel/src/apps/slidedraw.rs` |
+| The Hyda Slides app: editor, thumbnails, slideshow, presenter view | `kernel/src/apps/slides.rs` |
+| The PDF writer | `kernel/src/pdf.rs` |
 | Italic faces (slanted at build time), ₦, Σ and other symbols | `tools/fontgen.py` |
 
 A document is a list of paragraphs; each has a style, an alignment, its
@@ -375,7 +439,10 @@ numbering, shrinking to fit); changing layouts; the PNG writer and deflate
 (round trips through inflate); `.pptx` round trip; and importing PowerPoint
 files written by two other programs (a 4:3 deck made with python-pptx on its
 default template, and the same deck re-saved by LibreOffice Impress, built by
-`tests-host/fixtures/slides/make.py`). Exported `.pptx` files were also
+`tests-host/fixtures/slides/make.py`, which also adds a table, charts, a
+connector, a rotated star and a gradient); tables, charts, rotation,
+gradients, lines, animations and footers through `.hydp`, `.pptx` and
+LibreOffice; chart axis ticks; and the PDF writer. Exported `.pptx` files were also
 opened and rendered in LibreOffice Impress to check them. For Hyda Grids: references, operator precedence, every
 function, circular references, number formats and typed values, moving
 references, `.hydg` round trip and damage checks, CSV, `.xlsx` round trip, an

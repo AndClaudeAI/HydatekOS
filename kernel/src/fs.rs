@@ -73,7 +73,7 @@ impl Vfs {
 
     /// The Hyda Slides sample (also added once to disks made before it existed).
     fn seed_slides(&mut self) {
-        const MARK: &str = "/system/slides-sample";
+        const MARK: &str = "/system/slides-sample-2";
         if self.exists(MARK) || self.get("/home").is_none() {
             return;
         }
@@ -445,6 +445,8 @@ fn sample_deck(pic: Vec<u8>) -> crate::deck::Deck {
     use crate::doc::{Pos, Style, BOLD};
     let mut d = Deck::new();
     d.name = String::from("Meet HydatekOS");
+    d.footer = String::from("Meet HydatekOS · Lagos 2026");
+    d.numbers = true;
     d.slides.clear();
     let bullets = |sh: &mut Shape, items: &[(&str, u8)]| {
         let text: Vec<&str> = items.iter().map(|x| x.0).collect();
@@ -489,6 +491,73 @@ fn sample_deck(pic: Vec<u8>) -> crate::deck::Deck {
     e.size = 24;
     e.color = Some(0x1E1B2C);
     s.shapes.push(e);
+    s.trans = Trans::Push;
+    d.slides.push(s);
+    // charts and tables
+    let mut s = d.new_slide(Layout::TitleOnly);
+    s.shapes[0].set_plain("By the numbers");
+    let mut ch = Shape::new(Kind::Chart, 70, 170, 640, 470);
+    ch.chart = Some(Chart {
+        kind: ChartKind::Column,
+        title: String::from("Active devices (thousands)"),
+        cats: ["Q1", "Q2", "Q3", "Q4"].iter().map(|c| String::from(*c)).collect(),
+        series: alloc::vec![Series { name: String::from("2025"), vals: alloc::vec![12.0, 18.5, 24.0, 31.0] }, Series { name: String::from("2026"), vals: alloc::vec![28.0, 39.5, 47.0, 62.5] }],
+        legend: true,
+    });
+    s.shapes.push(ch);
+    let mut tb = Shape::new(Kind::Table, 750, 200, 460, 200);
+    let mut t = Table::new(4, 2, 460, 200);
+    for (i, (a, b)) in [("App", "Daily users"), ("Browser", "41,200"), ("Hyda Workspace", "18,900"), ("Phone Link", "12,300")].iter().enumerate() {
+        t.cell_mut(i, 0).insert(Pos::new(0, 0), a, 0);
+        t.cell_mut(i, 1).insert(Pos::new(0, 0), b, 0);
+        t.cell_mut(i, 1).paras[0].align = crate::deck::Align::Right;
+    }
+    tb.table = Some(t);
+    tb.fit_table();
+    s.shapes.push(tb);
+    let mut pie = Shape::new(Kind::Chart, 780, 420, 400, 250);
+    pie.chart = Some(Chart::sample(ChartKind::Pie));
+    pie.chart.as_mut().unwrap().legend = false;
+    s.shapes.push(pie);
+    s.trans = Trans::Fade;
+    d.slides.push(s);
+    // shapes, arrows and animations
+    let mut s = d.new_slide(Layout::TitleOnly);
+    s.shapes[0].set_plain("How a presentation is made");
+    let steps = ["Write", "Design", "Rehearse"];
+    for (k, name) in steps.iter().enumerate() {
+        let mut c = Shape::new(Kind::Rect, 90 + k as i32 * 330, 250, 280, 130);
+        c.geom = Geom::Chevron;
+        c.fill = Some([0xC0622B, 0xD9A441, 0x0E5A43][k]);
+        c.set_plain(name);
+        c.size = 26;
+        c.anim = Anim::Fly;
+        c.anim_order = k as u16 + 1;
+        s.shapes.push(c);
+    }
+    let mut star = Shape::new(Kind::Rect, 1060, 430, 150, 150);
+    star.geom = Geom::Star5;
+    star.fill = Some(0xF2B544);
+    star.rot = 12;
+    star.anim = Anim::Fade;
+    star.anim_order = 4;
+    s.shapes.push(star);
+    let mut g = Shape::new(Kind::Rect, 90, 450, 560, 110);
+    g.geom = Geom::RoundRect;
+    g.fill = Some(0x2F6FEB);
+    g.grad = Some((0x8E6CB5, 0));
+    g.set_plain("Then press F5 to present");
+    g.size = 24;
+    g.anim = Anim::Fade;
+    g.anim_order = 5;
+    s.shapes.push(g);
+    let mut ln = Shape::new(Kind::Line, 0, 0, 0, 0);
+    set_line_ends(&mut ln, (670, 505), (1040, 505));
+    ln.line = Some(0x1E1B2C);
+    ln.line_w = 4;
+    ln.tail = true;
+    s.shapes.push(ln);
+    s.notes = String::from("Each click brings in the next step.");
     s.trans = Trans::Push;
     d.slides.push(s);
     let mut s = d.new_slide(Layout::Section);

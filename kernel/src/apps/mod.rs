@@ -20,6 +20,7 @@ pub mod phone;
 pub mod phonelink;
 pub mod scripts;
 pub mod settings;
+pub mod slidedraw;
 pub mod slides;
 pub mod terminal;
 
@@ -112,7 +113,7 @@ impl AppKind {
             AppKind::Music => (560, 400),
             AppKind::Scripts => (900, 600),
             AppKind::Grids => (920, 600),
-            AppKind::Slides => (1040, 660),
+            AppKind::Slides => (1080, 680),
             AppKind::Browser => (1000, 640),
             _ => (660, 430),
         }

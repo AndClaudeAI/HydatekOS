@@ -14,6 +14,8 @@ pub mod doc;
 pub mod deck;
 #[path = "../../kernel/src/deckio.rs"]
 pub mod deckio;
+#[path = "../../kernel/src/pdf.rs"]
+pub mod pdf;
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
