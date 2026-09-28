@@ -4,6 +4,9 @@
 use crate::apps::AppKind;
 use crate::efi::Time;
 use crate::fs::Vfs;
+
+/// Extra certificate authorities to trust (PEM or DER files).
+pub const CERTS_DIR: &str = "/system/certs";
 use crate::link::Link;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -517,6 +520,22 @@ impl Sys {
             format!("{} {}", e.d, &MONTHS[(e.m as usize).saturating_sub(1) % 12][..3])
         };
         format!("{}, {:02}:{:02}", day, e.hh, e.mm)
+    }
+
+    /// Certificate authorities for https: the built-in list plus any
+    /// certificates the user put in /system/certs.
+    pub fn trust_store(&self) -> crate::tls::x509::Roots {
+        let mut roots = crate::tls::x509::Roots::builtin();
+        let builtin = roots.anchors.len();
+        for (name, dir, _) in self.fs.list(CERTS_DIR) {
+            if !dir {
+                if let Some(data) = self.fs.read(&crate::fs::join(CERTS_DIR, &name)) {
+                    roots.add_file(&data);
+                }
+            }
+        }
+        crate::log!("tls: {} built-in authorities, {} added", builtin, roots.anchors.len() - builtin);
+        roots
     }
 
     pub fn clock(&self) -> String {

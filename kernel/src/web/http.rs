@@ -35,6 +35,8 @@ pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// for https: how the connection was secured
+    pub security: Option<String>,
 }
 
 impl Response {
@@ -145,7 +147,7 @@ impl Parser {
             "deflate" => inflate_any(&body).ok_or("couldn't unpack the page (deflate)")?,
             _ => body,
         };
-        Ok(Response { url: url.to_string(), status, headers, body })
+        Ok(Response { url: url.to_string(), status, headers, body, security: None })
     }
 }
 

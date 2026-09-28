@@ -1,10 +1,13 @@
 //! Runs web requests on the HydatekOS network stack: DNS lookup, TCP
-//! connection, HTTP exchange, redirects and cookies.
+//! connection, TLS for https, HTTP exchange, redirects and cookies.
 
 use super::url::Url;
 use super::{dns, http, Progress, WebQueue};
 use crate::net::{Net, UDP_CLIENT_PORTS};
+use crate::tls::client::Client;
+use crate::tls::x509::{self, Roots};
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -15,6 +18,7 @@ const MAX_REDIRECTS: u32 = 8;
 enum Step {
     Resolve,
     Connect,
+    Secure,
     Exchange,
 }
 
@@ -31,6 +35,9 @@ struct Job {
     sent: bool,
     parser: http::Parser,
     started: u64,
+    tls: Option<Client>,
+    /// bytes waiting for room in the TCP send buffer
+    outq: Vec<u8>,
 }
 
 struct Lookup {
@@ -40,8 +47,8 @@ struct Lookup {
     tries: u32,
 }
 
-#[derive(Default)]
 pub struct Fetcher {
+    roots: Rc<Roots>,
     jobs: Vec<Job>,
     cache: BTreeMap<String, ([u8; 4], u64)>,
     lookups: BTreeMap<String, Lookup>,
@@ -52,8 +59,16 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn new() -> Fetcher {
-        Fetcher::default()
+    pub fn new(roots: Roots) -> Fetcher {
+        Fetcher {
+            roots: Rc::new(roots),
+            jobs: Vec::new(),
+            cache: BTreeMap::new(),
+            lookups: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            next_port: 0,
+            cookies: BTreeMap::new(),
+        }
     }
 
     fn cookie_header(&self, host: &str) -> String {
@@ -155,7 +170,7 @@ impl Fetcher {
     pub fn poll(&mut self, net: &mut Net, q: &mut WebQueue, now: u64) -> bool {
         for r in core::mem::take(&mut q.queue) {
             match Url::parse(&r.url) {
-                Some(url) if url.scheme == "http" => self.jobs.push(Job {
+                Some(url) if url.scheme == "http" || url.scheme == "https" => self.jobs.push(Job {
                     id: r.id,
                     url,
                     method: r.method,
@@ -168,8 +183,9 @@ impl Fetcher {
                     sent: false,
                     parser: http::Parser::default(),
                     started: now,
+                    tls: None,
+                    outq: Vec::new(),
                 }),
-                Some(url) if url.scheme == "https" => q.done.push((r.id, Err(String::from("Secure (https) sites need HydatekOS's TLS support, which is being built")))),
                 _ => q.done.push((r.id, Err(format!("HydatekOS can't open \"{}\"", r.url)))),
             }
         }
@@ -200,7 +216,7 @@ impl Fetcher {
                             let loc = resp.header("location").map(|s| s.to_string());
                             if matches!(resp.status, 301 | 302 | 303 | 307 | 308) && loc.is_some() && j.redirects < MAX_REDIRECTS {
                                 match loc.and_then(|l| j.url.join(&l)) {
-                                    Some(next) if next.scheme == "http" => {
+                                    Some(next) if next.scheme == "http" || next.scheme == "https" => {
                                         let keep = matches!(resp.status, 307 | 308);
                                         self.jobs.push(Job {
                                             id: j.id,
@@ -215,11 +231,10 @@ impl Fetcher {
                                             sent: false,
                                             parser: http::Parser::default(),
                                             started: now,
+                                            tls: None,
+                                            outq: Vec::new(),
                                         });
                                         continue;
-                                    }
-                                    Some(next) if next.scheme == "https" => {
-                                        q.done.push((j.id, Err(format!("{} moved to a secure (https) address, which needs HydatekOS's TLS support (being built)", j.url.host))));
                                     }
                                     _ => q.done.push((j.id, Ok(resp))),
                                 }
@@ -239,6 +254,14 @@ impl Fetcher {
     fn step(&mut self, net: &mut Net, k: usize, q: &mut WebQueue, now: u64) -> Option<Result<http::Response, String>> {
         if now > self.jobs[k].started + TIMEOUT_MS {
             return Some(Err(format!("{} took too long to answer", self.jobs[k].url.host)));
+        }
+        if let Some(c) = self.jobs[k].conn {
+            let j = &mut self.jobs[k];
+            if !j.outq.is_empty() {
+                let n = net.tcp.send(c, &j.outq);
+                j.outq.drain(..n);
+                net.flush();
+            }
         }
         match self.jobs[k].step {
             Step::Resolve => {
@@ -265,7 +288,35 @@ impl Fetcher {
                 if !net.tcp.is_open(c) {
                     return Some(Err(format!("{} refused the connection", j.url.host)));
                 }
-                j.step = Step::Exchange;
+                if j.url.scheme == "https" {
+                    let mut seed = [0u8; 32];
+                    crate::rng::fill(&mut seed);
+                    let mut t = Client::new(&j.url.host, unix_now(), self.roots.clone(), seed);
+                    j.outq.extend(t.take_output());
+                    j.tls = Some(t);
+                    j.step = Step::Secure;
+                } else {
+                    j.step = Step::Exchange;
+                }
+                None
+            }
+            Step::Secure => {
+                let j = &mut self.jobs[k];
+                q.progress.insert(j.id, Progress::Securing);
+                let c = j.conn?;
+                let t = j.tls.as_mut()?;
+                let data = net.tcp.recv(c);
+                if !data.is_empty() {
+                    if let Err(e) = t.feed(&data) {
+                        return Some(Err(format!("Couldn't connect securely to {}. {}", j.url.host, e)));
+                    }
+                    j.outq.extend(t.take_output());
+                }
+                if t.ready() {
+                    j.step = Step::Exchange;
+                } else if net.tcp.peer_closed(c) {
+                    return Some(Err(format!("{} closed the connection during the secure handshake.", j.url.host)));
+                }
                 None
             }
             Step::Exchange => {
@@ -274,12 +325,28 @@ impl Fetcher {
                 let c = j.conn?;
                 if !j.sent {
                     let req = http::request(j.method, &j.url, &j.body, &j.content_type, &cookies);
-                    net.tcp.send(c, &req);
-                    net.flush();
+                    match j.tls.as_mut() {
+                        Some(t) => {
+                            t.write(&req);
+                            j.outq.extend(t.take_output());
+                        }
+                        None => j.outq.extend(req),
+                    }
                     j.sent = true;
                     q.progress.insert(j.id, Progress::Waiting);
                 }
-                let data = net.tcp.recv(c);
+                let mut data = net.tcp.recv(c);
+                let mut closed = net.tcp.peer_closed(c);
+                if let Some(t) = j.tls.as_mut() {
+                    if !data.is_empty() {
+                        if let Err(e) = t.feed(&data) {
+                            return Some(Err(format!("The secure connection to {} failed. {}", j.url.host, e)));
+                        }
+                        j.outq.extend(t.take_output());
+                    }
+                    data = t.read();
+                    closed |= t.closed();
+                }
                 if !data.is_empty() {
                     if let Err(e) = j.parser.feed(&data) {
                         return Some(Err(e.to_string()));
@@ -288,12 +355,30 @@ impl Fetcher {
                     q.progress.insert(j.id, Progress::Loading(got, total));
                     j.started = now; // still making progress
                 }
-                if j.parser.done() || net.tcp.peer_closed(c) {
+                if j.parser.done() || closed {
                     let p = core::mem::take(&mut j.parser);
-                    return Some(p.finish(&j.url.to_string()).map_err(|e| e.to_string()));
+                    let mut r = p.finish(&j.url.to_string()).map_err(|e| e.to_string());
+                    if let (Ok(resp), Some(t)) = (r.as_mut(), j.tls.as_mut()) {
+                        if let Some(v) = &t.verified {
+                            resp.security = Some(format!("{} · Certificate from {}, valid until {}", t.summary(), v.issuer, x509::date(v.expires)));
+                        }
+                        t.close();
+                        net.tcp.send(c, &t.take_output());
+                        net.flush();
+                    }
+                    return Some(r);
                 }
                 None
             }
         }
     }
+}
+
+/// The firmware clock as seconds since 1970 (UTC).
+fn unix_now() -> i64 {
+    let t = crate::efi::now();
+    let days = x509::days_from_civil(t.year as i64, t.month as i64, t.day as i64);
+    // The zone offset's sign differs between firmware; a few hours don't
+    // matter for certificate dates.
+    days * 86400 + t.hour as i64 * 3600 + t.minute as i64 * 60 + t.second as i64
 }

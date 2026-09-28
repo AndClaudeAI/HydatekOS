@@ -33,6 +33,7 @@ mod rng;
 mod shell;
 mod sys;
 mod theme;
+mod tls;
 mod ui;
 mod web;
 mod zip;
@@ -209,7 +210,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     disp.present(splash.step(65, "Starting network"), full);
     let mut net = net::Net::up();
     let mut server = net.as_mut().map(linksrv::LinkServer::new);
-    let mut fetcher = web::fetch::Fetcher::new();
+    let mut fetcher = web::fetch::Fetcher::new(sys.trust_store());
     if let Some(n) = net.as_ref() {
         sys.link.desktop_name = n.hostname.clone();
     }

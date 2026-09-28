@@ -27,7 +27,8 @@ pub struct Dom {
 }
 
 const VOID: [&str; 14] = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
-const RAW: [&str; 5] = ["script", "style", "textarea", "title", "noscript"];
+// <noscript> is ordinary markup: HydatekOS doesn't run scripts, so it shows.
+const RAW: [&str; 4] = ["script", "style", "textarea", "title"];
 
 impl Dom {
     pub fn tag(&self, n: NodeId) -> &str {

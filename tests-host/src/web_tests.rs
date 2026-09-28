@@ -111,6 +111,9 @@ fn http_responses() {
 
 #[test]
 fn html_parsing() {
+    // no scripts run, so <noscript> holds ordinary markup
+    let d = html::parse("<body><noscript><div class=warn>Enable <b>JavaScript</b></div></noscript></body>");
+    assert!(d.find("b").is_some());
     let d = html::parse("<!doctype html><title>T &amp; U</title><p>One<p>Two <b>bold</b><ul><li>a<li>b</ul><script>if (a<b) x()</script><img src=x alt=\"A pic\"><a href='/x'>link</a>");
     assert_eq!(d.title(), "T & U");
     assert_eq!(d.text(0), "One Two bold a b link");

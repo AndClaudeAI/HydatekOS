@@ -14,6 +14,8 @@ pub mod doc;
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
 pub mod gridio;
+#[path = "../../kernel/src/tls/mod.rs"]
+pub mod tls;
 #[path = "../../kernel/src/web/mod.rs"]
 pub mod web;
 /// Text measurement stand-in for the kernel's font pack.
@@ -39,6 +41,10 @@ mod doc_tests;
 mod grid_tests;
 #[cfg(test)]
 mod web_tests;
+#[cfg(test)]
+mod tls_tests;
+#[cfg(test)]
+mod tls_vectors;
 
 #[cfg(test)]
 mod tests {

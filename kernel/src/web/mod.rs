@@ -19,8 +19,7 @@ pub use http::Response;
 pub enum Progress {
     Resolving,
     Connecting,
-    /// TLS handshake (https, coming next)
-    #[allow(dead_code)]
+    /// TLS handshake (https)
     Securing,
     Waiting,
     /// bytes received, total if known

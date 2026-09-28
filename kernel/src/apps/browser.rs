@@ -23,6 +23,7 @@ const C_FWD: u32 = 3;
 const C_RELOAD: u32 = 4;
 const C_HOME: u32 = 5;
 const C_PAGE: u32 = 6;
+const C_LOCK: u32 = 7;
 const C_LINK: u32 = 1000;
 const C_FIELD: u32 = 100_000;
 
@@ -37,6 +38,8 @@ struct Loaded {
     width: i32,
     /// edited values of text fields (by field index)
     values: Vec<(usize, String)>,
+    /// https: how the connection was secured
+    security: Option<String>,
 }
 
 pub struct Browser {
@@ -53,6 +56,10 @@ pub struct Browser {
     pending_fragment: Option<String>,
     /// the address is selected: typing replaces it
     fresh: bool,
+    /// the connection details panel is open
+    show_security: bool,
+    /// the address that failed, while an error shows
+    error_url: Option<String>,
 }
 
 fn esc(s: &str) -> String {
@@ -70,12 +77,15 @@ h2{font-size:18px;margin:26px 0 8px} .box{background:#f6f1ea;padding:14px 18px;m
 
 impl Browser {
     pub fn new() -> Browser {
-        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false };
+        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false, show_security: false, error_url: None };
         b.pending_fragment = None;
         b
     }
 
     fn current_url(&self) -> String {
+        if let (Some(_), Some(u)) = (&self.error, &self.error_url) {
+            return u.clone();
+        }
         self.cur.as_ref().map(|c| c.url.to_string()).unwrap_or_default()
     }
 
@@ -128,7 +138,7 @@ impl Browser {
         let title = dom.title();
         let width = (self.area.w - 2 * PAD).max(200);
         let page = render::layout(&dom, "", width);
-        self.cur = Some(Loaded { url, title, html, page, width, values: vec![] });
+        self.cur = Some(Loaded { url, title, html, page, width, values: vec![], security: None });
         self.scroll = 0;
         if let Some(f) = self.pending_fragment.take() {
             self.scroll_to(&f);
@@ -173,7 +183,7 @@ impl Browser {
                 }
                 return;
             }
-            "about" => format!("<html><head><title>About</title></head><body><div class=wrap><h1>HydatekOS Browser</h1><p>The browser and <b>Hyda Search</b> are part of HydatekOS and written from scratch: the network stack, DNS, HTTP, the HTML parser, CSS and layout, and the search engine.</p><h2>What works</h2><ul><li>Web pages over HTTP, with links, forms, headings, lists, simple tables, colours and text styles from CSS</li><li>Hyda Search: search the pages you visit, sites you add, and your files</li></ul><h2>Not yet</h2><ul><li>Secure (https) sites: HydatekOS's TLS is being built</li><li>Images, JavaScript, fonts from the web, and external stylesheets</li></ul><p><a href=\"hydatek://start\">Back to Hyda Search</a></p></div></body></html>"),
+            "about" => format!("<html><head><title>About</title></head><body><div class=wrap><h1>HydatekOS Browser</h1><p>The browser and <b>Hyda Search</b> are part of HydatekOS and written from scratch: the network stack, DNS, HTTP, TLS encryption and certificate checks, the HTML parser, CSS and layout, and the search engine.</p><h2>What works</h2><ul><li>Web pages over HTTP and secure HTTPS (TLS 1.3 and 1.2, with certificates checked against Mozilla's list of authorities), with links, forms, headings, lists, simple tables, colours and text styles from CSS</li><li>Hyda Search: search the pages you visit, sites you add, and your files</li></ul><h2>Not yet</h2><ul><li>Images, JavaScript, fonts from the web, and external stylesheets</li></ul><p><a href=\"hydatek://start\">Back to Hyda Search</a></p></div></body></html>"),
             _ => self.start_page(sys),
         };
         self.show(url, html.replace("</head>", &format!("<style>{}</style></head>", PAGE_CSS)));
@@ -306,6 +316,37 @@ impl Browser {
 
     // ---- drawing ---------------------------------------------------------------------
 
+    /// The connection details panel under the address bar.
+    fn draw_security(&self, ui: &mut Ui, at: Rect) {
+        let t = ui.t;
+        let Some(c) = &self.cur else { return };
+        let (title, mut lines) = match &c.security {
+            Some(sec) => {
+                let mut v: Vec<String> = sec.split(" · ").map(|p| p.to_string()).collect();
+                v.push(String::from("HydatekOS checked the site's certificate against its list of trusted authorities, so this is the real site, and what you send and receive is encrypted."));
+                ("Connection is secure", v)
+            }
+            None => ("Connection is not secure", vec![String::from("This page came over plain HTTP. Others on the network could read or change it; don't enter passwords or card numbers here.")]),
+        };
+        let w = at.w;
+        let mut wrapped = Vec::new();
+        for l in lines.drain(..) {
+            wrapped.extend(ui.wrap(Face::Regular, 13, &l, w - 32));
+        }
+        let h = 52 + wrapped.len() as i32 * 20 + 12;
+        let panel = Rect::new(at.x, at.y, w, h);
+        ui.shadow(panel, 10, 16, 4, 60);
+        ui.rrect(panel, 10, t.surface);
+        let icon = if c.security.is_some() { Icon::Lock } else { Icon::Info };
+        ui.icon(icon, panel.x + 16, panel.y + 16, 18, if c.security.is_some() { t.accent } else { t.text2 });
+        ui.text(panel.x + 44, panel.y + 30, Face::Semibold, 15, title, t.text);
+        let mut y = panel.y + 58;
+        for l in wrapped {
+            ui.text(panel.x + 16, y, Face::Regular, 13, &l, t.text2);
+            y += 20;
+        }
+    }
+
     fn draw_page(&mut self, ui: &mut Ui, area: Rect, inst: u32) {
         let Some(c) = &mut self.cur else { return };
         let width = (area.w - 2 * PAD).max(200);
@@ -413,7 +454,22 @@ impl App for Browser {
         ui.icon_button(Rect::new(r.x + 42, by, 28, 28), Icon::ChevronRight, Action::App(inst, C_FWD), 16);
         let reload_icon = if self.loading.is_some() { Icon::Close } else { Icon::Redo };
         ui.icon_button(Rect::new(r.x + 72, by, 28, 28), reload_icon, Action::App(inst, C_RELOAD), 15);
-        let bar = Rect::new(r.x + 108, by, r.w - 108 - 158, 28);
+        let mut bar = Rect::new(r.x + 108, by, r.w - 108 - 158, 28);
+        let scheme_icon = match (&self.edit, &self.loading, if self.error.is_some() { None } else { self.cur.as_ref() }) {
+            (None, None, Some(c)) if c.url.scheme == "https" => Some((Icon::Lock, t.text2)),
+            (None, None, Some(c)) if c.url.scheme == "http" => Some((Icon::Info, t.text3)),
+            _ => None,
+        };
+        if let Some((icon, color)) = scheme_icon {
+            let z = Rect::new(bar.x, by, 28, 28);
+            ui.zone(z, Action::App(inst, C_LOCK));
+            if ui.hover == Some(Action::App(inst, C_LOCK)) || self.show_security {
+                ui.rrect(z, 6, t.hover);
+            }
+            ui.icon(icon, z.x + 6, z.y + 6, 16, color);
+            bar.x += 32;
+            bar.w -= 32;
+        }
         let (text, focus) = match &self.edit {
             Some(e) => (e.text.clone(), true),
             None => match &self.loading {
@@ -448,7 +504,8 @@ impl App for Browser {
         self.area = area;
         if let Some((title, detail)) = &self.error {
             ui.rect(area, t.surface);
-            ui.icon(Icon::Globe, area.x + area.w / 2 - 20, area.y + 60, 40, t.text3);
+            let icon = if title.contains("isn't private") { Icon::Lock } else { Icon::Globe };
+            ui.icon(icon, area.x + area.w / 2 - 20, area.y + 60, 40, t.text3);
             let w = ui.tw(Face::Semibold, 20, title);
             ui.text(area.x + (area.w - w) / 2, area.y + 140, Face::Semibold, 20, title, t.text);
             let mut y = area.y + 172;
@@ -461,6 +518,9 @@ impl App for Browser {
             self.draw_page(ui, area, inst);
         } else {
             ui.rect(area, t.surface);
+        }
+        if self.show_security && self.error.is_none() {
+            self.draw_security(ui, Rect::new(r.x + 108, line_y + 4, 380, 0));
         }
         // status bar: the hovered link, or the page title
         let sy = r.b() - STATUS;
@@ -480,9 +540,16 @@ impl App for Browser {
                 (Some((id, u)), _) => match sys.web.progress.get(id) {
                     Some(Progress::Resolving) => format!("Looking up {}…", Url::parse(u).map(|x| x.host).unwrap_or_default()),
                     Some(Progress::Connecting) => String::from("Connecting…"),
+                    Some(Progress::Securing) => String::from("Setting up a secure connection…"),
                     Some(Progress::Loading(got, _)) => format!("Loading… {} KB", got / 1024),
                     _ => String::from("Waiting for the site…"),
                 },
+                (None, Some(c)) if ui.hover == Some(Action::App(inst, C_LOCK)) => match &c.security {
+                    Some(s) => format!("Secure connection: {}", s),
+                    None if c.url.scheme == "http" => String::from("Not secure: this page came over plain HTTP, so others on the network could read or change it"),
+                    None => String::new(),
+                },
+                (None, _) if self.error.is_some() => String::new(),
                 (None, Some(c)) => c.title.clone(),
                 _ => String::new(),
             };
@@ -513,15 +580,22 @@ impl App for Browser {
                 };
                 if resp.status >= 400 && text.trim().is_empty() {
                     self.error = Some((format!("The site answered {}", resp.status), format!("{} couldn't show this page.", url.host)));
+                    self.error_url = Some(requested.clone());
                     return;
                 }
                 if ctype.contains("html") || ctype.is_empty() && text.trim_start().starts_with('<') {
                     let dom = html::parse(&text);
                     sys.search.visited(&url.without_fragment(), &dom);
                     self.show(url, text);
+                    if let Some(c) = self.cur.as_mut() {
+                        c.security = resp.security.clone();
+                    }
                 } else if ctype.starts_with("text/") || ctype.contains("json") || ctype.contains("xml") {
                     let html = format!("<html><head><title>{}</title></head><body><pre>{}</pre></body></html>", esc(&url.to_string()), esc(&text));
                     self.show(url, html);
+                    if let Some(c) = self.cur.as_mut() {
+                        c.security = resp.security.clone();
+                    }
                 } else {
                     // anything else is a download
                     let name = url.path.split('?').next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
@@ -540,7 +614,13 @@ impl App for Browser {
             }
             Err(e) => {
                 let host = Url::parse(&requested).map(|u| u.host).unwrap_or_default();
-                self.error = Some((format!("Can't open {}", host), e));
+                let title = if e.contains("certificate") || e.contains("trust") || e.contains("pretending") {
+                    format!("Your connection to {} isn't private", host)
+                } else {
+                    format!("Can't open {}", host)
+                };
+                self.error = Some((title, e));
+                self.error_url = Some(requested.clone());
             }
         }
     }
@@ -549,6 +629,7 @@ impl App for Browser {
         if code != C_URL {
             self.edit = None;
         }
+        self.show_security = code == C_LOCK && !self.show_security;
         if !(C_FIELD..C_FIELD + 10_000).contains(&code) {
             self.focus_field = None;
         }
