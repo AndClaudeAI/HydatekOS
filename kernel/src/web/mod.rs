@@ -2,6 +2,7 @@
 //! `fetch.rs` does the network work from the main loop.
 
 pub mod dns;
+pub mod engines;
 #[cfg(target_os = "uefi")]
 pub mod fetch;
 pub mod html;

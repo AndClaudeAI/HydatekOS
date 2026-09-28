@@ -209,11 +209,23 @@ pub fn encode(s: &str) -> String {
     out
 }
 
-/// What was typed in the address bar: a URL, a bare host, or a search.
-pub fn from_input(s: &str) -> Url {
+/// What was typed in the address bar: a URL, a bare host, or a search
+/// (with `engine`, unless a `!key` shortcut picks another).
+pub fn from_input(s: &str, engine: &super::engines::Engine) -> Url {
     let t = s.trim();
     if let Some(u) = Url::parse(t) {
         return u;
+    }
+    if let Some((e, q)) = super::engines::shortcut(t) {
+        let target = if q.is_empty() {
+            // just the shortcut: the engine's own page
+            if e.id == super::engines::HYDA { String::from("hydatek://start") } else { super::engines::search_url(e, "").split('?').next().unwrap_or("").to_string() }
+        } else {
+            super::engines::search_url(e, &q)
+        };
+        if let Some(u) = Url::parse(&target) {
+            return u;
+        }
     }
     let looks_like_host = !t.contains(' ') && (t.contains('.') || t.starts_with("localhost")) && !t.ends_with('.');
     if looks_like_host {
@@ -221,5 +233,5 @@ pub fn from_input(s: &str) -> Url {
             return u;
         }
     }
-    Url::parse(&format!("hydatek://search?q={}", encode(t))).unwrap()
+    Url::parse(&super::engines::search_url(engine, t)).unwrap_or_else(|| Url::parse(&format!("hydatek://search?q={}", encode(t))).unwrap())
 }

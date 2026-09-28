@@ -11,7 +11,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-const SECTIONS: [&str; 7] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Display", "About"];
+const SECTIONS: [&str; 8] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -26,6 +26,7 @@ const C_UNPAIR: u32 = 9;
 const C_RESTART: u32 = 10;
 const C_SHUTDOWN: u32 = 11;
 const C_ACCENT: u32 = 200;
+const C_ENGINE: u32 = 300;
 
 pub struct Settings {
     sec: usize,
@@ -272,6 +273,31 @@ impl App for Settings {
                 ui.text(m.x + 142, top + 222, Face::Regular, 12, "or press F12", t.text3);
             }
             5 => {
+                use crate::web::engines::ENGINES;
+                ui.text(m.x, m.y + 14, Face::Semibold, 14, "Search engine", t.text);
+                let tip = ui.fit(Face::Regular, 12, "For searches typed in the address bar. Add !d, !g, !w... to a search to use another once.", m.w);
+                ui.text(m.x, m.y + 34, Face::Regular, 12, &tip, t.text2);
+                let rh = 42;
+                let top = m.y + 50;
+                card(ui, Rect::new(m.x, top, m.w, rh * ENGINES.len() as i32 + 8));
+                for (i, e) in ENGINES.iter().enumerate() {
+                    let y = top + 4 + i as i32 * rh;
+                    let rr = Rect::new(m.x + 4, y, m.w - 8, rh);
+                    let a = Action::App(inst, C_ENGINE + i as u32);
+                    if ui.hot(a) {
+                        ui.rrect(rr, 10, t.hover);
+                    }
+                    let on = sys.search_engine == e.id;
+                    ui.circle(m.x + 26, y + rh / 2, 9, if on { t.accent } else { t.line });
+                    ui.circle(m.x + 26, y + rh / 2, if on { 4 } else { 7 }, if on { Color::rgb(0xFFFFFF) } else { t.surface });
+                    let title = format!("{}   !{}", e.name, e.key);
+                    ui.text(m.x + 46, y + 18, Face::Medium, 14, &title, t.text);
+                    let sub = ui.fit(Face::Regular, 12, e.about, m.w - 70);
+                    ui.text(m.x + 46, y + 34, Face::Regular, 12, &sub, t.text2);
+                    ui.zone(rr, a);
+                }
+            }
+            6 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
@@ -362,6 +388,11 @@ impl App for Settings {
             }
             C_RESTART => sys.reqs.push(Req::Reboot),
             C_SHUTDOWN => sys.reqs.push(Req::Shutdown),
+            c if c >= C_ENGINE => {
+                if let Some(e) = crate::web::engines::ENGINES.get((c - C_ENGINE) as usize) {
+                    sys.search_engine = alloc::string::ToString::to_string(e.id);
+                }
+            }
             c if c >= C_ACCENT => sys.accent = (c - C_ACCENT) as usize,
             c if c >= C_SECTION => {
                 self.sec = ((c - C_SECTION) as usize).min(SECTIONS.len() - 1);

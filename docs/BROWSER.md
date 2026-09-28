@@ -55,6 +55,34 @@ up to three levels deep, reads at most 60 pages per site, and skips pages marked
 **Private:** the index is stored on this computer (`/system/search.hydx`), and
 searches never leave it. There is no account and no tracking.
 
+## Other search engines
+
+![Choosing the search engine in Settings](screenshots/settings-search-engine.png)
+
+What you type in the address bar that isn't an address goes to your search
+engine: Hyda Search to start with, or one of these, picked in
+**Settings › Browser** or on the `hydatek://engines` page:
+
+| Engine | Shortcut | Notes |
+|---|---|---|
+| Hyda Search | `!h` | On this computer; nothing is sent anywhere |
+| DuckDuckGo | `!d` | Its plain HTML version, which works without JavaScript |
+| Mojeek | `!m` | Independent index; works without JavaScript |
+| Bing | `!b` | |
+| Brave Search | `!br` | |
+| Google | `!g` | Google's results now need JavaScript, which the browser doesn't run yet, so they may not show |
+| Wikipedia | `!w` | Searches the encyclopaedia's articles |
+
+A shortcut uses another engine just once: `!d jollof rice` or
+`lagos weather !w`. A shortcut on its own opens that engine. Hyda Search's
+results page also links the same search to each web engine:
+
+![Hyda Search with links to web search engines](screenshots/hyda-search-web-links.png)
+
+The web engines are other companies' services: what you search is sent to
+them over HTTPS. HydatekOS only sends the search; it doesn't install their
+code or share anything else.
+
 **What it isn't:** a search engine for the whole web. Companies that index the
 web run warehouses of computers crawling billions of pages; Hyda Search knows
 the pages you visit, the sites you add and your files.

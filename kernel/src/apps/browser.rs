@@ -8,7 +8,7 @@ use crate::gfx::{Color, Rect};
 use crate::icons::Icon;
 use crate::sys::Sys;
 use crate::ui::{Action, Key, Ui};
-use crate::web::html;
+use crate::web::{engines, html};
 use crate::web::render::{self, Control, Item, Page};
 use crate::web::url::{self, Url};
 use crate::web::Progress;
@@ -163,7 +163,7 @@ impl Browser {
             }
             "crawl" => {
                 if let Some(site) = url.param("url") {
-                    let site = url::from_input(&site);
+                    let site = url::from_input(&site, engines::by_id(engines::HYDA));
                     if site.scheme == "http" || site.scheme == "https" {
                         sys.search.crawler.add(&site.to_string());
                     }
@@ -177,6 +177,14 @@ impl Browser {
                 self.index_page(sys)
             }
             "index" => self.index_page(sys),
+            "engine" => {
+                if let Some(id) = url.param("id") {
+                    sys.search_engine = engines::by_id(&id).id.to_string();
+                    sys.reqs.push(crate::sys::Req::SaveSettings);
+                }
+                self.engines_page(sys)
+            }
+            "engines" => self.engines_page(sys),
             "open" => {
                 if let Some(p) = url.param("path") {
                     sys.reqs.push(crate::sys::Req::OpenPath(p));
@@ -204,12 +212,13 @@ impl Browser {
             recent.push_str(&format!("<li>{} <span class=small>· {} page{}</span></li>", esc(site), n, if *n == 1 { "" } else { "s" }));
         }
         format!(
-            "<html><head><title>Hyda Search</title></head><body><div class=wrap><p class=logo>Hyda Search</p><p class=tag>Search the web pages you visit, the sites you add, and your files. Private: it all stays on this computer.</p><center>{}</center><div class=box><b>{} pages</b> from <b>{} sites</b> are in your index.<br><span class=small>Add a site and Hyda Search reads it for you (up to {} pages each, politely, following the site's rules for crawlers).</span><form action=\"hydatek://crawl\"><input type=text name=url size=36 value=\"\"> <input type=submit value=\"Add a site\"></form></div>{}<p class=small><a href=\"hydatek://index\">Manage your index</a> · <a href=\"hydatek://about\">About this browser</a></p></div></body></html>",
+            "<html><head><title>Hyda Search</title></head><body><div class=wrap><p class=logo>Hyda Search</p><p class=tag>Search the web pages you visit, the sites you add, and your files. Private: it all stays on this computer.</p><center>{}</center><div class=box><b>{} pages</b> from <b>{} sites</b> are in your index.<br><span class=small>Add a site and Hyda Search reads it for you (up to {} pages each, politely, following the site's rules for crawlers).</span><form action=\"hydatek://crawl\"><input type=text name=url size=36 value=\"\"> <input type=submit value=\"Add a site\"></form></div>{}<p class=small>The address bar searches with <b>{}</b> · <a href=\"hydatek://engines\">Search engines</a> · <a href=\"hydatek://index\">Manage your index</a> · <a href=\"hydatek://about\">About this browser</a></p></div></body></html>",
             Self::search_box(""),
             ix.len(),
             sites.len(),
             crate::web::search::MAX_PAGES_PER_SITE,
-            if recent.is_empty() { String::new() } else { format!("<h2>In your index</h2><ul>{}</ul>", recent) }
+            if recent.is_empty() { String::new() } else { format!("<h2>In your index</h2><ul>{}</ul>", recent) },
+            esc(engines::by_id(&sys.search_engine).name)
         )
     }
 
@@ -243,14 +252,45 @@ impl Browser {
             String::new()
         };
         format!(
-            "<html><head><title>{} - Hyda Search</title></head><body><div class=wrap><p style=\"font-size:24px;font-weight:bold;color:#b5581b;margin:4px 0 12px\">Hyda Search</p>{}<p class=count>{} result{} from {} pages</p>{}{}</div></body></html>",
+            "<html><head><title>{} - Hyda Search</title></head><body><div class=wrap><p style=\"font-size:24px;font-weight:bold;color:#b5581b;margin:4px 0 12px\">Hyda Search</p>{}<p class=count>{} result{} from {} pages</p><p class=small>Search the web for this: {}</p>{}{}</div></body></html>",
             esc(q),
             Self::search_box(q),
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
             sys.search.index.len(),
+            Self::web_links(q),
             body,
             none
+        )
+    }
+
+    /// Links that run `q` on each web search engine.
+    fn web_links(q: &str) -> String {
+        engines::ENGINES
+            .iter()
+            .filter(|e| e.id != engines::HYDA)
+            .map(|e| format!("<a href=\"{}\">{}</a>", esc(&engines::search_url(e, q)), esc(e.name)))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    fn engines_page(&self, sys: &Sys) -> String {
+        let mut rows = String::new();
+        for e in engines::ENGINES {
+            let current = sys.search_engine == e.id;
+            let choose = if current { String::from("<b>Your search engine</b>") } else { format!("<a href=\"hydatek://engine?id={}\">Use this</a>", e.id) };
+            rows.push_str(&format!(
+                "<tr><td><b>{}</b><br><span class=small>{}</span></td><td>!{}</td><td>{}</td></tr>",
+                esc(e.name),
+                esc(e.about),
+                e.key,
+                choose
+            ));
+        }
+        format!(
+            "<html><head><title>Search engines</title></head><body><div class=wrap><h1>Search engines</h1><p>What you type in the address bar that isn't an address is searched with <b>{}</b>. Pick another below, or in Settings › Browser.</p><p class=muted>To use a different one just once, add its shortcut: <b>!d jollof rice</b> searches DuckDuckGo, <b>lagos weather !w</b> searches Wikipedia. A shortcut on its own opens the engine.</p><table><tr><th>Engine</th><th>Shortcut</th><th></th></tr>{}</table><p class=small>Web search engines are other companies' services: what you search is sent to them. Hyda Search stays on this computer. <a href=\"hydatek://start\">Back to Hyda Search</a></p></div></body></html>",
+            esc(engines::by_id(&sys.search_engine).name),
+            rows
         )
     }
 
@@ -478,7 +518,8 @@ impl App for Browser {
             },
         };
         let shown = if focus || !text.starts_with("hydatek://start") { text } else { String::new() };
-        ui.field(bar, &shown, "Search with Hyda Search or type an address", focus, Action::App(inst, C_URL));
+        let hint = format!("Search with {} or type an address", engines::by_id(&sys.search_engine).name);
+        ui.field(bar, &shown, &hint, focus, Action::App(inst, C_URL));
         if focus && self.fresh && !shown.is_empty() {
             // show the address as selected
             let w = ui.tw(Face::Regular, 13, &shown).min(bar.w - 24);
@@ -740,7 +781,7 @@ impl App for Browser {
                     let t = e.text.clone();
                     self.edit = None;
                     if !t.trim().is_empty() {
-                        let u = url::from_input(&t).to_string();
+                        let u = url::from_input(&t, engines::by_id(&sys.search_engine)).to_string();
                         self.go(sys, &u, true);
                     }
                 }

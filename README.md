@@ -74,7 +74,9 @@ Windows, macOS or Linux.
   the pages you visit, sites you add (with a polite crawler) and your files, and
   ranks results with BM25, privately on your computer. Secure sites work too,
   with HydatekOS's own TLS 1.3 / 1.2 and certificate checks against Mozilla's
-  list of authorities. Details: [docs/BROWSER.md](docs/BROWSER.md).
+  list of authorities. The address bar can also search with DuckDuckGo, Mojeek,
+  Bing, Brave Search, Google or Wikipedia (Settings › Browser, or `!d`, `!g`...
+  shortcuts). Details: [docs/BROWSER.md](docs/BROWSER.md).
 - **Apps:** Files, Notes, Hyda Scripts, Hyda Grids, Settings, Calendar, Terminal (`hsh`), Phone Link,
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the

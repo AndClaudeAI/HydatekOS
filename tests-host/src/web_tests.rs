@@ -44,8 +44,9 @@ fn urls() {
     assert_eq!(u.join("https://secure.ng/").unwrap().port, 443);
     assert_eq!(u.join("#sec").unwrap().fragment, "sec");
     assert_eq!(Url::parse("http://a.ng").unwrap().path, "/");
-    assert_eq!(url::from_input("lagos weather").to_string(), "hydatek://search?q=lagos+weather");
-    assert_eq!(url::from_input("example.com/x").to_string(), "http://example.com/x");
+    let hyda = engines::by_id(engines::HYDA);
+    assert_eq!(url::from_input("lagos weather", hyda).to_string(), "hydatek://search?q=lagos+weather");
+    assert_eq!(url::from_input("example.com/x", hyda).to_string(), "http://example.com/x");
     assert_eq!(url::encode("₦5 & more"), "%E2%82%A65+%26+more");
     assert_eq!(url::decode("%E2%82%A65+%26+more"), "₦5 & more");
     assert_eq!(Url::parse("hydatek://search?q=a+b").unwrap().param("q").as_deref(), Some("a b"));
@@ -161,4 +162,26 @@ fn search_ranking() {
     let mut back = back;
     back.remove_site("j.ng");
     assert_eq!(back.len(), 0);
+}
+
+#[test]
+fn search_engines() {
+    let hyda = engines::by_id(engines::HYDA);
+    let ddg = engines::by_id("duckduckgo");
+    assert_eq!(url::from_input("jollof rice", ddg).to_string(), "https://html.duckduckgo.com/html/?q=jollof+rice");
+    // shortcuts before or after, any engine
+    assert_eq!(url::from_input("!w lagos", hyda).to_string(), "https://en.wikipedia.org/w/index.php?search=lagos");
+    assert_eq!(url::from_input("naira rate !G", hyda).to_string(), "https://www.google.com/search?q=naira+rate");
+    assert_eq!(url::from_input("!h budget", ddg).to_string(), "hydatek://search?q=budget");
+    assert_eq!(url::from_input("!br", hyda).to_string(), "https://search.brave.com/search");
+    assert_eq!(url::from_input("!h", ddg).to_string(), "hydatek://start");
+    // an unknown shortcut is just a word
+    assert_eq!(url::from_input("!zz top", hyda).to_string(), "hydatek://search?q=%21zz+top");
+    // addresses still win
+    assert_eq!(url::from_input("https://a.ng/x", ddg).to_string(), "https://a.ng/x");
+    assert_eq!(engines::by_id("nonsense").id, engines::HYDA);
+    let keys: Vec<&str> = engines::ENGINES.iter().map(|e| e.key).collect();
+    for (i, k) in keys.iter().enumerate() {
+        assert!(!keys[i + 1..].contains(k), "duplicate shortcut {}", k);
+    }
 }

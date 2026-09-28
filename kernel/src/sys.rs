@@ -63,6 +63,8 @@ pub struct Sys {
     pub focus: bool,
     pub mobile_shell: bool,
     pub pointer_speed: i32,
+    /// the address bar's search engine (an id from web::engines)
+    pub search_engine: String,
     pub fs: Vfs,
     pub now: Time,
     pub events: Vec<CalEvent>,
@@ -119,6 +121,7 @@ impl Sys {
             focus: false,
             mobile_shell: false,
             pointer_speed: 3,
+            search_engine: String::from(crate::web::engines::HYDA),
             fs,
             now,
             events: Vec::new(),
@@ -169,6 +172,7 @@ impl Sys {
                 "demo" if b => self.link.demo(),
                 "lockboot" => self.lock_on_boot = b,
                 "lockidle" => self.lock_idle = v.parse().unwrap_or(10),
+                "engine" => self.search_engine = crate::web::engines::by_id(v).id.to_string(),
                 _ => {}
             }
         }
@@ -176,7 +180,7 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\n",
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\n",
             self.dark as u8,
             self.accent,
             self.wifi as u8,
@@ -186,7 +190,8 @@ impl Sys {
             self.pointer_speed,
             self.link.is_demo() as u8,
             self.lock_on_boot as u8,
-            self.lock_idle
+            self.lock_idle,
+            self.search_engine
         );
         self.fs.write("/system/settings.txt", s.as_bytes());
     }
