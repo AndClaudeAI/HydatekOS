@@ -116,3 +116,24 @@ g.save("trns-interlaced.gif", transparency=5, interlace=True)
 base.save("rgb24.bmp")
 base.convert("P", palette=Image.ADAPTIVE, colors=256).save("pal8.bmp")
 rgba.save("rgba32.bmp")
+
+# WebP: lossless (palette and full colour), lossy at several qualities, with alpha
+from PIL import ImageSequence
+base.save("lossless.webp", lossless=True)
+base.convert("P", palette=Image.ADAPTIVE, colors=12).convert("RGB").save("lossless-pal.webp", lossless=True)
+rgba.save("lossless-alpha.webp", lossless=True)
+photo = scene(160, 120)
+photo.save("lossless-photo.webp", lossless=True, method=6)
+for q in (10, 50, 90):
+    big.save("lossy-q%d.webp" % q, quality=q)
+photo.save("lossy-photo.webp", quality=80)
+rgba.save("lossy-alpha.webp", quality=80)
+base.save("lossy-small.webp", quality=75)
+# animations: a moving square, as GIF and WebP
+frames = []
+for i in range(6):
+    f = Image.new("RGBA", (40, 30), (0, 0, 0, 0))
+    ImageDraw.Draw(f).rectangle((i * 5, 5, i * 5 + 10, 20), fill=(200, 60 + i * 30, 40, 255))
+    frames.append(f)
+frames[0].save("anim.gif", save_all=True, append_images=frames[1:], duration=[80, 120, 80, 120, 80, 200], loop=0, disposal=2)
+frames[0].save("anim.webp", save_all=True, append_images=frames[1:], duration=[80, 120, 80, 120, 80, 200], loop=0, lossless=True)

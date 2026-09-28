@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="240" height="120">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e3c72"/>
+      <stop offset="100%" stop-color="#2a5298" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f7971e"/>
+      <stop offset="50%" style="stop-color:#ffd200"/>
+      <stop offset="100%" style="stop-color:#f7971e"/>
+    </linearGradient>
+    <linearGradient id="sun2" xlink:href="#sun" gradientTransform="rotate(45 .5 .5)"/>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0" stop-color="white"/>
+      <stop offset="1" stop-color="#c0392b"/>
+    </radialGradient>
+    <linearGradient id="user" gradientUnits="userSpaceOnUse" x1="170" y1="0" x2="200" y2="0" spreadMethod="reflect">
+      <stop offset="0" stop-color="#16a085"/><stop offset="1" stop-color="#f39c12"/>
+    </linearGradient>
+  </defs>
+  <rect width="80" height="120" fill="url(#sky)"/>
+  <rect x="85" y="10" width="70" height="40" rx="8" fill="url(#sun)"/>
+  <rect x="85" y="60" width="70" height="50" fill="url(#sun2)"/>
+  <circle cx="200" cy="30" r="25" fill="url(#glow)"/>
+  <rect x="165" y="65" width="70" height="45" fill="url(#user)"/>
+</svg>

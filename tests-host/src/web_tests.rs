@@ -229,3 +229,28 @@ fn images_in_layout() {
     let here_x = p.items.iter().find_map(|i| if let Item::Text { x, text, .. } = i { (text == "here").then_some(*x) } else { None }).unwrap();
     assert!(here_x > logo_x + 64);
 }
+
+#[test]
+fn backgrounds_and_colours() {
+    use render::{BgSize, Dim, ImgStatus, Item};
+    let d = html::parse(
+        "<style>.hero{background:#123 url('/img/sky.jpg') no-repeat center / cover;height:200px}\
+         .tile{background-image:url(dots.png);background-size:20px auto;background-position:right 10px}\
+         .fade{background:linear-gradient(to right, rebeccapurple, white)}\
+         p{color:hsl(0, 100%, 50%)}</style>\
+         <div class=hero><p>Hello</p></div><div class=tile>x</div><div class=fade>y</div>",
+    );
+    let p = render::layout_with(&d, "", 600, &|_| ImgStatus::Loading);
+    assert!(p.wanted.contains(&"/img/sky.jpg".to_string()) && p.wanted.contains(&"dots.png".to_string()));
+    let bgs: Vec<(String, BgSize, (Dim, Dim), (bool, bool))> = p.items.iter().filter_map(|i| if let Item::Background { img, size, pos, repeat, .. } = i { Some((p.images[*img].clone(), *size, *pos, *repeat)) } else { None }).collect();
+    assert_eq!(bgs[0], ("/img/sky.jpg".to_string(), BgSize::Cover, (Dim::Pct(50), Dim::Pct(50)), (false, false)));
+    assert_eq!(bgs[1], ("dots.png".to_string(), BgSize::Set(Dim::Px(20), Dim::Auto), (Dim::Pct(100), Dim::Px(10)), (true, true)));
+    // the colour under the hero, the gradient's first colour, and hsl() text
+    let rects: Vec<u32> = p.items.iter().filter_map(|i| if let Item::Rect { color, .. } = i { Some(*color) } else { None }).collect();
+    assert!(rects.contains(&0x112233) && rects.contains(&0x663399), "{:x?}", rects);
+    assert!(p.items.iter().any(|i| matches!(i, Item::Text { color: 0xff0000, .. })));
+    // the background is drawn before (under) the text
+    let bg_at = p.items.iter().position(|i| matches!(i, Item::Background { .. })).unwrap();
+    let text_at = p.items.iter().position(|i| matches!(i, Item::Text { .. })).unwrap();
+    assert!(bg_at < text_at);
+}

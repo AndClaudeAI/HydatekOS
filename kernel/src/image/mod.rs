@@ -1,11 +1,17 @@
 //! Image decoders, written for HydatekOS: PNG, JPEG (baseline and
-//! progressive), GIF and BMP. Every decoder produces an `Image` of ARGB
-//! pixels (alpha in the top byte, not premultiplied).
+//! progressive), GIF, BMP, WebP (lossy, lossless, animated) and SVG. Every
+//! decoder produces an `Image` of ARGB pixels (alpha in the top byte, not
+//! premultiplied); animations also carry their frames.
 
 pub mod bmp;
+pub mod color;
 pub mod gif;
 pub mod jpeg;
 pub mod png;
+pub mod svg;
+pub mod vp8;
+mod vp8_tables;
+pub mod webp;
 
 use alloc::vec::Vec;
 
@@ -16,12 +22,25 @@ pub const MAX_PIXELS: u64 = 25_000_000;
 pub struct Image {
     pub w: u32,
     pub h: u32,
+    /// the picture (the first frame of an animation)
     pub px: Vec<u32>,
+    /// an animation's frames, each the whole picture; empty for a still
+    pub frames: Vec<Frame>,
 }
+
+#[derive(Clone, Debug)]
+pub struct Frame {
+    pub px: Vec<u32>,
+    /// how long it shows, in milliseconds
+    pub delay: u32,
+}
+
+/// Frames kept for an animation, counted in pixels.
+pub const MAX_ANIM_PIXELS: usize = 24_000_000;
 
 impl Image {
     pub fn new(w: u32, h: u32) -> Image {
-        Image { w, h, px: alloc::vec![0; (w as usize) * (h as usize)] }
+        Image { w, h, px: alloc::vec![0; (w as usize) * (h as usize)], frames: Vec::new() }
     }
 }
 
@@ -60,8 +79,8 @@ pub fn sniff(d: &[u8]) -> Option<Format> {
     } else if d.len() > 12 && &d[..4] == b"RIFF" && &d[8..12] == b"WEBP" {
         Some(Format::Webp)
     } else {
-        let head = core::str::from_utf8(&d[..d.len().min(512)]).unwrap_or("");
-        head.contains("<svg").then_some(Format::Svg)
+        let head = &d[..d.len().min(4096)];
+        head.windows(4).any(|w| w == b"<svg").then_some(Format::Svg)
     }
 }
 
@@ -71,8 +90,8 @@ pub fn decode(d: &[u8]) -> Result<Image> {
         Some(Format::Jpeg) => jpeg::decode(d),
         Some(Format::Gif) => gif::decode(d),
         Some(Format::Bmp) => bmp::decode(d),
-        Some(Format::Webp) => Err("WebP images aren't supported yet"),
-        Some(Format::Svg) => Err("SVG images aren't supported yet"),
+        Some(Format::Webp) => webp::decode(d),
+        Some(Format::Svg) => svg::decode(d),
         None => Err("not an image HydatekOS knows"),
     }
 }

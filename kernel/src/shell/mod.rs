@@ -430,7 +430,7 @@ impl Shell {
     fn open_path(&mut self, p: &str) {
         let kind = if self.sys.fs.is_dir(p) {
             AppKind::Files
-        } else if [".png", ".jpg", ".jpeg", ".gif", ".bmp"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
+        } else if [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Browser
         } else if [".hydg", ".xlsx", ".csv"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Grids

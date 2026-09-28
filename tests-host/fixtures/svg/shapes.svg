@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="150" viewBox="0 0 200 150">
+  <rect x="10" y="10" width="60" height="40" fill="#1f4e79"/>
+  <rect x="80" y="10" width="60" height="40" rx="12" fill="rgb(200, 60, 40)"/>
+  <circle cx="170" cy="30" r="20" fill="gold" stroke="black" stroke-width="3"/>
+  <ellipse cx="40" cy="95" rx="30" ry="18" fill="hsl(120, 60%, 40%)"/>
+  <line x1="80" y1="70" x2="190" y2="140" stroke="navy" stroke-width="6" stroke-linecap="round"/>
+  <polygon points="100,80 130,130 70,130" fill="orchid" fill-opacity="0.7"/>
+  <polyline points="140,80 160,100 180,80 195,110" fill="none" stroke="#e67e22" stroke-width="4" stroke-linejoin="round"/>
+</svg>

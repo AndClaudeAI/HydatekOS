@@ -11,72 +11,15 @@ use alloc::vec::Vec;
 
 // ---- colours -----------------------------------------------------------------------
 
-const NAMED: [(&str, u32); 24] = [
-    ("black", 0x000000),
-    ("white", 0xffffff),
-    ("red", 0xff0000),
-    ("green", 0x008000),
-    ("blue", 0x0000ff),
-    ("yellow", 0xffff00),
-    ("orange", 0xffa500),
-    ("purple", 0x800080),
-    ("gray", 0x808080),
-    ("grey", 0x808080),
-    ("silver", 0xc0c0c0),
-    ("maroon", 0x800000),
-    ("navy", 0x000080),
-    ("teal", 0x008080),
-    ("olive", 0x808000),
-    ("lime", 0x00ff00),
-    ("aqua", 0x00ffff),
-    ("fuchsia", 0xff00ff),
-    ("darkgray", 0xa9a9a9),
-    ("lightgray", 0xd3d3d3),
-    ("whitesmoke", 0xf5f5f5),
-    ("darkblue", 0x00008b),
-    ("darkred", 0x8b0000),
-    ("brown", 0xa52a2a),
-];
-
 /// Some(Some(rgb)), Some(None) for transparent, None if not a colour.
 fn color(v: &str) -> Option<Option<u32>> {
-    let v = v.trim().to_ascii_lowercase();
-    if v == "transparent" || v == "none" {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("none") {
         return Some(None);
     }
-    if let Some(h) = v.strip_prefix('#') {
-        let h: String = h.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-        return match h.len() {
-            3 | 4 => {
-                let d: Vec<u32> = h.chars().map(|c| c.to_digit(16).unwrap()).collect();
-                Some(Some((d[0] * 17) << 16 | (d[1] * 17) << 8 | d[2] * 17))
-            }
-            6 | 8 => u32::from_str_radix(&h[..6], 16).ok().map(Some),
-            _ => None,
-        };
-    }
-    if let Some(args) = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb(")) {
-        let nums: Vec<&str> = args.trim_end_matches(')').split([',', ' ', '/']).filter(|s| !s.is_empty()).collect();
-        if nums.len() < 3 {
-            return None;
-        }
-        let ch = |s: &str| -> u32 {
-            if let Some(p) = s.strip_suffix('%') {
-                (p.parse::<u32>().unwrap_or(0).min(100) * 255 / 100) as u32
-            } else {
-                s.split('.').next().unwrap_or("0").parse::<u32>().unwrap_or(0).min(255)
-            }
-        };
-        if let Some(a) = nums.get(3) {
-            let a = a.trim();
-            let transparent = a == "0" || a.starts_with("0.") && a.as_bytes().get(2).map_or(true, |d| *d < b'3') || a == "0%";
-            if transparent {
-                return Some(None);
-            }
-        }
-        return Some(Some(ch(nums[0]) << 16 | ch(nums[1]) << 8 | ch(nums[2])));
-    }
-    NAMED.iter().find(|(n, _)| *n == v).map(|(_, c)| Some(*c))
+    let (c, a) = crate::image::color::parse(v)?;
+    // boxes aren't blended yet: mostly transparent counts as none
+    Some(if a < 77 { None } else { Some(c) })
 }
 
 // ---- stylesheets ----------------------------------------------------------------------
@@ -328,6 +271,107 @@ struct Style {
     center_box: bool,
     border: Option<u32>,
     link: Option<usize>,
+    bg_img: Option<Background>,
+}
+
+/// A length that may be a percentage (of the box) or automatic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Dim {
+    Auto,
+    Px(i32),
+    Pct(i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BgSize {
+    Auto,
+    Cover,
+    Contain,
+    Set(Dim, Dim),
+}
+
+/// A CSS background image.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Background {
+    pub url: String,
+    pub size: BgSize,
+    pub pos: (Dim, Dim),
+    /// repeat across, repeat down
+    pub repeat: (bool, bool),
+}
+
+fn dim(v: &str, em: i32) -> Option<Dim> {
+    let v = v.trim();
+    if v == "auto" {
+        return Some(Dim::Auto);
+    }
+    if let Some(p) = v.strip_suffix('%') {
+        return p.trim().parse::<f64>().ok().map(|x| Dim::Pct(x as i32));
+    }
+    length(v, em, 0).map(Dim::Px)
+}
+
+/// The url(...) in a background value.
+fn css_url(v: &str) -> Option<String> {
+    let i = v.find("url(")?;
+    let rest = &v[i + 4..];
+    let end = rest.find(')')?;
+    let u = rest[..end].trim().trim_matches(|c| c == '"' || c == '\'');
+    (!u.is_empty()).then(|| u.to_string())
+}
+
+fn bg_position(s: &mut Background, words: &[&str], em: i32) {
+    let mut pos = (Dim::Pct(0), Dim::Pct(0));
+    let mut k = 0;
+    for w in words {
+        match *w {
+            "left" => pos.0 = Dim::Pct(0),
+            "right" => pos.0 = Dim::Pct(100),
+            "top" => pos.1 = Dim::Pct(0),
+            "bottom" => pos.1 = Dim::Pct(100),
+            "center" => {
+                if k == 0 && words.len() == 1 {
+                    pos = (Dim::Pct(50), Dim::Pct(50));
+                } else if k == 0 {
+                    pos.0 = Dim::Pct(50);
+                } else {
+                    pos.1 = Dim::Pct(50);
+                }
+            }
+            w => {
+                if let Some(d) = dim(w, em) {
+                    if k == 0 {
+                        pos.0 = d;
+                        pos.1 = Dim::Pct(50);
+                    } else {
+                        pos.1 = d;
+                    }
+                }
+            }
+        }
+        k += 1;
+    }
+    s.pos = pos;
+}
+
+fn bg_size(v: &str, em: i32) -> BgSize {
+    let words: Vec<&str> = v.split_whitespace().collect();
+    match words.as_slice() {
+        ["cover"] => BgSize::Cover,
+        ["contain"] => BgSize::Contain,
+        [a] => BgSize::Set(dim(a, em).unwrap_or(Dim::Auto), Dim::Auto),
+        [a, b, ..] => BgSize::Set(dim(a, em).unwrap_or(Dim::Auto), dim(b, em).unwrap_or(Dim::Auto)),
+        _ => BgSize::Auto,
+    }
+}
+
+fn bg_repeat(v: &str) -> (bool, bool) {
+    match v.trim() {
+        "no-repeat" => (false, false),
+        "repeat-x" => (true, false),
+        "repeat-y" => (false, true),
+        _ => (true, true),
+    }
 }
 
 pub const LINK_COLOR: u32 = 0x1a5fb4;
@@ -371,6 +415,7 @@ fn default_style(tag: &str, parent: &Style) -> Style {
     let mut s = parent.clone();
     s.disp = Disp::Inline;
     s.bg = None;
+    s.bg_img = None;
     s.margin = [0; 4];
     s.padding = [0; 4];
     s.width = None;
@@ -459,13 +504,88 @@ fn apply(s: &mut Style, parent: &Style, prop: &str, v: &str, containing_w: i32) 
                 s.color = c;
             }
         }
-        "background-color" | "background" => {
-            // "background: #fff url(...) ..." -> the first colour-looking word
-            for w in vl.split_whitespace() {
-                if let Some(c) = color(w) {
-                    s.bg = c;
-                    break;
+        "background-color" => {
+            if let Some(c) = color(&vl) {
+                s.bg = c;
+            }
+        }
+        "background" | "background-image" => {
+            let url = css_url(v);
+            // gradients: their first colour stands in
+            let gradient = vl.contains("gradient(");
+            let rest = match (vl.find("url("), vl.find(')')) {
+                (Some(a), Some(b)) if b > a => alloc::format!("{} {}", &vl[..a], &vl[b + 1..]),
+                _ => vl.clone(),
+            };
+            if prop == "background" {
+                // the shorthand resets what it doesn't set
+                s.bg = None;
+                s.bg_img = None;
+                let (before, size) = match rest.split_once('/') {
+                    Some((a, b)) => (a.to_string(), Some(b.to_string())),
+                    None => (rest.clone(), None),
+                };
+                let mut b = Background { url: String::new(), size: BgSize::Auto, pos: (Dim::Pct(0), Dim::Pct(0)), repeat: (true, true) };
+                let mut pos_words: Vec<&str> = Vec::new();
+                let words: Vec<&str> = before.split_whitespace().collect();
+                let size_words: Vec<&str> = size.as_deref().map(|z| z.split_whitespace().collect()).unwrap_or_default();
+                for w in &words {
+                    if matches!(*w, "repeat" | "no-repeat" | "repeat-x" | "repeat-y") {
+                        b.repeat = bg_repeat(w);
+                    } else if matches!(*w, "left" | "right" | "top" | "bottom" | "center") || dim(w, em).is_some() {
+                        pos_words.push(w);
+                    } else if let Some(c) = color(w) {
+                        s.bg = c;
+                    }
                 }
+                if !pos_words.is_empty() {
+                    bg_position(&mut b, &pos_words, em);
+                }
+                if let Some(z) = size_words.first() {
+                    // the size comes before any later words (colour, repeat)
+                    let n = size_words.iter().take_while(|w| matches!(**w, "cover" | "contain" | "auto") || dim(w, em).is_some()).count().max(1);
+                    b.size = bg_size(&size_words[..n].join(" "), em);
+                    let _ = z;
+                    for w in &size_words[n..] {
+                        if matches!(*w, "repeat" | "no-repeat" | "repeat-x" | "repeat-y") {
+                            b.repeat = bg_repeat(w);
+                        } else if let Some(c) = color(w) {
+                            s.bg = c;
+                        }
+                    }
+                }
+                if let Some(u) = url {
+                    b.url = u;
+                    s.bg_img = Some(b);
+                }
+            } else {
+                s.bg_img = url.map(|u| Background { url: u, size: BgSize::Auto, pos: (Dim::Pct(0), Dim::Pct(0)), repeat: (true, true) });
+            }
+            if gradient && s.bg.is_none() {
+                if let Some(start) = vl.find("gradient(") {
+                    for w in vl[start + 9..].split([',', ' ', ')']) {
+                        if let Some(Some(c)) = color(w) {
+                            s.bg = Some(c);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        "background-size" => {
+            if let Some(b) = s.bg_img.as_mut() {
+                b.size = bg_size(&vl, em);
+            }
+        }
+        "background-position" => {
+            if let Some(b) = s.bg_img.as_mut() {
+                let words: Vec<&str> = vl.split_whitespace().collect();
+                bg_position(b, &words, em);
+            }
+        }
+        "background-repeat" => {
+            if let Some(b) = s.bg_img.as_mut() {
+                b.repeat = bg_repeat(&vl);
             }
         }
         "font-size" => {
@@ -564,6 +684,8 @@ pub enum Item {
     Frame { x: i32, y: i32, w: i32, h: i32, color: u32 },
     /// an image: index into `Page::images`
     Image { x: i32, y: i32, w: i32, h: i32, img: usize },
+    /// a box's background image
+    Background { x: i32, y: i32, w: i32, h: i32, img: usize, size: BgSize, pos: (Dim, Dim), repeat: (bool, bool) },
 }
 
 /// What the browser knows about an image while laying out.
@@ -651,6 +773,8 @@ pub struct Page {
     pub anchors: Vec<(String, i32)>,
     /// image addresses, as written in the page
     pub images: Vec<String>,
+    /// every image the page uses, drawn yet or not
+    pub wanted: Vec<String>,
 }
 
 struct Frag {
@@ -958,6 +1082,7 @@ impl<'a> Engine<'a> {
             self.alt_text(n, s, l);
             return;
         };
+        self.out.wanted.push(src.clone());
         let status = (self.images)(&src);
         let attr = |a: &str| self.dom.attr(n, a).and_then(|v| v.trim().trim_end_matches("px").parse::<i32>().ok()).filter(|&v| v > 0);
         let cw = s.width.filter(|&v| v > 0).or_else(|| attr("width"));
@@ -1149,6 +1274,12 @@ impl<'a> Engine<'a> {
             cy = lines.y;
         }
         let bottom = cy + pb;
+        if let Some(b) = &s.bg_img {
+            self.out.wanted.push(b.url.clone());
+            let img = self.out.images.len();
+            self.out.images.push(b.url.clone());
+            self.out.items.insert(bg_at, Item::Background { x: bx, y: top, w: bw, h: bottom - top, img, size: b.size, pos: b.pos, repeat: b.repeat });
+        }
         if let Some(bg) = s.bg {
             if tag != "body" && tag != "html" {
                 self.out.items.insert(bg_at, Item::Rect { x: bx, y: top, w: bw, h: bottom - top, color: bg });
@@ -1221,8 +1352,9 @@ pub fn layout_with(dom: &Dom, extra_css: &str, width: i32, images: &dyn Fn(&str)
         center_box: false,
         border: None,
         link: None,
+        bg_img: None,
     };
-    let mut e = Engine { dom, images, rules, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![], images: vec![] } };
+    let mut e = Engine { dom, images, rules, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![], images: vec![], wanted: vec![] } };
     let mut y = 0;
     let top: Vec<NodeId> = dom.nodes[0].children.clone();
     let mut lines = Lines { x0: 0, width, y: 0, cur: vec![], cur_w: 0, align: Align::Left, pending_space: false };

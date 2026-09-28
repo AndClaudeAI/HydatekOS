@@ -12,8 +12,8 @@
 - Drivers: PS/2 keyboard, xHCI + USB HID (keyboard, mouse, touchpad), I2C-HID touchpads
 - AHCI and NVMe storage; a native FAT32 driver, then a HydatekOS file system
 - Preemptive scheduler, processes and a syscall ABI; apps move out of the kernel
-- ✅ JPEG, PNG, GIF and BMP decoders; pictures open from Files
-- WebP and SVG; a photo viewer with zoom and slideshows
+- ✅ JPEG, PNG, WebP, GIF and BMP decoders, SVG; pictures open from Files
+- AVIF; a photo viewer with zoom and slideshows
 
 ## M3 — connected
 - ✅ TCP/IP stack: ARP, IPv4, ICMP, UDP, DHCP, TCP, mDNS/DNS-SD (over the firmware NIC driver)

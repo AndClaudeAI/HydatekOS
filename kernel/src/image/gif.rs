@@ -1,6 +1,6 @@
 //! GIF (87a/89a): the first frame, with its transparency and interlacing.
 
-use super::{check_size, Image, Result};
+use super::{check_size, Frame, Image, Result, MAX_ANIM_PIXELS};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -107,18 +107,24 @@ pub fn decode(d: &[u8]) -> Result<Image> {
         global = palette(d.get(pos..pos + 3 * n).ok_or(BAD)?, n);
         pos += 3 * n;
     }
+    // graphic control: transparency, delay (1/100 s) and disposal
     let mut transparent: Option<u8> = None;
+    let mut delay = 0u32;
+    let mut disposal = 0u8;
+    let mut canvas: Vec<u32> = Vec::new();
+    let (mut w, mut h) = (sw as usize, sh as usize);
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut kept = 0usize;
     while pos < d.len() {
         match d[pos] {
             0x21 => {
                 let label = *d.get(pos + 1).ok_or(BAD)?;
                 pos += 2;
-                // graphic control extension: transparency
                 if label == 0xf9 && d.get(pos) == Some(&4) {
                     let b = d.get(pos + 1..pos + 5).ok_or(BAD)?;
-                    if b[0] & 1 != 0 {
-                        transparent = Some(b[3]);
-                    }
+                    transparent = (b[0] & 1 != 0).then_some(b[3]);
+                    disposal = (b[0] >> 2) & 7;
+                    delay = u16::from_le_bytes([b[1], b[2]]) as u32 * 10;
                 }
                 while let Some(&n) = d.get(pos) {
                     pos += 1 + n as usize;
@@ -141,8 +147,13 @@ pub fn decode(d: &[u8]) -> Result<Image> {
                 } else {
                     global.clone()
                 };
-                let (w, h) = (if sw == 0 { iw as u32 } else { sw }, if sh == 0 { ih as u32 } else { sh });
-                check_size(w, h)?;
+                if canvas.is_empty() {
+                    if w == 0 || h == 0 {
+                        (w, h) = (iw, ih);
+                    }
+                    check_size(w as u32, h as u32)?;
+                    canvas = vec![0u32; w * h];
+                }
                 let min = *d.get(pos).ok_or(BAD)? as u32;
                 pos += 1;
                 let mut data = Vec::new();
@@ -154,8 +165,12 @@ pub fn decode(d: &[u8]) -> Result<Image> {
                     data.extend_from_slice(d.get(pos..pos + n as usize).ok_or(BAD)?);
                     pos += n as usize;
                 }
-                let idx = lzw(&data, min, iw * ih)?;
-                let mut img = Image::new(w, h);
+                let idx = match lzw(&data, min, iw * ih) {
+                    Ok(i) => i,
+                    Err(e) if frames.is_empty() => return Err(e),
+                    Err(_) => break, // keep the frames decoded so far
+                };
+                let before = if disposal == 3 { Some(canvas.clone()) } else { None };
                 // interlaced rows come in four passes
                 let rows: Vec<usize> = if f & 0x40 != 0 {
                     let mut r = Vec::with_capacity(ih);
@@ -170,17 +185,38 @@ pub fn decode(d: &[u8]) -> Result<Image> {
                     for x in 0..iw {
                         let Some(&c) = idx.get(k * iw + x) else { break };
                         let (px, py) = (ix + x, iy + ry);
-                        if px >= w as usize || py >= h as usize || Some(c) == transparent {
+                        if px >= w || py >= h || Some(c) == transparent {
                             continue;
                         }
-                        img.px[py * w as usize + px] = pal.get(c as usize).copied().unwrap_or(0xff00_0000);
+                        canvas[py * w + px] = pal.get(c as usize).copied().unwrap_or(0xff00_0000);
                     }
                 }
-                return Ok(img);
+                // browsers show very short delays as 1/10 s
+                frames.push(Frame { px: canvas.clone(), delay: if delay <= 10 { 100 } else { delay } });
+                kept += w * h;
+                match disposal {
+                    2 => {
+                        for y in iy..(iy + ih).min(h) {
+                            for x in ix..(ix + iw).min(w) {
+                                canvas[y * w + x] = 0;
+                            }
+                        }
+                    }
+                    3 => canvas = before.unwrap_or(canvas),
+                    _ => {}
+                }
+                transparent = None;
+                delay = 0;
+                disposal = 0;
+                if kept > MAX_ANIM_PIXELS {
+                    break;
+                }
             }
             0x3b => break,
+            _ if !frames.is_empty() => break,
             _ => return Err(BAD),
         }
     }
-    Err(BAD)
+    let first = frames.first().ok_or(BAD)?.px.clone();
+    Ok(Image { w: w as u32, h: h as u32, px: first, frames: if frames.len() > 1 { frames } else { Vec::new() } })
 }

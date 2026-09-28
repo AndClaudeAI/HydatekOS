@@ -39,7 +39,24 @@ HydatekOS decodes pictures itself, with its own decoders (`kernel/src/image/`):
 - **JPEG**, baseline and progressive, any chroma subsampling, restart
   markers, greyscale, CMYK, and phone photos' EXIF rotation.
 - **PNG**, every colour type and bit depth, transparency and interlacing.
-- **GIF** (the first frame, with transparency) and **BMP**.
+- **WebP**: lossy (VP8), lossless (VP8L), transparency and animation.
+- **GIF**, animated, with transparency, and **BMP**.
+- **SVG**, drawn by HydatekOS's own vector renderer, sharp at any size:
+  shapes, paths (curves and arcs), fills (non-zero and even-odd), strokes
+  (joins, caps, dashes), linear and radial gradients, transforms, groups
+  with opacity, `<use>` and `<symbol>`, `<style>` sheets, nested `<svg>`.
+
+![SVG drawings and CSS backgrounds](screenshots/browser-svg-backgrounds.png)
+
+**Animations** (GIF and WebP) play with each frame's own timing.
+**CSS background images** work too: `background` and `background-image`
+with `url()`, `background-size` (`cover`, `contain`, lengths),
+`background-position` and `background-repeat`, tiled or not. A CSS gradient
+background shows its first colour for now.
+
+![WebP pictures and animations](screenshots/browser-webp-animation.png)
+
+![Animations playing](screenshots/browser-animation.gif)
 
 On a page, pictures take the size the page gives them (`width` / `height`
 attributes or CSS), or their own, and are never wider than the text column:
@@ -56,12 +73,15 @@ bar, and pictures in **Files** open the same way:
 
 ![A picture from Files](screenshots/image-view.png)
 
-The decoders are compared with Pillow (libjpeg, libpng) pixel by pixel:
-PNG, GIF and BMP match exactly; JPEG is within a few levels (a slightly
-different inverse DCT). With Go installed, they're also checked against Go's
+The decoders are compared with Pillow (libjpeg, libpng, libwebp) pixel by
+pixel: PNG, GIF, BMP and WebP (lossy and lossless) match exactly, animations
+frame by frame; JPEG is within a few levels (a slightly different inverse
+DCT). SVG is compared with Chromium's drawing of the same files: on average
+under one level apart, differing only along anti-aliased edges. With Go installed, they're also checked against Go's
 image test files: the PNG suite and a photo in every JPEG subsampling,
-progressive and restart variant. 1,500 randomly damaged files check that a
-bad picture never crashes anything.
+progressive and restart variant. Thousands of randomly damaged files
+(and SVGs full of nonsense and extreme numbers) check that a bad picture
+never crashes anything.
 
 ## Hyda Search
 
@@ -168,8 +188,10 @@ a server refuses X25519).
 
 ## Not yet
 
-- **WebP, AVIF and SVG pictures** (they show their description), animation
-  (a GIF shows its first frame), and CSS background images.
+- **AVIF pictures** (they show their description): AVIF is built on the AV1
+  video codec, a much larger decoder.
+- **In SVG:** text, filters, masks, clip paths and patterns. **In CSS:**
+  gradients (their first colour shows).
 - **JavaScript, web fonts and external stylesheets** (`<link rel=stylesheet>`).
 - **Tabs, bookmarks, find in page, downloads list, and text selection on pages.**
 - **Layout:** floats, flexbox and grid are laid out as ordinary blocks, so
@@ -185,7 +207,7 @@ a server refuses X25519).
 | HTML parser | `kernel/src/web/html.rs` |
 | CSS, style and layout | `kernel/src/web/render.rs` |
 | Hyda Search: index, ranking, crawler | `kernel/src/web/search.rs` |
-| Picture decoders: JPEG, PNG, GIF, BMP | `kernel/src/image/` |
+| Picture decoders: JPEG, PNG, WebP, GIF, BMP; the SVG renderer | `kernel/src/image/` |
 | TLS: hashes, AES-GCM, X25519, P-256/P-384, RSA, X.509, the handshake | `kernel/src/tls/` |
 | The browser app and its built-in pages | `kernel/src/apps/browser.rs` |
 

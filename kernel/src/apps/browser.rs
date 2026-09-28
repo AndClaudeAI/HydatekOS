@@ -33,13 +33,72 @@ const C_FIELD: u32 = 100_000;
 const PAD: i32 = 24;
 const STATUS: i32 = 24;
 
+/// A picture scaled for the screen: size, animation frame, pixels.
+struct Scaled {
+    w: i32,
+    h: i32,
+    frame: usize,
+    px: Vec<u32>,
+}
+
 /// An image on the page.
 enum Pic {
     Queued,
     Loading(u32),
-    /// the picture, and a copy scaled for the screen (w, h, pixels)
-    Ready(Rc<Image>, Option<(i32, i32, Vec<u32>)>),
+    /// a bitmap (maybe animated)
+    Ready(Rc<Image>, Option<Scaled>),
+    /// an SVG, drawn afresh at each size
+    Vector(Rc<picture::svg::Svg>, Option<Scaled>),
     Broken,
+}
+
+impl Pic {
+    fn size(&self) -> Option<(u32, u32)> {
+        match self {
+            Pic::Ready(i, _) => Some((i.w, i.h)),
+            Pic::Vector(v, _) => Some(v.size()),
+            _ => None,
+        }
+    }
+
+    fn animated(&self) -> bool {
+        matches!(self, Pic::Ready(i, _) if !i.frames.is_empty())
+    }
+
+    /// Pixels for a dw × dh box at time `ms` (for animations).
+    fn pixels(&mut self, dw: i32, dh: i32, ms: u64) -> Option<&[u32]> {
+        if dw <= 0 || dh <= 0 || dw as i64 * dh as i64 > 40_000_000 {
+            return None;
+        }
+        match self {
+            Pic::Ready(img, cache) => {
+                let frame = if img.frames.is_empty() {
+                    0
+                } else {
+                    let total: u64 = img.frames.iter().map(|f| f.delay as u64).sum::<u64>().max(1);
+                    let mut t = ms % total;
+                    let mut k = 0;
+                    while k + 1 < img.frames.len() && t >= img.frames[k].delay as u64 {
+                        t -= img.frames[k].delay as u64;
+                        k += 1;
+                    }
+                    k
+                };
+                if cache.as_ref().map_or(true, |c| (c.w, c.h, c.frame) != (dw, dh, frame)) {
+                    let src = if img.frames.is_empty() { &img.px } else { &img.frames[frame].px };
+                    *cache = Some(Scaled { w: dw, h: dh, frame, px: crate::gfx::scale_argb(src, img.w as i32, img.h as i32, dw, dh) });
+                }
+                cache.as_ref().map(|c| c.px.as_slice())
+            }
+            Pic::Vector(svg, cache) => {
+                if cache.as_ref().map_or(true, |c| (c.w, c.h) != (dw, dh)) {
+                    *cache = Some(Scaled { w: dw, h: dh, frame: 0, px: svg.render(dw as u32, dh as u32).px });
+                }
+                cache.as_ref().map(|c| c.px.as_slice())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Images fetched at once.
@@ -65,10 +124,49 @@ fn data_uri(s: &str) -> Option<Vec<u8>> {
 }
 
 fn decode_pic(data: &[u8]) -> Pic {
+    if picture::sniff(data) == Some(picture::Format::Svg) {
+        return match picture::svg::parse(data) {
+            Ok(svg) => Pic::Vector(Rc::new(svg), None),
+            Err(_) => Pic::Broken,
+        };
+    }
     match picture::decode(data) {
         Ok(img) => Pic::Ready(Rc::new(img), None),
         Err(_) => Pic::Broken,
     }
+}
+
+/// Where a background's tiles go: tile size and the first tile's offset
+/// inside a box of bw × bh.
+fn bg_tiles(nat: (u32, u32), bw: i32, bh: i32, size: render::BgSize, pos: (render::Dim, render::Dim)) -> (i32, i32, i32, i32) {
+    use render::{BgSize, Dim};
+    let (nw, nh) = (nat.0.max(1) as f64, nat.1.max(1) as f64);
+    let len = |d: Dim, full: i32| match d {
+        Dim::Px(v) => Some(v as f64),
+        Dim::Pct(p) => Some(full as f64 * p as f64 / 100.0),
+        Dim::Auto => None,
+    };
+    let (tw, th) = match size {
+        BgSize::Auto => (nw, nh),
+        BgSize::Cover | BgSize::Contain => {
+            let (sx, sy) = (bw as f64 / nw, bh as f64 / nh);
+            let s = if size == BgSize::Cover { sx.max(sy) } else { sx.min(sy) };
+            (nw * s, nh * s)
+        }
+        BgSize::Set(a, b) => match (len(a, bw), len(b, bh)) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, w * nh / nw),
+            (None, Some(h)) => (h * nw / nh, h),
+            _ => (nw, nh),
+        },
+    };
+    let (tw, th) = ((tw + 0.5).max(1.0) as i32, (th + 0.5).max(1.0) as i32);
+    let off = |d: Dim, free: i32| match d {
+        Dim::Px(v) => v,
+        Dim::Pct(p) => free * p / 100,
+        Dim::Auto => 0,
+    };
+    (tw, th, off(pos.0, bw - tw), off(pos.1, bh - th))
 }
 
 struct Loaded {
@@ -124,12 +222,33 @@ impl Loaded {
     fn layout(&mut self, width: i32) {
         let (url, images) = (&self.url, &self.images);
         let status = |src: &str| match image_key(url, src).and_then(|k| images.get(&k)) {
-            Some(Pic::Ready(img, _)) => render::ImgStatus::Ready(img.w, img.h),
             Some(Pic::Broken) => render::ImgStatus::Broken,
-            _ => render::ImgStatus::Loading,
+            Some(p) => p.size().map_or(render::ImgStatus::Loading, |(w, h)| render::ImgStatus::Ready(w, h)),
+            None => render::ImgStatus::Loading,
         };
         self.page = render::layout_with(&self.dom, "", width, &status);
         self.width = width;
+        // images the page uses that we haven't asked for yet
+        for src in core::mem::take(&mut self.page.wanted) {
+            let Some(key) = image_key(&self.url, &src) else { continue };
+            if self.images.contains_key(&key) {
+                continue;
+            }
+            let pic = if key.starts_with("data:") {
+                data_uri(&key).map_or(Pic::Broken, |d| decode_pic(&d))
+            } else if key.starts_with("file:") {
+                Pic::Broken // filled in by show_image
+            } else {
+                Pic::Queued
+            };
+            let known = !matches!(pic, Pic::Queued);
+            self.images.insert(key, pic);
+            self.relayout |= known;
+        }
+    }
+
+    fn animated(&self) -> bool {
+        self.images.values().any(|p| p.animated())
     }
 
     fn images_left(&self) -> usize {
@@ -200,25 +319,7 @@ impl Browser {
         let dom = html::parse(&html);
         let title = dom.title();
         let width = (self.area.w - 2 * PAD).max(200);
-        let mut images = BTreeMap::new();
-        for n in 0..dom.nodes.len() {
-            if dom.tag(n) != "img" {
-                continue;
-            }
-            let Some(key) = render::img_src(&dom, n).and_then(|s| image_key(&url, &s)) else { continue };
-            if images.contains_key(&key) {
-                continue;
-            }
-            let pic = if key.starts_with("data:") {
-                data_uri(&key).map_or(Pic::Broken, |d| decode_pic(&d))
-            } else if key.starts_with("file:") {
-                Pic::Broken // filled in by show_image
-            } else {
-                Pic::Queued
-            };
-            images.insert(key, pic);
-        }
-        let mut c = Loaded { url, title, dom, page: Page::default(), images, relayout: false, width, values: vec![], security: None };
+        let mut c = Loaded { url, title, dom, page: Page::default(), images: BTreeMap::new(), relayout: false, width, values: vec![], security: None };
         c.layout(width);
         self.cur = Some(c);
         self.scroll = 0;
@@ -228,20 +329,27 @@ impl Browser {
     }
 
     /// Show a picture on its own (an image address, or a file).
-    fn show_image(&mut self, url: Url, key: String, pic: Result<Image, &'static str>) {
+    fn show_image(&mut self, url: Url, key: String, data: Option<&[u8]>) {
         let name = url::decode(key.rsplit('/').next().unwrap_or("")).split('?').next().unwrap_or("").to_string();
-        match pic {
-            Ok(img) => {
-                let title = format!("{} ({} × {})", if name.is_empty() { "Image" } else { &name }, img.w, img.h);
+        let pic = data.map_or(Pic::Broken, decode_pic);
+        match pic.size() {
+            Some((w, h)) => {
+                let kind = match &pic {
+                    Pic::Vector(..) => " · SVG",
+                    p if p.animated() => " · animated",
+                    _ => "",
+                };
+                let title = format!("{} ({} × {}{})", if name.is_empty() { "Image" } else { &name }, w, h, kind);
                 let html = format!("<html><head><title>{}</title><style>body{{margin:0;background:#2b2733}}</style></head><body><center><img src=\"{}\"></center></body></html>", esc(&title), esc(&key));
                 self.show(url, html);
                 if let Some(c) = self.cur.as_mut() {
-                    c.images.insert(key, Pic::Ready(Rc::new(img), None));
+                    c.images.insert(key, pic);
                     let w = c.width;
                     c.layout(w);
                 }
             }
-            Err(why) => {
+            None => {
+                let why = data.map_or("wasn't found", |d| picture::decode(d).err().unwrap_or("can't be shown"));
                 self.error = Some((String::from("Can't show this image"), format!("{} {}.", name, why)));
                 self.error_url = Some(url.to_string());
             }
@@ -330,8 +438,8 @@ impl Browser {
             "index" => self.index_page(sys),
             "view" => {
                 let path = url.param("path").unwrap_or_default();
-                let pic = sys.fs.read(&path).ok_or("wasn't found").and_then(|d| picture::decode(&d));
-                self.show_image(url, format!("file:{}", path), pic);
+                let data = sys.fs.read(&path);
+                self.show_image(url, format!("file:{}", path), data.as_deref());
                 return;
             }
             "engine" => {
@@ -552,6 +660,7 @@ impl Browser {
             c.layout(width);
         }
         let (page, images, page_url) = (&c.page, &mut c.images, &c.url);
+        let ms = ui.ticks * 10;
         let max = (page.height - area.h + PAD * 2).max(0);
         self.scroll = self.scroll.clamp(0, max);
         ui.rect(area, Color::rgb(page.bg));
@@ -564,17 +673,35 @@ impl Browser {
                 Item::Rect { x, y, w, h, color } if visible(*y, *h) => ui.rect(Rect::new(ox + x, oy + y, *w, *h), Color::rgb(*color)),
                 Item::Frame { x, y, w, h, color } if visible(*y, *h) => ui.stroke(Rect::new(ox + x, oy + y, *w, *h), 0, 1, Color::rgb(*color)),
                 Item::Image { x, y, w, h, img } if visible(*y, *h) => match image_key(page_url, &page.images[*img]).and_then(|k| images.get_mut(&k)) {
-                    Some(Pic::Ready(im, cache)) => {
+                    Some(p @ (Pic::Ready(..) | Pic::Vector(..))) => {
                         let (dw, dh) = (w * s, h * s);
-                        if cache.as_ref().map_or(true, |(cw, ch, _)| (*cw, *ch) != (dw, dh)) {
-                            *cache = Some((dw, dh, crate::gfx::scale_argb(&im.px, im.w as i32, im.h as i32, dw, dh)));
-                        }
-                        if let Some((_, _, px)) = cache.as_ref() {
+                        if let Some(px) = p.pixels(dw, dh, ms) {
                             ui.c.blend_argb(px, dw, dh, (ox + x) * s, (oy + y) * s);
                         }
                     }
                     _ => ui.rect(Rect::new(ox + x, oy + y, *w, *h), Color::rgb(0xece6dd)),
                 },
+                Item::Background { x, y, w, h, img, size, pos, repeat } if visible(*y, *h) => {
+                    let Some(p) = image_key(page_url, &page.images[*img]).and_then(|k| images.get_mut(&k)) else { continue };
+                    let Some(nat) = p.size() else { continue };
+                    let (tw, th, offx, offy) = bg_tiles(nat, *w, *h, *size, *pos);
+                    let bx = Rect::new(ox + x, oy + y, *w, *h);
+                    let clip = ui.clip_in(bx);
+                    // tile positions across and down (one each without repeat)
+                    let first = |off: i32, t: i32, on: bool| if on { off - ((off + t - 1).div_euclid(t)) * t } else { off };
+                    let (fx, fy) = (first(offx, tw, repeat.0), first(offy, th, repeat.1));
+                    let (nx, ny) = (if repeat.0 { (*w - fx + tw - 1) / tw } else { 1 }, if repeat.1 { (*h - fy + th - 1) / th } else { 1 });
+                    if nx * ny <= 4000 {
+                        if let Some(px) = p.pixels(tw * s, th * s, ms) {
+                            for j in 0..ny {
+                                for i in 0..nx {
+                                    ui.c.blend_argb(px, tw * s, th * s, (bx.x + fx + i * tw) * s, (bx.y + fy + j * th) * s);
+                                }
+                            }
+                        }
+                    }
+                    ui.set_clip(clip);
+                }
                 Item::Text { x, y, size, face, color, text, underline, strike } if visible(*y - size, size + 4) => {
                     let w = crate::font::draw(ui.c, (ox + x) * s, (oy + y) * s, *face, size * s, text, Color::rgb(*color)) / s;
                     if *underline {
@@ -795,11 +922,11 @@ impl App for Browser {
                     return;
                 }
                 let sniffed = picture::sniff(&resp.body);
-                let is_picture = ctype.starts_with("image/") || matches!(sniffed, Some(picture::Format::Png | picture::Format::Jpeg | picture::Format::Gif | picture::Format::Bmp));
-                if is_picture && !matches!(sniffed, Some(picture::Format::Svg)) {
+                let is_picture = ctype.starts_with("image/") || matches!(sniffed, Some(picture::Format::Png | picture::Format::Jpeg | picture::Format::Gif | picture::Format::Bmp | picture::Format::Webp));
+                if is_picture {
                     let key = image_key(&url, &url.to_string()).unwrap_or_else(|| url.to_string());
                     let security = resp.security.clone();
-                    self.show_image(url, key, picture::decode(&resp.body));
+                    self.show_image(url, key, Some(&resp.body));
                     if let Some(c) = self.cur.as_mut() {
                         c.security = security;
                     }
@@ -1030,6 +1157,6 @@ impl App for Browser {
     }
 
     fn animating(&self) -> bool {
-        self.edit.is_some() || self.loading.is_some() || self.focus_field.is_some() || self.cur.as_ref().is_some_and(|c| c.relayout || c.images_left() > 0)
+        self.edit.is_some() || self.loading.is_some() || self.focus_field.is_some() || self.cur.as_ref().is_some_and(|c| c.relayout || c.images_left() > 0 || (self.error.is_none() && c.animated()))
     }
 }
