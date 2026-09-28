@@ -25,7 +25,7 @@
 - ✅ Browser: HTML/CSS subset renderer, Hyda Search
 - ✅ Browser pictures
 - ✅ Browser: external stylesheets, media queries, CSS variables
-- Browser: flexbox and grid layout, tabs; Mail: IMAP/SMTP
+- Browser: floats and positioning, tabs; Mail: IMAP/SMTP
 - Phone Link: X25519 key exchange (HLP/2), real-phone screen mirroring, iOS companion app
 
 ## M4 — senses

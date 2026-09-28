@@ -113,6 +113,11 @@ fn block_end(s: &str, open: usize) -> usize {
     b.len()
 }
 
+/// Split at a separator outside parentheses and strings.
+pub fn split_top_pub(s: &str, sep: u8) -> Vec<&str> {
+    split_top(s, sep)
+}
+
 /// Split at top-level commas.
 fn split_top(s: &str, sep: u8) -> Vec<&str> {
     let mut out = Vec::new();

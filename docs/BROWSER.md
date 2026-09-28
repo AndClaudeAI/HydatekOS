@@ -65,6 +65,35 @@ reads in about 7 ms on a PC and a page of 1,600 elements lays out in about
 
 ![Bootstrap's own stylesheet](screenshots/browser-bootstrap.png)
 
+## Flexbox and grid
+
+![A page laid out with flexbox and grid](screenshots/browser-flex-grid.png)
+
+Pages lay out with **flexbox** and **CSS grid**, so navigation bars sit in a
+row, columns sit side by side, and card galleries fill the width.
+
+- **Flexbox:** `display: flex`, rows and columns (and `-reverse`), `flex-wrap`,
+  `flex-grow` / `flex-shrink` / `flex-basis` and the `flex` shorthand, items
+  sized to their content (min- and max-content), `justify-content` (start,
+  end, center, space-between / around / evenly), `align-items` and
+  `align-self` (stretch, start, end, center), `gap`, `order`, `margin: auto`
+  to push items apart, and `min-height` / `height` on the container.
+- **Grid:** `display: grid`, `grid-template-columns` / `-rows` with px, %,
+  `fr`, `auto`, `min-content`, `max-content`, `minmax()` and `repeat()`
+  (including `auto-fill` and `auto-fit`), `grid-template-areas` with
+  `grid-area` names, line numbers (negative too) and `span` in
+  `grid-column` / `grid-row`, auto-placement row by row, `grid-auto-rows`,
+  `gap`, and `align-items` / `align-self` (grid items fill their cells' width).
+- Frameworks' grids work: Bootstrap's `.row` / `.col-md-4`, `d-flex`,
+  `justify-content-between`, `ms-auto` and the like.
+
+The layouts are checked against Chromium: 33 test pages (wrapping, shrinking,
+nested flex, spans, named areas, `auto-fill` ...) are laid out by both, and
+every box lands within a pixel of Chromium's. Ten levels of nested flex boxes
+lay out in about a millisecond.
+
+![Bootstrap's grid and flex utilities](screenshots/browser-bootstrap-grid.png)
+
 ## Pictures
 
 ![A page with pictures](screenshots/browser-images.png)
@@ -231,8 +260,9 @@ a server refuses X25519).
   positioning (absolute elements are laid out in the flow unless they're a
   hiding trick), and gradients (their first colour shows).
 - **Tabs, bookmarks, find in page, downloads list, and text selection on pages.**
-- **Layout:** floats, flexbox and grid are laid out as ordinary blocks, so
-  multi-column pages stack their columns.
+- **Layout:** floats are laid out as ordinary blocks; `inline-flex` and
+  `inline-grid` flow as inline text; there's no `align-content`, baseline
+  alignment or subgrid, and borders take no room in the layout.
 
 ## How it's built
 
@@ -243,7 +273,7 @@ a server refuses X25519).
 | Requests from apps, run by the main loop | `kernel/src/web/mod.rs`, `fetch.rs` |
 | HTML parser | `kernel/src/web/html.rs` |
 | CSS parsing, selectors, media queries, the cascade | `kernel/src/web/css.rs` |
-| Style and layout | `kernel/src/web/render.rs` |
+| Style and layout, flexbox and grid | `kernel/src/web/render.rs` |
 | Hyda Search: index, ranking, crawler | `kernel/src/web/search.rs` |
 | Picture decoders: JPEG, PNG, WebP, GIF, BMP; the SVG renderer | `kernel/src/image/` |
 | TLS: hashes, AES-GCM, X25519, P-256/P-384, RSA, X.509, the handshake | `kernel/src/tls/` |

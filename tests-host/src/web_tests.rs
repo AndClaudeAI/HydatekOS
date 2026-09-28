@@ -389,3 +389,47 @@ fn calc_and_inline_boxes() {
     // "Go" and "now" have no box
     assert_eq!(p.items.iter().filter(|i| matches!(i, Item::Rect { .. })).count(), 1);
 }
+
+/// Flexbox and grid boxes against Chromium's layout of the same pages
+/// (fixtures/layout/expected.txt, made by make.js).
+#[test]
+fn flex_and_grid_match_chromium() {
+    let text = std::fs::read_to_string(format!("{}/fixtures/layout/expected.txt", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut failures = Vec::new();
+    let mut cases = 0;
+    for block in text.split("\n\n").filter(|b| !b.trim().is_empty()) {
+        let mut lines = block.lines();
+        let name = lines.next().unwrap().trim_start_matches("case ").to_string();
+        let html_src = lines.next().unwrap();
+        let d = html::parse(html_src);
+        let p = render::layout(&d, "", 1000);
+        cases += 1;
+        for l in lines {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let colour = u32::from_str_radix(&f[1][1..], 16).unwrap();
+            let want: Vec<i32> = f[2..6].iter().map(|v| v.parse().unwrap()).collect();
+            let got = p.items.iter().find_map(|i| if let render::Item::Rect { x, y, w, h, color } = i { (*color == colour).then(|| vec![*x, *y, *w, *h]) } else { None });
+            match got {
+                Some(g) if g.iter().zip(&want).all(|(a, b)| (a - b).abs() <= 1) => {}
+                _ => failures.push(format!("{} #{}: want {:?}, got {:?}", name, f[0], want, got)),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} layouts:\n{}", failures.len(), cases, failures.join("\n"));
+}
+
+/// Flex boxes nested deep, with text: measuring must not multiply per level.
+#[test]
+fn deep_flex_is_quick() {
+    let mut inner = String::from("<span>leaf text here</span>");
+    for level in 0..10 {
+        inner = format!("<div class=f><div>left {} words</div>{}<div class=g>right</div></div>", level, inner);
+    }
+    let d = html::parse(&format!("<style>.f{{display:flex;gap:4px}} .g{{flex:1}}</style>{}", inner));
+    let t = std::time::Instant::now();
+    let p = render::layout(&d, "", 900);
+    let took = t.elapsed();
+    assert!(p.items.len() > 20);
+    assert!(took.as_millis() < 500, "took {:?}", took);
+    println!("10 nested flex levels: {:?}", took);
+}

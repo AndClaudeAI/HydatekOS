@@ -1,0 +1,175 @@
+[
+ {
+  "name": "row-justify",
+  "css": ".c{display:flex;width:800px;gap:10px} .c>div{height:40px} .a{width:100px}.b{width:150px}.d{width:50px}",
+  "variants": [
+   "justify-content:flex-start",
+   "justify-content:center",
+   "justify-content:flex-end",
+   "justify-content:space-between",
+   "justify-content:space-around",
+   "justify-content:space-evenly"
+  ],
+  "html": "<div class=c><div class=a id=a></div><div class=b id=b></div><div class=d id=d></div></div>"
+ },
+ {
+  "name": "grow",
+  "css": ".c{display:flex;width:800px} .c>div{height:30px} #a{flex:1}#b{flex:2}#d{flex:1}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "basis-grow",
+  "css": ".c{display:flex;width:800px;gap:20px} .c>div{height:30px} #a{flex:0 0 200px}#b{flex:1}#d{flex-grow:1;flex-basis:100px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "shrink",
+  "css": ".c{display:flex;width:800px} .c>div{height:30px;width:400px} #d{flex-shrink:0}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "wrap",
+  "css": ".c{display:flex;flex-wrap:wrap;width:800px;gap:20px 10px} .c>div{width:250px;height:50px}",
+  "variants": [
+   "",
+   "justify-content:center"
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div><div id=e></div><div id=f></div><div id=g></div></div>"
+ },
+ {
+  "name": "align",
+  "css": ".c{display:flex;width:600px} #a{width:100px;height:80px}#b{width:100px;height:40px}#d{width:100px}",
+  "variants": [
+   "",
+   "align-items:center",
+   "align-items:flex-end",
+   "align-items:flex-start"
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "align-self",
+  "css": ".c{display:flex;width:600px;align-items:flex-start} #a{width:100px;height:90px}#b{width:100px;height:30px;align-self:center}#d{width:100px;align-self:stretch}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "column",
+  "css": ".c{display:flex;flex-direction:column;width:500px;gap:12px} .c>div{height:30px} #b{width:200px;align-self:center}#d{width:100px;align-self:flex-end}",
+  "variants": [
+   "",
+   "align-items:flex-start"
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "column-center",
+  "css": ".c{display:flex;flex-direction:column;justify-content:center;width:400px;min-height:300px} .c>div{height:40px;width:100px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div></div>"
+ },
+ {
+  "name": "order-reverse",
+  "css": ".c{display:flex;width:800px} .c>div{height:30px;width:100px} #a{order:2}",
+  "variants": [
+   "",
+   "flex-direction:row-reverse;justify-content:flex-end"
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div></div>"
+ },
+ {
+  "name": "margins-padding",
+  "css": ".c{display:flex;width:700px;padding:10px 20px;gap:5px} .c>div{height:30px;flex:1;margin:0 10px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div></div>"
+ },
+ {
+  "name": "grid-fr",
+  "css": ".g{display:grid;width:800px;grid-template-columns:200px 1fr 2fr;gap:10px} .g>div{height:40px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div><div id=f></div></div>"
+ },
+ {
+  "name": "grid-repeat",
+  "css": ".g{display:grid;width:800px;grid-template-columns:repeat(3,1fr);column-gap:20px;row-gap:15px} .g>div{height:40px} #b{grid-column:span 2} #e{grid-column:1 / -1}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div><div id=f></div></div>"
+ },
+ {
+  "name": "grid-autofill",
+  "css": ".g{display:grid;width:800px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px} .g>div{height:50px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div><div id=f></div></div>"
+ },
+ {
+  "name": "grid-rows",
+  "css": ".g{display:grid;width:600px;grid-template-columns:1fr 1fr;gap:10px} #a{height:100px}#b{height:40px}#d{height:60px;grid-row:span 2}#e{height:20px}",
+  "variants": [
+   "",
+   "align-items:start",
+   "align-items:center"
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div>"
+ },
+ {
+  "name": "grid-areas",
+  "css": ".g{display:grid;width:900px;grid-template-columns:200px 1fr;grid-template-areas:'head head' 'side main' 'foot foot';gap:10px} #a{grid-area:head;height:50px}#b{grid-area:side;height:200px}#d{grid-area:main;height:120px}#e{grid-area:foot;height:40px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div>"
+ },
+ {
+  "name": "grid-explicit",
+  "css": ".g{display:grid;width:600px;grid-template-columns:repeat(4,100px);grid-auto-rows:50px;gap:10px} #a{grid-column:3;grid-row:2}#b{grid-column:2 / 4}#d{grid-row:1 / 3}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div>"
+ },
+ {
+  "name": "nested",
+  "css": ".g{display:grid;width:800px;grid-template-columns:1fr 1fr;gap:20px} .row{display:flex;gap:10px} .row>div{height:30px;flex:1} #x{height:70px}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=g><div class=row id=r><div id=a></div><div id=b></div></div><div id=x></div></div>"
+ },
+ {
+  "name": "auto-margin",
+  "css": ".c{display:flex;width:800px;gap:10px} .c>div{height:30px;width:80px} #d{margin-left:auto}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div>"
+ },
+ {
+  "name": "auto-margin-center",
+  "css": ".c{display:flex;width:600px} .c>div{height:30px;width:100px;margin:0 auto}",
+  "variants": [
+   ""
+  ],
+  "html": "<div class=c><div id=a></div></div>"
+ }
+]
