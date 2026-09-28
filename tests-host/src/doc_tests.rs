@@ -32,7 +32,7 @@ fn zip_round_trip() {
 }
 
 fn sample() -> Doc {
-    let mut d = Doc { paras: vec![] };
+    let mut d = Doc { paras: vec![], author: String::new() };
     d.paras.push(Para::plain("Quarterly report", Style::Title));
     d.paras.push(Para::plain("Summary", Style::H1));
     let mut p = Para::plain("Sales grew by ₦5,000 & costs < plan.", Style::Body);
@@ -114,7 +114,9 @@ fn editing() {
 #[test]
 fn write_sample_docx() {
     if let Ok(p) = std::env::var("HYDA_DOCX_OUT") {
-        std::fs::write(p, sample().to_docx()).unwrap();
+        let mut d = sample();
+        d.author = "Ada Obi".into();
+        std::fs::write(p, d.to_docx()).unwrap();
     }
 }
 

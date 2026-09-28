@@ -32,6 +32,8 @@ pub enum Action {
     Mirror(u8),
     /// Lock screen: tap, keypad digit, backspace or enter (see shell::lock)
     Lock(u8),
+    /// The setup assistant (see shell::setup)
+    Setup(u16),
     Swallow,
 }
 
@@ -223,6 +225,11 @@ impl<'a> Ui<'a> {
             }
         }
         self.c.blit_scaled(&c, pr, radius * self.s);
+    }
+
+    /// A profile picture (a square canvas) shown as a circle filling `r`.
+    pub fn avatar(&mut self, r: Rect, pic: &Canvas) {
+        self.c.blit_scaled(pic, r.scale(self.s), r.w * self.s / 2);
     }
 
     // ---- common widgets -------------------------------------------------

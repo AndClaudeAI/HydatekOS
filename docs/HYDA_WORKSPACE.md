@@ -7,6 +7,12 @@ built on no other word processor: the document model, its own file format
 (`.hyds`, `.hydg`, `.hydp`), page and slide layout, and the importers and exporters for other formats are
 all HydatekOS code, with no third-party libraries.
 
+Documents record who made them. When you first save or export one, your profile
+name becomes its author, in HydatekOS's formats (`author` line) and in Word,
+Excel, PowerPoint and PDF files, where other programs show it under the
+document's properties. Files you open keep the author they came with
+([PROFILE.md](PROFILE.md)).
+
 ![Hyda Scripts](screenshots/hyda-scripts.png)
 
 ## Hyda Scripts
@@ -72,6 +78,7 @@ HydatekOS: easy to read, easy to recover, and checked for damage.
 ```
 HYDS 1                          magic and format version
 app Hyda Scripts                the program that wrote it
+author Ada Obi                  who wrote it (optional)
 paras 3                         number of paragraphs
 p title left                    a paragraph: style, alignment
 t Budget 2026                   its text
@@ -177,6 +184,7 @@ Line-based UTF-8 text, like `.hyds`:
 ```
 HYDG 1                          magic and format version
 app Hyda Grids                  the program that wrote it
+author Ada Obi                  who made it (optional)
 sheet Budget                    sheet name
 w 0 140                         column A is 140 px wide
 c A1 b Item                     cell: reference, format, input
@@ -353,6 +361,7 @@ Line-based UTF-8 text, like `.hyds` and `.hydg`:
 HYDP 1                          magic and format version
 app Hyda Slides                 the program that wrote it
 name Meet HydatekOS
+author Ada Obi                  who made it (optional)
 size 1280 720                   slide size in units (1/96 inch)
 theme dune                      a built-in theme, or
                                 theme custom <bg> <title> <text> <accent> (hex)

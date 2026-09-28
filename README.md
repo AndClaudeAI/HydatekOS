@@ -24,6 +24,10 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
 
+| Setup assistant | Choosing a profile picture | Settings › Profile |
+|---|---|---|
+| ![Setup assistant](docs/screenshots/setup-welcome.png) | ![Picture](docs/screenshots/setup-picture.png) | ![Settings › Profile](docs/screenshots/settings-profile.png) |
+
 | Boot splash | Lock screen: PIN, password, fingerprint | Fingerprint via your phone |
 |---|---|---|
 | ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
@@ -37,6 +41,12 @@ Windows, macOS or Linux.
 ## What works today (milestone 1, "Dune")
 
 - **Boots on real x86-64 PCs** from a USB stick or the internal disk (UEFI, Secure Boot off).
+- **Setup assistant and profile:** the first start asks for your name, a picture
+  (initials, one of six drawn pictures, or a photo of your own), a PIN or password
+  and light or dark. Your picture and name then show on the lock screen and in the
+  menu bar, the desktop greets you, and documents you make carry your name as
+  their author (in Word, Excel, PowerPoint and PDF files too). Change it all in
+  Settings › Profile. Details: [docs/PROFILE.md](docs/PROFILE.md).
 - **Boot splash and lock screen:** a HydatekOS splash with a progress bar while
   drivers, files and the network come up, then a fade into the lock screen (clock,
   date, Up next, phone notifications). Sign in with a **PIN** (keypad), a **password**,
@@ -113,7 +123,10 @@ An operating system is a long project. Here's what's still missing; the plan is 
   ([details](companion/android/README.md)).
 - **No sound, camera or fingerprint-reader drivers yet.** Fingerprint sign-in
   works through a paired Android phone's sensor instead. The on-screen keyboard is
-  only on the lock screen so far; other text fields still need a physical keyboard.
+  on the lock screen and in the setup assistant so far; other text fields still
+  need a physical keyboard.
+- **One profile per computer:** accounts for several people, with their own files
+  and permissions, come later.
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
 
@@ -174,7 +187,8 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/ps2.rs       PS/2 mouse driver
   src/input.rs     keyboard + pointer input
   src/fs.rs        virtual file system persisted to the boot disk
-  src/shell/       desktop shell, window manager, mobile shell, wallpaper
+  src/shell/       desktop shell, window manager, mobile shell, lock screen, setup assistant
+  src/profile.rs   your profile (name, picture); avatar.rs draws profile pictures
   src/apps/        built-in applications
   assets/fonts.bin prebuilt glyph atlases (regenerate with tools/fontgen.py)
   src/net/         network stack: firmware NIC, ARP/IPv4/DHCP/TCP/mDNS
@@ -191,7 +205,7 @@ companion/android/ HydatekOS Link for Android (built without the Android SDK)
 tests-host/        host-side tests of kernel modules
 assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans and Sans Mono) + licences
 tools/             image builder, QEMU runner, GPT writer, font generator
-docs/              architecture, install guide, Phone Link protocol, Hyda Workspace, roadmap
+docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, roadmap
 ```
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

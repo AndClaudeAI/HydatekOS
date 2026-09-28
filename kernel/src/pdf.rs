@@ -119,7 +119,7 @@ fn rgb(c: u32) -> String {
 }
 
 /// Write the PDF.
-pub fn write(title: &str, pages: &[Page]) -> Vec<u8> {
+pub fn write(title: &str, author: &str, pages: &[Page]) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     // objects: 1 catalog, 2 pages, 3 font, 4 info, then per page: page, content, image
@@ -146,6 +146,10 @@ pub fn write(title: &str, pages: &[Page]) -> Vec<u8> {
     obj(&mut out, &mut offsets, 3, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
     let mut info = b"<< /Producer (Hyda Slides) /Title ".to_vec();
     info.extend_from_slice(&pdf_string(title));
+    if !author.is_empty() {
+        info.extend_from_slice(b" /Author ");
+        info.extend_from_slice(&pdf_string(author));
+    }
     info.extend_from_slice(b" >>");
     obj(&mut out, &mut offsets, 4, &info);
     for (i, p) in pages.iter().enumerate() {

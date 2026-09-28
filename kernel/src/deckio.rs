@@ -138,6 +138,9 @@ pub fn to_hydp(d: &Deck) -> String {
     if !d.footer.is_empty() {
         out.push_str(&format!("footer {}\n", esc_line(&d.footer, true)));
     }
+    if !d.author.is_empty() {
+        out.push_str(&format!("author {}\n", esc_line(&crate::doc::one_line(&d.author), false)));
+    }
     if d.numbers {
         out.push_str("numbers 1\n");
     }
@@ -261,7 +264,7 @@ pub fn from_hydp(data: &[u8]) -> Result<Deck, &'static str> {
     if crate::zip::crc32(&data[..end_at]) != want {
         return Err("the file is damaged");
     }
-    let mut d = Deck { name: String::new(), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), numbers: false };
+    let mut d = Deck { name: String::new(), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), author: String::new(), numbers: false };
     let mut count = None;
     let mut target = Target::Shape;
     const DAMAGED: &str = "the file is damaged";
@@ -289,6 +292,7 @@ pub fn from_hydp(data: &[u8]) -> Result<Deck, &'static str> {
                 }
             }
             "footer" => d.footer = unesc_line(val),
+            "author" => d.author = unesc_line(val),
             "numbers" => d.numbers = val.trim() == "1",
             "slides" => count = val.parse::<usize>().ok(),
             "slide" => d.slides.push(Slide { layout: Layout::from_id(val.trim()).unwrap_or(Layout::Blank), shapes: vec![], notes: String::new(), bg: None, bg_grad: None, trans: Trans::None }),
@@ -309,7 +313,7 @@ pub fn from_hydp(data: &[u8]) -> Result<Deck, &'static str> {
                     *v = it.next().and_then(|x| x.parse().ok()).ok_or(DAMAGED)?;
                 }
                 let mut sh = Shape::new(kind, n[0], n[1], n[2].max(if kind == Kind::Line { 0 } else { 1 }), n[3].max(if kind == Kind::Line { 0 } else { 1 }));
-                sh.text = Doc { paras: vec![] };
+                sh.text = Doc { paras: vec![], author: String::new() };
                 sh.tail = false;
                 if let Some(t) = sh.table.as_mut() {
                     t.cells.clear();
@@ -363,7 +367,7 @@ pub fn from_hydp(data: &[u8]) -> Result<Deck, &'static str> {
                     return Err(DAMAGED);
                 }
                 let mut t = Table::new(n[0], n[1], sh.w, sh.h);
-                t.cells = vec![Doc { paras: vec![] }; n[0] * n[1]];
+                t.cells = vec![Doc { paras: vec![], author: String::new() }; n[0] * n[1]];
                 t.header = n.get(2) == Some(&1);
                 t.banded = n.get(3) == Some(&1);
                 sh.table = Some(t);
@@ -1157,7 +1161,7 @@ pub fn to_pptx(d: &Deck) -> Vec<u8> {
     z.add("[Content_Types].xml", ct.as_bytes());
     z.add("_rels/.rels", rels(&[("rId1".into(), "officeDocument", "ppt/presentation.xml".into()), ("rId2".into(), "extended-properties", "docProps/app.xml".into()), ("rId3".into(), "metadata/core-properties", "docProps/core.xml".into())]).replace(&format!("{}/metadata/core-properties", REL), "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties").as_bytes());
     z.add("docProps/app.xml", format!("{}<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Application>Hyda Slides</Application><Slides>{}</Slides></Properties>", XML, d.slides.len()).as_bytes());
-    z.add("docProps/core.xml", format!("{}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title></cp:coreProperties>", XML, esc(&d.name)).as_bytes());
+    z.add("docProps/core.xml", crate::doc::core_xml(&d.name, &d.author).as_bytes());
     // presentation
     let mut pr: Vec<(String, &str, String)> = vec![("rId1".into(), "slideMaster", "slideMasters/slideMaster1.xml".into()), ("rId2".into(), "theme", "theme/theme1.xml".into()), ("rId3".into(), "presProps", "presProps.xml".into()), ("rId4".into(), "viewProps", "viewProps.xml".into()), ("rId5".into(), "tableStyles", "tableStyles.xml".into())];
     if has_notes {
@@ -1656,7 +1660,7 @@ fn read_text(sc: &SlideCtx, sp: &El, kind: Kind, default_size: u16, sh: &mut Sha
             sh.size = (sh.size as i64 * sc / 100_000).max(6) as u16;
         }
     }
-    sh.text = Doc { paras };
+    sh.text = Doc { paras, author: String::new() };
     if color.is_some() {
         sh.color = color;
     }
@@ -2072,7 +2076,7 @@ pub fn from_pptx(z: &[u8]) -> Result<Deck, &'static str> {
     let cy = cy.clamp(914400, 51206400);
     let emu = cx / SLIDE_W as i64;
     let prels = read_rels(z, "ppt/presentation.xml");
-    let mut deck = Deck { name: String::new(), w: SLIDE_W, h: (cy / emu.max(1)) as i32, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), numbers: false };
+    let mut deck = Deck { name: String::new(), w: SLIDE_W, h: (cy / emu.max(1)) as i32, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), author: String::new(), numbers: false };
     // the first master's theme colours
     let master_part = root.path("sldMasterIdLst/sldMasterId").and_then(|m| prels.get(m.attr("r:id"))).map(|x| x.1.clone()).unwrap_or_else(|| String::from("ppt/slideMasters/slideMaster1.xml"));
     let mrels = read_rels(z, &master_part);
@@ -2165,6 +2169,7 @@ pub fn from_pptx(z: &[u8]) -> Result<Deck, &'static str> {
             deck.name = t.text.trim().to_string();
         }
     }
+    deck.author = crate::doc::core_creator(z);
     if deck.slides.is_empty() {
         let s = deck.new_slide(Layout::Title);
         deck.slides.push(s);

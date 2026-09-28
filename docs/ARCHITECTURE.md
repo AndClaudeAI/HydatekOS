@@ -39,7 +39,14 @@
   30 s. Fingerprint sign-in is delegated to the paired phone over Phone Link
   (`unlock_req` → the phone's BiometricPrompt → `unlock`), because HydatekOS has no
   fingerprint-reader drivers. The lock keeps people out of the session; it doesn't
-  encrypt files on the disk.
+  encrypt files on the disk. Its on-screen keyboard (`shell/osk.rs`) is shared
+  with the setup assistant.
+- `shell/setup.rs` is the setup assistant. It runs when `/system/profile.txt` has
+  no name: name, picture, sign-in and look. On a computer that already has a PIN
+  or password it runs only after unlocking, and leaves the sign-in step out.
+  `profile.rs` holds the profile and its file format, and `avatar.rs` renders
+  profile pictures into a canvas that `Ui::avatar` shows as a circle. See
+  [PROFILE.md](PROFILE.md).
 - The main loop waits on a 10 ms periodic timer event, so the CPU idles between frames.
   Each tick it polls input, advances the shell, and redraws only when something changed.
   Moving the pointer only re-blits the two small rectangles under the old and new cursor.
@@ -121,6 +128,8 @@ the boot volume, using the UEFI Simple File System. It's read back in full at bo
 /home/{Documents,Pictures,Downloads,Shared}   user files (Files app)
 /trash                                        the Bin
 /system/settings.txt, /system/calendar.txt    settings and events
+/system/profile.txt, /system/profile.png      your profile and its photo
+/system/lock.txt                              PIN and password hashes
 ```
 
 If the boot volume is read-only, HydatekOS runs as a live session.

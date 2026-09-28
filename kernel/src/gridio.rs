@@ -109,6 +109,9 @@ fn parse_fmt(s: &str) -> Fmt {
 
 pub fn to_hydg(s: &Sheet) -> String {
     let mut out = String::from("HYDG 1\napp Hyda Grids\n");
+    if !s.author.is_empty() {
+        out.push_str(&format!("author {}\n", esc_line(&crate::doc::one_line(&s.author))));
+    }
     out.push_str(&format!("sheet {}\n", esc_line(&s.name)));
     for (c, w) in &s.widths {
         out.push_str(&format!("w {} {}\n", c, w));
@@ -138,6 +141,7 @@ pub fn from_hydg(data: &[u8]) -> Result<Sheet, &'static str> {
         let (tag, val) = line.split_once(' ').unwrap_or((line, ""));
         match tag {
             "sheet" => sheet.name = unesc_line(val),
+            "author" => sheet.author = unesc_line(val),
             "w" => {
                 if let Some((c, w)) = val.split_once(' ') {
                     if let (Ok(c), Ok(w)) = (c.parse::<u32>(), w.parse::<i32>()) {
@@ -399,6 +403,7 @@ pub fn to_xlsx(s: &Sheet) -> Vec<u8> {
     z.add("[Content_Types].xml", CONTENT_TYPES.as_bytes());
     z.add("_rels/.rels", RELS.as_bytes());
     z.add("docProps/app.xml", APP_XML.as_bytes());
+    z.add("docProps/core.xml", crate::doc::core_xml("", &s.author).as_bytes());
     z.add("xl/workbook.xml", workbook.as_bytes());
     z.add("xl/_rels/workbook.xml.rels", WB_RELS.as_bytes());
     z.add("xl/styles.xml", styles_xml.as_bytes());
@@ -699,6 +704,7 @@ pub fn from_xlsx(data: &[u8]) -> Result<Sheet, &'static str> {
             _ => {}
         }
     }
+    sheet.author = crate::doc::core_creator(data);
     Ok(sheet)
 }
 
@@ -706,9 +712,9 @@ const XML_HEAD: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"ye
 const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
-const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/></Types>";
+const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/></Types>";
 
-const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>";
+const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>";
 
 const WB_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>";
 

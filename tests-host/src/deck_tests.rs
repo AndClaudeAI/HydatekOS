@@ -519,7 +519,7 @@ fn pdf_writer() {
         Page { w: 960, h: 540, image: Some((0, 0, 960, 540, 40, 20, px.clone())), texts: vec![Text { x: 10, y: 30, size: 24, s: "Hello (world) \\ ₦ •".into(), w: 200, visible: false, color: 0 }] },
         Page { w: 595, h: 842, image: None, texts: vec![Text { x: 50, y: 60, size: 12, s: "Notes".into(), w: 0, visible: true, color: 0x112233 }] },
     ];
-    let pdf = write("A (title)", &pages);
+    let pdf = write("A (title)", "Ada Obi", &pages);
     assert!(pdf.starts_with(b"%PDF-1.4"));
     let find = |pat: &[u8], from: usize| pdf[from..].windows(pat.len()).position(|w| w == pat).map(|p| p + from);
     let rfind = |pat: &[u8]| pdf.windows(pat.len()).rposition(|w| w == pat);
@@ -538,6 +538,7 @@ fn pdf_writer() {
     let _ = find;
     let text = String::from_utf8_lossy(&pdf).to_string();
     assert!(text.contains("/Count 2") && text.contains("(A \\(title\\))"));
+    assert!(text.contains("/Author (Ada Obi)"));
     // the picture's pixels come back out of the stream
     let at = pdf.windows(10).position(|w| w == b"/Width 40 ").unwrap();
     let s = at + pdf[at..].windows(7).position(|w| w == b"stream\n").unwrap() + 7;

@@ -103,6 +103,8 @@ impl Pos {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Doc {
     pub paras: Vec<Para>,
+    /// who wrote it (a profile name); empty when unknown
+    pub author: String,
 }
 
 impl Default for Doc {
@@ -113,7 +115,7 @@ impl Default for Doc {
 
 impl Doc {
     pub fn new() -> Doc {
-        Doc { paras: vec![Para::new(Style::Body)] }
+        Doc { paras: vec![Para::new(Style::Body)], author: String::new() }
     }
 
     pub fn end(&self) -> Pos {
@@ -300,6 +302,7 @@ impl Doc {
     //
     //   HYDS 1                      magic and format version
     //   app Hyda Scripts            written by (informational)
+    //   author Ada Obi              who wrote it (optional)
     //   paras 3                     paragraph count
     //   p title left                paragraph: style, alignment
     //   t Hello \\ world\t!          its text (\\ = backslash, \t = tab)
@@ -311,6 +314,9 @@ impl Doc {
 
     pub fn to_hyds(&self) -> String {
         let mut out = String::from("HYDS 1\napp Hyda Scripts\n");
+        if !self.author.is_empty() {
+            out.push_str(&format!("author {}\n", one_line(&self.author)));
+        }
         out.push_str(&format!("paras {}\n", self.paras.len()));
         for p in &self.paras {
             let style = match p.style {
@@ -380,10 +386,12 @@ impl Doc {
             return Err("the file is damaged");
         }
         let mut paras: Vec<Para> = Vec::new();
+        let mut author = String::new();
         let mut count = None;
         for line in s[..end_at].lines().skip(1) {
             let (tag, val) = line.split_once(' ').unwrap_or((line, ""));
             match tag {
+                "author" => author = String::from(val.trim()),
                 "paras" => count = val.parse::<usize>().ok(),
                 "p" => {
                     let mut it = val.split(' ');
@@ -453,7 +461,7 @@ impl Doc {
         if paras.is_empty() {
             paras.push(Para::new(Style::Body));
         }
-        Ok(Doc { paras })
+        Ok(Doc { paras, author })
     }
 
     // ---- plain text and Markdown ---------------------------------------------
@@ -462,7 +470,7 @@ impl Doc {
         // saving ends every paragraph with a newline; drop the final one
         let s = s.strip_suffix('\n').unwrap_or(s);
         let paras: Vec<Para> = s.split('\n').map(|l| Para::plain(l.trim_end_matches('\r'), Style::Body)).collect();
-        Doc { paras }
+        Doc { paras, author: String::new() }
     }
 
     pub fn to_text(&self) -> String {
@@ -532,7 +540,7 @@ impl Doc {
         if paras.is_empty() {
             paras.push(Para::new(Style::Body));
         }
-        Doc { paras }
+        Doc { paras, author: String::new() }
     }
 
     pub fn to_markdown(&self) -> String {
@@ -687,6 +695,7 @@ impl Doc {
         z.add("[Content_Types].xml", CONTENT_TYPES.as_bytes());
         z.add("_rels/.rels", RELS.as_bytes());
         z.add("docProps/app.xml", APP_XML.as_bytes());
+        z.add("docProps/core.xml", core_xml("", &self.author).as_bytes());
         z.add("word/document.xml", doc.as_bytes());
         z.add("word/styles.xml", STYLES_XML.as_bytes());
         z.add("word/numbering.xml", numbering.as_bytes());
@@ -798,8 +807,48 @@ impl Doc {
         if paras.is_empty() {
             paras.push(Para::new(Style::Body));
         }
-        Some(Doc { paras })
+        Some(Doc { paras, author: core_creator(data) })
     }
+}
+
+// ---- document properties (docProps/core.xml) ---------------------------------------
+
+/// The Office "core properties" part: title and author.
+pub fn core_xml(title: &str, author: &str) -> String {
+    let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">");
+    if !title.is_empty() {
+        s.push_str(&format!("<dc:title>{}</dc:title>", esc(title)));
+    }
+    if !author.is_empty() {
+        s.push_str(&format!("<dc:creator>{0}</dc:creator><cp:lastModifiedBy>{0}</cp:lastModifiedBy>", esc(author)));
+    }
+    s.push_str("</cp:coreProperties>");
+    s
+}
+
+/// The author (dc:creator) recorded in an Office file, or "".
+pub fn core_creator(zip: &[u8]) -> String {
+    let Some(xml) = crate::zip::read(zip, "docProps/core.xml") else { return String::new() };
+    let xml = String::from_utf8_lossy(&xml);
+    let Some(start) = xml.find("<dc:creator") else { return String::new() };
+    let Some(open_end) = xml[start..].find('>').map(|i| start + i + 1) else { return String::new() };
+    if xml[start..open_end].ends_with("/>") {
+        return String::new();
+    }
+    let end = xml[open_end..].find("</dc:creator>").map(|i| open_end + i).unwrap_or(open_end);
+    one_line(&unesc(&xml[open_end..end]))
+}
+
+/// Text for a one-line field: trimmed, whitespace runs made single spaces.
+pub fn one_line(s: &str) -> String {
+    let mut out = String::new();
+    for w in s.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    out
 }
 
 fn map_style(name: &str, list: Option<bool>) -> Style {
@@ -993,9 +1042,9 @@ pub(crate) fn unesc(s: &str) -> String {
 const XML_HEAD: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/><Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/></Types>";
+const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/><Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/></Types>";
 
-const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>";
+const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>";
 
 const DOC_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/></Relationships>";
 

@@ -1,4 +1,5 @@
-//! Settings: appearance, connectivity, Phone Link, display and system info.
+//! Settings: profile, appearance, connectivity, Phone Link, display and
+//! system info.
 
 use super::{side_item, App, AppKind, HEADER};
 use crate::font::Face;
@@ -11,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-const SECTIONS: [&str; 8] = ["Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
+pub const SECTIONS: [&str; 9] = ["Profile", "Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -30,6 +31,13 @@ const C_ENGINE: u32 = 300;
 
 pub struct Settings {
     sec: usize,
+    /// the name being edited (Profile)
+    name: String,
+    /// the picture grid is open (Profile)
+    picking: bool,
+    picker: crate::avatar::Picker,
+    /// the picture last chosen in the grid
+    chosen: Option<crate::avatar::Choice>,
     /// Phone layout: a section page is open (otherwise the section list).
     page: bool,
     /// what's being typed into the PIN / password field
@@ -41,8 +49,76 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new() -> Settings {
-        Settings { sec: 0, page: false, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+    pub fn new(sys: &mut Sys) -> Settings {
+        let (sec, page) = match sys.settings_page.take() {
+            Some(i) => (i.min(SECTIONS.len() - 1), true),
+            None => (0, false),
+        };
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+    }
+
+    /// The Profile section.
+    fn render_profile(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::avatar::Choice;
+        use crate::profile::Avatar;
+        let t = ui.t;
+        let p = &sys.profile;
+        let top = m.y;
+        card(ui, Rect::new(m.x, top, m.w, 132));
+        let d = 84;
+        ui.avatar(Rect::new(m.x + 20, top + 24, d, d), &sys.avatar);
+        let tx = m.x + 20 + d + 20;
+        let tw = m.r() - 16 - tx;
+        if self.focus == C_NAME_FIELD {
+            let f = Rect::new(tx, top + 24, (tw - 92).min(260), 34);
+            ui.field(f, &self.name, "Your name", true, Action::App(inst, C_NAME_FIELD));
+            ui.button(Rect::new(f.r() + 8, top + 25, 80, 32), "Save", Action::App(inst, C_NAME_SAVE), true);
+        } else {
+            let name = if p.ready() { p.name.as_str() } else { "No profile yet" };
+            let name = ui.fit(Face::Semibold, 20, name, tw);
+            ui.text(tx, top + 46, Face::Semibold, 20, &name, t.text);
+        }
+        let since = match p.since {
+            (0, _, _) => String::from("Local profile on this computer"),
+            (y, mo, d) => format!("On this computer since {} {} {}", d, crate::sys::MONTHS[(mo as usize).clamp(1, 12) - 1], y),
+        };
+        let since = ui.fit(Face::Regular, 12, &since, tw);
+        ui.text(tx, top + 70, Face::Regular, 12, &since, t.text2);
+        let bw = 118;
+        if self.focus != C_NAME_FIELD {
+            ui.button(Rect::new(tx, top + 84, bw, 30), "Edit name", Action::App(inst, C_NAME_FIELD), false);
+        }
+        ui.button(Rect::new(tx + bw + 8, top + 84, 136, 30), if self.picking { "Done" } else { "Change picture" }, Action::App(inst, C_PICTURE), self.picking);
+        let mut y = top + 146;
+        if self.picking {
+            let chosen = self.chosen.unwrap_or(match p.avatar {
+                Avatar::Initials(i) => Choice::Initials(i),
+                Avatar::Motif(i) => Choice::Motif(i),
+                Avatar::Picture => Choice::Photo(0),
+            });
+            let h = 236;
+            card(ui, Rect::new(m.x, y, m.w, h));
+            let old = ui.clip_in(Rect::new(m.x, y, m.w, h));
+            self.picker.render(ui, Rect::new(m.x + 20, y + 16, m.w - 40, h - 24), 34, &p.name, chosen, |c| Action::App(inst, C_PICK + c as u32));
+            ui.set_clip(old);
+            // the rest waits until the picture is chosen
+            return;
+        }
+        card(ui, Rect::new(m.x, y, m.w, 64));
+        let inner = Rect::new(m.x + 16, y, m.w - 32, 64);
+        let st = match (sys.has_pin(), sys.has_password()) {
+            (true, true) => "PIN and password",
+            (true, false) => "PIN",
+            (false, true) => "Password",
+            _ => "None: any key or click unlocks",
+        };
+        row(ui, inner, y + 12, "Sign-in", st);
+        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Sign-in options", Action::App(inst, C_SECTION + 5), false);
+        y += 78;
+        card(ui, Rect::new(m.x, y, m.w, 64));
+        let inner = Rect::new(m.x + 16, y, m.w - 32, 64);
+        row(ui, inner, y + 12, "Setup assistant", "Name, picture, sign-in and look");
+        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Set up again", Action::App(inst, C_SETUP), false);
     }
 }
 
@@ -57,6 +133,11 @@ const C_PW_FIELD: u32 = 19;
 const C_PW_SAVE: u32 = 20;
 const C_PW_REMOVE: u32 = 21;
 const C_FINGER: u32 = 22;
+const C_NAME_FIELD: u32 = 23;
+const C_NAME_SAVE: u32 = 24;
+const C_PICTURE: u32 = 25;
+const C_SETUP: u32 = 26;
+const C_PICK: u32 = 1000;
 const IDLE_STEPS: [u32; 6] = [0, 2, 5, 10, 15, 30];
 
 fn row(ui: &mut Ui, r: Rect, y: i32, title: &str, sub: &str) {
@@ -122,7 +203,8 @@ impl App for Settings {
         ui.rect(Rect::new(r.x + side_w, r.y + HEADER, r.w - side_w, 1), t.line);
         let sw_x = m.r() - 54;
         match self.sec {
-            0 => {
+            0 => self.render_profile(ui, m, sys, inst),
+            1 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
                 row(ui, inner, m.y + 12, "Dark mode", "Dusk palette for evenings");
@@ -156,7 +238,7 @@ impl App for Settings {
                 row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
                 ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
             }
-            1 => {
+            2 => {
                 let n = &sys.net;
                 card(ui, Rect::new(m.x, m.y, m.w, 210));
                 let (status, sub) = match (n.present, n.ip) {
@@ -176,7 +258,7 @@ impl App for Settings {
                 row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", "Wi-Fi adapter drivers are not included yet; use Ethernet");
                 ui.switch(sw_x, m.y + 244, sys.wifi, Action::App(inst, C_WIFI));
             }
-            2 => {
+            3 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 64));
                 row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, "Bluetooth", if sys.bt { "On" } else { "Off" });
                 ui.switch(sw_x, m.y + 20, sys.bt, Action::App(inst, C_BT));
@@ -188,7 +270,7 @@ impl App for Settings {
                     ui.text(m.x + 16, m.y + 128 + i as i32 * 20, Face::Regular, 13, &l, t.text2);
                 }
             }
-            3 => {
+            4 => {
                 let l = &sys.link;
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let st = match l.source {
@@ -216,7 +298,7 @@ impl App for Settings {
                     ui.button(Rect::new(m.x + 160, m.y + 146, 110, 32), "Unpair", Action::App(inst, C_UNPAIR), false);
                 }
             }
-            4 => {
+            5 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 124));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 124);
                 row(ui, inner, m.y + 12, "Show at startup", "Lock the screen when HydatekOS starts");
@@ -272,7 +354,7 @@ impl App for Settings {
                 ui.button(Rect::new(m.x, top + 202, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
                 ui.text(m.x + 142, top + 222, Face::Regular, 12, "or press F12", t.text3);
             }
-            5 => {
+            6 => {
                 use crate::web::engines::ENGINES;
                 ui.text(m.x, m.y + 14, Face::Semibold, 14, "Search engine", t.text);
                 let tip = ui.fit(Face::Regular, 12, "For searches typed in the address bar. Add !d, !g, !w... to a search to use another once.", m.w);
@@ -297,7 +379,7 @@ impl App for Settings {
                     ui.zone(rr, a);
                 }
             }
-            6 => {
+            7 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
@@ -322,8 +404,62 @@ impl App for Settings {
     }
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
-        self.focus = if code == C_PIN_FIELD || code == C_PW_FIELD { code } else { 0 };
+        let was = self.focus;
+        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE].contains(&code) { code } else { 0 };
         match code {
+            C_NAME_FIELD => {
+                if was != C_NAME_FIELD {
+                    self.name = sys.profile.name.clone();
+                }
+                return;
+            }
+            C_NAME_SAVE => {
+                self.focus = 0;
+                if let Some(n) = crate::profile::clean_name(&self.name) {
+                    sys.profile.name = n;
+                    sys.save_profile();
+                    self.chosen = None;
+                } else {
+                    self.focus = C_NAME_FIELD;
+                }
+                return;
+            }
+            C_PICTURE => {
+                self.picking = !self.picking;
+                if self.picking {
+                    self.picker = Default::default();
+                    self.chosen = None;
+                    self.picker.load(&sys.fs, sys.photo.as_deref());
+                }
+                return;
+            }
+            C_SETUP => {
+                sys.reqs.push(Req::Setup);
+                return;
+            }
+            c if c >= C_PICK => {
+                use crate::avatar::{Choice, Picker};
+                use crate::profile::Avatar;
+                let ch = Picker::choice((c - C_PICK) as u16);
+                sys.profile.avatar = match ch {
+                    Choice::Initials(i) => Avatar::Initials(i),
+                    Choice::Motif(i) => Avatar::Motif(i),
+                    Choice::Photo(i) => match self.picker.photos.get(i) {
+                        Some(ph) => {
+                            sys.photo = Some(ph.1.clone());
+                            Avatar::Picture
+                        }
+                        None => return,
+                    },
+                };
+                self.chosen = Some(ch);
+                if sys.profile.ready() {
+                    sys.save_profile();
+                } else {
+                    sys.refresh_avatar();
+                }
+                return;
+            }
             C_LOCK_BOOT => sys.lock_on_boot = !sys.lock_on_boot,
             C_IDLE => {
                 let i = IDLE_STEPS.iter().position(|v| *v == sys.lock_idle).unwrap_or(0);
@@ -406,6 +542,18 @@ impl App for Settings {
     }
 
     fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+        if self.focus == C_NAME_FIELD {
+            match k {
+                Key::Char(c) if !c.is_control() && self.name.chars().count() < crate::profile::NAME_MAX => self.name.push(c),
+                Key::Backspace => {
+                    self.name.pop();
+                }
+                Key::Enter => self.action(C_NAME_SAVE, false, sys),
+                Key::Esc => self.focus = 0,
+                _ => {}
+            }
+            return;
+        }
         let (text, save, max) = match self.focus {
             C_PIN_FIELD => (&mut self.pin, C_PIN_SAVE, 8),
             C_PW_FIELD => (&mut self.password, C_PW_SAVE, 64),
@@ -424,6 +572,13 @@ impl App for Settings {
 
     fn animating(&self) -> bool {
         self.focus != 0
+    }
+
+    fn tick(&mut self, sys: &mut Sys) {
+        if let Some(i) = sys.settings_page.take() {
+            self.sec = i.min(SECTIONS.len() - 1);
+            self.page = true;
+        }
     }
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {

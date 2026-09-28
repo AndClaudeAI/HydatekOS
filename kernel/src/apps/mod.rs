@@ -106,7 +106,7 @@ impl AppKind {
     pub fn size(self) -> (i32, i32) {
         match self {
             AppKind::Files => (640, 400),
-            AppKind::Settings => (640, 440),
+            AppKind::Settings => (680, 520),
             AppKind::Terminal => (600, 380),
             AppKind::PhoneLink => (760, 500),
             AppKind::Calendar => (700, 460),
@@ -163,7 +163,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
     match kind {
         AppKind::Files => Box::new(files::Files::new()),
         AppKind::Notes => Box::new(notes::Notes::new(sys)),
-        AppKind::Settings => Box::new(settings::Settings::new()),
+        AppKind::Settings => Box::new(settings::Settings::new(sys)),
         AppKind::Calendar => Box::new(calendar::Calendar::new(sys)),
         AppKind::Terminal => Box::new(terminal::Terminal::new()),
         AppKind::PhoneLink => Box::new(phonelink::PhoneLink::new()),

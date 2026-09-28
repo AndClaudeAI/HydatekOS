@@ -927,6 +927,9 @@ impl Slides {
             self.imported = false;
         }
         self.deck.name = self.title();
+        if self.deck.author.is_empty() {
+            self.deck.author = sys.profile.name.clone();
+        }
         let ok = sys.fs.write(&self.path, deckio::to_hydp(&self.deck).as_bytes());
         if ok {
             self.dirty = false;
@@ -949,6 +952,9 @@ impl Slides {
         let name = self.title();
         let target = join(&dir, &format!("{}.pptx", name));
         let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ".pptx") } else { target };
+        if self.deck.author.is_empty() {
+            self.deck.author = sys.profile.name.clone();
+        }
         let mut d = self.deck.clone();
         d.name = name;
         let ok = sys.fs.write(&path, &deckio::to_pptx(&d));
@@ -2830,6 +2836,9 @@ impl Slides {
         let name = if notes { format!("{} (notes)", self.title()) } else { self.title() };
         let target = join(&dir, &format!("{}.pdf", name));
         let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ".pdf") } else { target };
+        if self.deck.author.is_empty() {
+            self.deck.author = sys.profile.name.clone();
+        }
         let data = self.pdf_bytes(notes);
         let ok = sys.fs.write(&path, &data);
         sys.toast("Hyda Slides", &if ok { format!("Exported {}", basename(&path)) } else { String::from("Couldn't export: the disk is read-only") });
@@ -2905,7 +2914,7 @@ impl Slides {
                 pages.push(crate::pdf::Page { w: page_w, h: page_h, image: Some((0, 0, page_w, page_h, pw as u32, ph as u32, rgb)), texts });
             }
         }
-        crate::pdf::write(&self.title(), &pages)
+        crate::pdf::write(&self.title(), &self.deck.author, &pages)
     }
 }
 

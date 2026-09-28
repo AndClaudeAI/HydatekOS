@@ -269,6 +269,8 @@ fn reads_shared_formulas() {
 #[test]
 fn write_sample_xlsx() {
     if let Ok(p) = std::env::var("HYDA_XLSX_OUT") {
-        std::fs::write(p, to_xlsx(&budget())).unwrap();
+        let mut s = budget();
+        s.author = "Ada Obi".into();
+        std::fs::write(p, to_xlsx(&s)).unwrap();
     }
 }

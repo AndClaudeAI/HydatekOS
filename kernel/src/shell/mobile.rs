@@ -81,7 +81,13 @@ impl Mobile {
         wallpaper::draw(ui.c, r.scale(ui.s), &t, true);
         ui.icon(Icon::Battery, r.r() - u(40), r.y + u(12), u(18), t.text);
         ui.icon(Icon::Wifi, r.r() - u(64), r.y + u(12), u(16), t.text);
-        // date + clock
+        // greeting, date + clock
+        if sys.profile.ready() {
+            let d = u(34);
+            ui.avatar(Rect::new(r.x + u(24), r.y + u(30), d, d), &sys.avatar);
+            let g = ui.fit(Face::Semibold, u(15), &sys.greeting(), r.w - u(100));
+            ui.text(r.x + u(24) + d + u(10), r.y + u(52), Face::Semibold, u(15), &g, t.text);
+        }
         ui.text(r.x + u(24), r.y + u(90), Face::Regular, u(17), &sys.date_long(), t.text2);
         ui.text(r.x + u(20), r.y + u(178), Face::Display, u(96), &sys.clock(), t.text);
         // up next

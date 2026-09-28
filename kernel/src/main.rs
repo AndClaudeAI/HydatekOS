@@ -28,6 +28,8 @@ mod doc;
 mod deck;
 mod deckio;
 mod pdf;
+mod profile;
+mod avatar;
 mod link;
 mod linksrv;
 mod net;

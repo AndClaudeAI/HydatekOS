@@ -868,6 +868,8 @@ pub struct Deck {
     /// footer text and slide numbers, on every slide but title slides
     pub footer: String,
     pub numbers: bool,
+    /// who made it (a profile name); empty when unknown
+    pub author: String,
 }
 
 impl Default for Deck {
@@ -908,7 +910,7 @@ pub fn layout_shapes(l: Layout, w: i32, h: i32) -> Vec<Shape> {
 
 impl Deck {
     pub fn new() -> Deck {
-        let mut d = Deck { name: String::from("Untitled presentation"), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), numbers: false };
+        let mut d = Deck { name: String::from("Untitled presentation"), w: SLIDE_W, h: SLIDE_H, theme: theme("dune"), slides: vec![], pics: vec![], footer: String::new(), author: String::new(), numbers: false };
         d.slides.push(d.new_slide(Layout::Title));
         d
     }

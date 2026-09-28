@@ -64,6 +64,8 @@ pub struct Cell {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Sheet {
     pub name: String,
+    /// who made it (a profile name); empty when unknown
+    pub author: String,
     /// (row, column), both from 0
     pub cells: BTreeMap<(u32, u32), Cell>,
     /// column widths that differ from the default (logical px)
@@ -78,7 +80,7 @@ impl Default for Sheet {
 
 impl Sheet {
     pub fn new() -> Sheet {
-        Sheet { name: String::from("Sheet1"), cells: BTreeMap::new(), widths: BTreeMap::new() }
+        Sheet { name: String::from("Sheet1"), author: String::new(), cells: BTreeMap::new(), widths: BTreeMap::new() }
     }
 
     pub fn input(&self, r: u32, c: u32) -> &str {

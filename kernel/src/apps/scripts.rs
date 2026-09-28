@@ -639,6 +639,9 @@ impl Scripts {
             self.path = sys.fs.unique(&parent(&self.path), &self.title(), ".hyds");
             self.imported = false;
         }
+        if self.doc.author.is_empty() {
+            self.doc.author = sys.profile.name.clone();
+        }
         let ok = sys.fs.write(&self.path, self.doc.to_hyds().as_bytes());
         if ok {
             self.dirty = false;
@@ -662,6 +665,9 @@ impl Scripts {
         let target = join(&dir, &format!("{}{}", name, ext));
         // never replace the file this document was imported from
         let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ext) } else { target };
+        if self.doc.author.is_empty() {
+            self.doc.author = sys.profile.name.clone();
+        }
         sys.fs.write(&path, &self.encode(ext));
         sys.toast("Hyda Scripts", &format!("Exported {}", basename(&path)));
     }

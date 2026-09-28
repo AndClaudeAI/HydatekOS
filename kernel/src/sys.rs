@@ -22,6 +22,10 @@ pub enum Req {
     Lock,
     /// the phone answered a fingerprint unlock request: (request id, approved)
     PhoneUnlock(String, bool),
+    /// open Settings at a section (see apps::settings::SECTIONS)
+    Settings(usize),
+    /// show the setup assistant again
+    Setup,
 }
 
 #[derive(Clone)]
@@ -90,7 +94,19 @@ pub struct Sys {
     pub firmware: String,
     pub mem_total: u64,
     pub ticks: u64,
+    /// who uses this computer (empty until the setup assistant has run)
+    pub profile: crate::profile::Profile,
+    /// the profile photo, a PIC_SIZE square (for Avatar::Picture)
+    pub photo: Option<Vec<u32>>,
+    /// the profile picture, rendered (AVATAR_PX square)
+    pub avatar: crate::gfx::Canvas,
+    /// a section Settings should show when it next draws
+    pub settings_page: Option<usize>,
 }
+
+/// Size the profile picture is rendered at (it is shown up to 128 points
+/// wide at scale 2).
+pub const AVATAR_PX: i32 = 256;
 
 pub const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 pub const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -141,8 +157,13 @@ impl Sys {
             firmware: String::new(),
             mem_total: 0,
             ticks: 0,
+            profile: crate::profile::Profile::default(),
+            photo: None,
+            avatar: crate::gfx::Canvas::new(1, 1),
+            settings_page: None,
         };
         s.load_settings();
+        s.load_profile();
         s.load_link();
         s.load_lock();
         s.load_search();
@@ -194,6 +215,56 @@ impl Sys {
             self.search_engine
         );
         self.fs.write("/system/settings.txt", s.as_bytes());
+    }
+
+    // ---- profile ---------------------------------------------------------------------
+
+    fn load_profile(&mut self) {
+        use crate::profile::{Avatar, Profile, PIC_SIZE};
+        if let Some(data) = self.fs.read("/system/profile.txt") {
+            self.profile = Profile::parse(&String::from_utf8_lossy(&data));
+        }
+        if self.profile.avatar == Avatar::Picture {
+            self.photo = self.fs.read("/system/profile.png").and_then(|d| crate::image::decode(&d).ok()).map(|img| crate::profile::square(&img.px, img.w, img.h, PIC_SIZE));
+            if self.photo.is_none() {
+                self.profile.avatar = Avatar::Initials(crate::profile::colour_for(&self.profile.name));
+            }
+        }
+        self.refresh_avatar();
+    }
+
+    /// Keep the profile (and its photo, if it uses one) and redraw the avatar.
+    pub fn save_profile(&mut self) {
+        use crate::profile::{Avatar, PIC_SIZE};
+        if self.profile.avatar == Avatar::Picture {
+            if let Some(px) = &self.photo {
+                let png = crate::deckio::png_encode(PIC_SIZE, PIC_SIZE, px);
+                self.fs.write("/system/profile.png", &png);
+            }
+        } else {
+            self.photo = None;
+            self.fs.remove("/system/profile.png");
+        }
+        if self.profile.since.0 == 0 {
+            self.profile.since = (self.now.year, self.now.month, self.now.day);
+        }
+        let text = self.profile.to_text();
+        self.fs.write("/system/profile.txt", text.as_bytes());
+        self.refresh_avatar();
+    }
+
+    pub fn refresh_avatar(&mut self) {
+        let p = &self.profile;
+        self.avatar = crate::avatar::render(p.avatar, &p.name, self.photo.as_deref(), AVATAR_PX);
+    }
+
+    /// "Good evening, Ada" (or just "Good evening" before setup).
+    pub fn greeting(&self) -> String {
+        let g = crate::profile::greeting(self.now.hour);
+        match self.profile.first_name() {
+            "" => g.to_string(),
+            n => format!("{}, {}", g, n),
+        }
     }
 
     // ---- Hyda Search ---------------------------------------------------------------

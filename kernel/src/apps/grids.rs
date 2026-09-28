@@ -437,6 +437,9 @@ impl Grids {
             self.path = sys.fs.unique(&parent(&self.path), &self.title(), ".hydg");
             self.imported = false;
         }
+        if self.sheet.author.is_empty() {
+            self.sheet.author = sys.profile.name.clone();
+        }
         let ok = sys.fs.write(&self.path, gridio::to_hydg(&self.sheet).as_bytes());
         if ok {
             self.dirty = false;
@@ -459,6 +462,9 @@ impl Grids {
         let name = if self.path.is_empty() { String::from("Untitled sheet") } else { self.title() };
         let target = join(&dir, &format!("{}{}", name, ext));
         let path = if sys.fs.exists(&target) { sys.fs.unique(&dir, &name, ext) } else { target };
+        if self.sheet.author.is_empty() {
+            self.sheet.author = sys.profile.name.clone();
+        }
         let data = if ext == ".csv" { gridio::to_csv(&self.sheet).into_bytes() } else { gridio::to_xlsx(&self.sheet) };
         sys.fs.write(&path, &data);
         sys.toast("Hyda Grids", &format!("Exported {}", basename(&path)));

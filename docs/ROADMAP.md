@@ -5,6 +5,7 @@
 - Desktop shell and mobile shell from the design mockups
 - Apps: Files, Notes, Settings, Calendar, Terminal, Phone Link, Messages, Mail, Browser, Music, Phone, Camera
 - ✅ Hyda Workspace: Hyda Scripts, Hyda Grids and Hyda Slides, with Word, Excel and PowerPoint import and export
+- ✅ First-start setup assistant and a profile (name, picture, sign-in, look), shown on the lock screen and desktop and recorded as the author of documents
 - Persistent storage on the boot disk; light and dark themes
 - PS/2 mouse driver; firmware keyboard, USB input, disk and framebuffer
 
@@ -36,6 +37,6 @@
 
 ## M5 — everyday OS
 - Graphical installer for internal disks with dual-boot support
-- User accounts, permissions, disk encryption
+- User accounts (several people, each with their own files), permissions, disk encryption
 - Updates, Secure Boot signing, an app SDK and package format
 - HydatekOS Mobile on ARM64 phones and tablets

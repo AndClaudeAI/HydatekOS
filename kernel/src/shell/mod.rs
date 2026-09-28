@@ -4,6 +4,8 @@
 pub mod cursor;
 pub mod lock;
 pub mod mobile;
+pub mod osk;
+pub mod setup;
 pub mod splash;
 pub mod wallpaper;
 
@@ -75,6 +77,7 @@ enum Cmd {
     GoHome,
     Restart,
     Shutdown,
+    Profile,
     None,
 }
 
@@ -157,6 +160,8 @@ pub struct Shell {
     /// tick when the unlock slide-away started
     unlocking: Option<u64>,
     last_input: u64,
+    /// the setup assistant, while it's showing
+    setup: Option<setup::Setup>,
 }
 
 impl Shell {
@@ -188,14 +193,22 @@ impl Shell {
             lock: lock::Lock::default(),
             unlocking: None,
             last_input: 0,
+            setup: None,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
             sh.open_app(AppKind::Files);
         }
-        let msg = if sh.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
-        sh.sys.toast("Welcome to HydatekOS", msg);
-        sh.locked = sh.sys.lock_on_boot;
+        let first = !sh.sys.profile.ready();
+        if first {
+            // a computer with a PIN or password stays locked until it's given
+            sh.setup = Some(setup::Setup::new(&sh.sys));
+        } else {
+            let msg = if sh.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
+            let hello = alloc::format!("{}!", sh.sys.greeting());
+            sh.sys.toast(&hello, msg);
+        }
+        sh.locked = sh.sys.lock_on_boot && (!first || sh.sys.secured());
         sh.lock.reset(&sh.sys);
         sh
     }
@@ -356,7 +369,7 @@ impl Shell {
             }
             self.dirty = true;
         }
-        let mut anim = self.launcher.is_some();
+        let mut anim = self.launcher.is_some() || self.setup.as_ref().map_or(false, |s| s.animating());
         let mut changed = false;
         for w in self.wins.iter_mut() {
             let was = w.app.animating();
@@ -414,6 +427,15 @@ impl Shell {
                     }
                 }
                 Req::OpenPath(p) => self.open_path(&p),
+                Req::Settings(i) => {
+                    self.sys.settings_page = Some(i);
+                    self.open_app(AppKind::Settings);
+                }
+                Req::Setup => {
+                    self.setup = Some(setup::Setup::new(&self.sys));
+                    self.menu = None;
+                    self.launcher = None;
+                }
                 Req::Toast(t, b) => self.toast(&t, &b),
                 Req::SaveSettings => self.sys.save_settings(),
                 Req::Shutdown | Req::Reboot => {
@@ -462,6 +484,9 @@ impl Shell {
         self.last_input = self.sys.ticks;
         if self.locked {
             return self.lock_event(ev, x, y);
+        }
+        if self.setup.is_some() {
+            return self.setup_event(ev, x, y);
         }
         match ev {
             Ev::Move => {
@@ -554,6 +579,43 @@ impl Shell {
         }
     }
 
+    fn setup_event(&mut self, ev: Ev, x: i32, y: i32) {
+        let now = self.sys.ticks;
+        let Some(st) = self.setup.as_mut() else { return };
+        let outcome = match ev {
+            Ev::Move => {
+                let h = self.zones.iter().rev().find(|z| z.r.contains(x, y)).map(|z| z.a);
+                if h != self.hover {
+                    self.hover = h;
+                    self.dirty = true;
+                }
+                return;
+            }
+            Ev::Down => {
+                self.dirty = true;
+                match self.zones.iter().rev().find(|z| z.r.contains(x, y)).map(|z| z.a) {
+                    Some(Action::Setup(c)) => st.action(c, &mut self.sys, now),
+                    _ => return,
+                }
+            }
+            Ev::Key(k, _) => {
+                self.dirty = true;
+                st.key(k, &mut self.sys)
+            }
+            _ => return,
+        };
+        if let setup::Outcome::Finished = outcome {
+            let first = self.setup.as_ref().map_or(false, |s| !s.again && s.step == setup::Step::Done);
+            self.setup = None;
+            self.hover = None;
+            if first {
+                let msg = if self.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
+                let hello = alloc::format!("Welcome, {}", self.sys.profile.first_name());
+                self.toast(&hello, msg);
+            }
+        }
+    }
+
     fn drag_to(&mut self, d: Drag, x: i32, y: i32) {
         let (w, h) = (self.w, self.h);
         match d {
@@ -593,7 +655,7 @@ impl Shell {
             _ => {}
         }
         match a {
-            Action::Lock(_) => {}
+            Action::Lock(_) | Action::Setup(_) => {}
             Action::Background | Action::Swallow => {
                 self.launcher = None;
             }
@@ -739,6 +801,7 @@ impl Shell {
             Cmd::Restart => self.sys.reqs.push(Req::Reboot),
             Cmd::Shutdown => self.sys.reqs.push(Req::Shutdown),
             Cmd::Lock => self.lock_now(),
+            Cmd::Profile => self.sys.reqs.push(Req::Settings(0)),
             Cmd::None => {}
         }
     }
@@ -820,6 +883,12 @@ impl Shell {
         let t = self.theme();
         let s = self.s;
         let (w, h) = (self.w, self.h);
+        if let Some(st) = self.setup.as_mut() {
+            let mut ui = Ui::new(canvas, s, t, self.hover, ticks);
+            st.render(&mut ui, Rect::new(0, 0, w, h), &self.sys);
+            self.zones = core::mem::take(&mut ui.zones);
+            return;
+        }
         let mobile = self.mobile_mode();
         if self.wall.as_ref().map(|w| w.1) != Some(t.dark) {
             let mut c = Canvas::new(w * s, h * s);
@@ -863,13 +932,14 @@ impl Shell {
         self.draw_windows(&mut ui);
         self.draw_dock(&mut ui);
         self.draw_bar(&mut ui);
+        // notifications under the launcher and open menus
+        self.draw_toasts(&mut ui);
         if self.launcher.is_some() {
             self.draw_launcher(&mut ui);
         }
         if self.menu.is_some() {
             self.draw_menu(&mut ui);
         }
-        self.draw_toasts(&mut ui);
         self.zones = core::mem::take(&mut ui.zones);
     }
 
@@ -882,7 +952,9 @@ impl Shell {
         let card = Rect::new(28, BAR_H + 26, 200, 182);
         ui.shadow(card, 22, 10, 3, 18);
         ui.rrect(card, 22, t.surface);
-        ui.text(card.x + 18, card.y + 30, Face::Regular, 12, &sys.date_long(), t.text2);
+        let top_line = if sys.profile.ready() { sys.greeting() } else { sys.date_long() };
+        let top_line = ui.fit(Face::Regular, 12, &top_line, card.w - 36);
+        ui.text(card.x + 18, card.y + 30, Face::Regular, 12, &top_line, t.text2);
         ui.text(card.x + 15, card.y + 90, Face::Display, 64, &sys.clock(), t.text);
         ui.rect(Rect::new(card.x + 18, card.y + 106, card.w - 36, 1), t.line);
         ui.label(card.x + 18, card.y + 128, 10, "UP NEXT", t.accent);
@@ -1050,6 +1122,15 @@ impl Shell {
             ui.icon(Icon::Phone, rx, 6, 16, t.text);
             ui.zone(Rect::new(rx - 4, 2, 24, 24), Action::Launch(AppKind::PhoneLink));
         }
+        if self.sys.profile.ready() {
+            rx -= 30;
+            let pa = Action::Menu(5);
+            if ui.hot(pa) || self.menu == Some(5) {
+                ui.rrect(Rect::new(rx - 4, 2, 28, 24), 6, t.hover);
+            }
+            ui.avatar(Rect::new(rx, 4, 20, 20), &self.sys.avatar);
+            ui.zone(Rect::new(rx - 4, 2, 28, 24), pa);
+        }
         rx -= 26;
         let sa = Action::ToggleLauncher;
         if ui.hot(sa) {
@@ -1105,7 +1186,7 @@ impl Shell {
         let mut items: Vec<(String, Cmd)> = vec![];
         let focused = self.top().filter(|_| self.kfocus == KFocus::Top || m == 0);
         let app_items: Vec<(&'static str, u32)> = match focused {
-            Some(i) if m >= 1 => self.wins[i].app.menu(m as usize - 1),
+            Some(i) if (1..=4).contains(&m) => self.wins[i].app.menu(m as usize - 1),
             _ => vec![],
         };
         for (l, c) in &app_items {
@@ -1135,6 +1216,13 @@ impl Shell {
                     items.push(("Nothing to edit here".to_string(), Cmd::None));
                 }
             }
+            5 => {
+                // the header row (drawn with the picture) then the commands
+                items.push((self.sys.profile.name.clone(), Cmd::None));
+                items.push(("-".to_string(), Cmd::None));
+                items.push(("Profile…".to_string(), Cmd::Profile));
+                items.push(("Lock Screen   F12".to_string(), Cmd::Lock));
+            }
             3 => {
                 items.push((if self.sys.dark { "Light Mode" } else { "Dark Mode" }.to_string(), Cmd::Dark));
                 items.push(("Mobile Shell".to_string(), Cmd::MobileShell));
@@ -1159,7 +1247,11 @@ impl Shell {
             x -= 8;
         }
         let w = 220;
-        let h = items.iter().map(|i| if i.0 == "-" { 9 } else { 30 }).sum::<i32>() + 12;
+        let head = if m == 5 { 26 } else { 0 };
+        let h = items.iter().map(|i| if i.0 == "-" { 9 } else { 30 }).sum::<i32>() + 12 + head;
+        if m == 5 {
+            x = self.w - w - 8;
+        }
         let r = Rect::new(x, BAR_H + 2, w, h);
         ui.shadow(r, 12, 12, 6, 60);
         ui.rrect(r, 12, t.surface);
@@ -1172,6 +1264,16 @@ impl Shell {
             if label == "-" {
                 ui.rect(Rect::new(r.x + 12, y + 4, r.w - 24, 1), t.line);
                 y += 9;
+                continue;
+            }
+            if m == 5 && i == 0 {
+                // who's signed in
+                ui.avatar(Rect::new(r.x + 14, y + 6, 40, 40), &self.sys.avatar);
+                let name = ui.fit(Face::Semibold, 14, label, r.w - 80);
+                ui.text(r.x + 64, y + 24, Face::Semibold, 14, &name, t.text);
+                let g = ui.fit(Face::Regular, 12, crate::profile::greeting(self.sys.now.hour), r.w - 80);
+                ui.text(r.x + 64, y + 42, Face::Regular, 12, &g, t.text2);
+                y += 30 + head;
                 continue;
             }
             let a = Action::MenuItem(m, i as u8);
