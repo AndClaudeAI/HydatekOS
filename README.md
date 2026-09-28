@@ -28,9 +28,9 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Setup assistant](docs/screenshots/setup-welcome.png) | ![Picture](docs/screenshots/setup-picture.png) | ![Settings › Profile](docs/screenshots/settings-profile.png) |
 
-| Boot splash | Lock screen: PIN, password, fingerprint | Fingerprint via your phone |
+| Boot logo | Lock screen: PIN, password, fingerprint | Fingerprint via your phone |
 |---|---|---|
-| ![Boot splash](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
+| ![Boot logo](docs/screenshots/boot-splash.png) | ![Lock screen](docs/screenshots/lock-screen.png) | ![Fingerprint](docs/screenshots/lock-fingerprint.png) |
 
 <img src="docs/screenshots/lock-keyboard.png" width="240" alt="The on-screen keyboard's special characters page, with the Naira sign">
 
@@ -47,8 +47,9 @@ Windows, macOS or Linux.
   menu bar, the desktop greets you, and documents you make carry your name as
   their author (in Word, Excel, PowerPoint and PDF files too). Change it all in
   Settings › Profile. Details: [docs/PROFILE.md](docs/PROFILE.md).
-- **Boot splash and lock screen:** a HydatekOS splash with a progress bar while
-  drivers, files and the network come up, then a fade into the lock screen (clock,
+- **Boot logo and lock screen:** after the PC maker's logo the screen goes black
+  and the **Hydatek Systems** wordmark fades in, in white, with a thin progress bar
+  while drivers, files and the network come up, then a fade into the lock screen (clock,
   date, Up next, phone notifications). Sign in with a **PIN** (keypad), a **password**,
   or **your phone's fingerprint**: Phone Link asks the paired Android phone, which
   shows its own fingerprint prompt. The password has an **on-screen keyboard**
@@ -191,6 +192,8 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/profile.rs   your profile (name, picture); avatar.rs draws profile pictures
   src/apps/        built-in applications
   assets/fonts.bin prebuilt glyph atlases (regenerate with tools/fontgen.py)
+  assets/boot-logo.png  the boot wordmark (made by tools/bootlogo.py from
+                   assets/branding/hydatek-systems.jpg)
   src/net/         network stack: firmware NIC, ARP/IPv4/DHCP/TCP/mDNS
   src/crypto.rs    SHA-256, HKDF, ChaCha20-Poly1305; rng.rs; qr.rs
   src/hlp.rs       Hydatek Link Protocol; linksrv.rs its HTTP/WebSocket server
@@ -203,8 +206,9 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
 companion/web/     browser companion for phones (served by HydatekOS)
 companion/android/ HydatekOS Link for Android (built without the Android SDK)
 tests-host/        host-side tests of kernel modules
+assets/branding/   the Hydatek Systems wordmark (source of the boot logo)
 assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans and Sans Mono) + licences
-tools/             image builder, QEMU runner, GPT writer, font generator
+tools/             image builder, QEMU runner, GPT writer, font generator, boot logo maker
 docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, roadmap
 ```
 

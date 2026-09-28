@@ -31,9 +31,15 @@
 - `heap.rs` is HydatekOS's allocator. It's a first-fit, address-ordered free list with
   coalescing, fed by one large page allocation (up to 1 GB) taken at boot. Every
   `Vec`/`String` in the system comes from it.
-- `shell/splash.rs` draws the boot splash (logo, progress bar, status line) straight
-  to the screen while `main.rs` brings the system up; it then crossfades into the
-  first frame of the session.
+- `shell/splash.rs` draws the boot screen straight to the display while `main.rs`
+  brings the system up. The firmware shows the PC maker's logo; then the screen
+  goes black and the Hydatek Systems wordmark fades in (about a third of a
+  second), in white, with a thin progress bar under it. The boot stages go to the
+  serial log rather than the screen. It then crossfades into the first frame of
+  the session. The wordmark is `kernel/assets/boot-logo.png`, a greyscale
+  coverage mask that `tools/bootlogo.py` cuts from
+  `assets/branding/hydatek-systems.jpg`. It is decoded by HydatekOS's own PNG
+  decoder and scaled to about a third of the screen's width (70% on phones).
 - `shell/lock.rs` is the lock screen. The PIN and password are stored as salted,
   iterated SHA-256 hashes in `/system/lock.txt`; five wrong tries lock input for
   30 s. Fingerprint sign-in is delegated to the paired phone over Phone Link

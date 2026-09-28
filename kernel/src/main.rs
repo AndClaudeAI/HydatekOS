@@ -202,7 +202,13 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     // Logical points: desktops at ~1280+ wide, phones/tablets in portrait at ~400-540.
     let scale = if disp.h > disp.w { (disp.w / 400).max(1) } else if disp.w >= 2560 && disp.h >= 1440 { 2 } else { 1 };
     let full = Rect::new(0, 0, disp.w, disp.h);
+    // After the PC maker's logo: black, then the Hydatek Systems wordmark
+    // fades in (about a third of a second).
     let mut splash = shell::splash::Splash::new(disp.w, disp.h, scale);
+    for i in 0..=12u32 {
+        disp.present(splash.fade_in(i * 255 / 12), full);
+        efi::stall_us(25_000);
+    }
     disp.present(splash.step(8, "Starting"), full);
     let rng_source = rng::init();
     log!("rng: {}", rng_source);
