@@ -20,6 +20,7 @@ pub mod phone;
 pub mod phonelink;
 pub mod scripts;
 pub mod settings;
+pub mod slides;
 pub mod terminal;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -38,9 +39,10 @@ pub enum AppKind {
     Camera,
     Scripts,
     Grids,
+    Slides,
 }
 
-pub const DESKTOP_APPS: [AppKind; 12] = [
+pub const DESKTOP_APPS: [AppKind; 13] = [
     AppKind::Files,
     AppKind::Browser,
     AppKind::Messages,
@@ -49,6 +51,7 @@ pub const DESKTOP_APPS: [AppKind; 12] = [
     AppKind::Notes,
     AppKind::Scripts,
     AppKind::Grids,
+    AppKind::Slides,
     AppKind::Music,
     AppKind::Settings,
     AppKind::Terminal,
@@ -72,6 +75,7 @@ impl AppKind {
             AppKind::Camera => "Camera",
             AppKind::Scripts => "Hyda Scripts",
             AppKind::Grids => "Hyda Grids",
+            AppKind::Slides => "Hyda Slides",
         }
     }
     pub fn icon(self) -> Icon {
@@ -90,6 +94,7 @@ impl AppKind {
             AppKind::Camera => Icon::Camera,
             AppKind::Scripts => Icon::Scripts,
             AppKind::Grids => Icon::Sheet,
+            AppKind::Slides => Icon::Slides,
         }
     }
     /// Accent-coloured icon (as on the mobile home screen)?
@@ -107,6 +112,7 @@ impl AppKind {
             AppKind::Music => (560, 400),
             AppKind::Scripts => (900, 600),
             AppKind::Grids => (920, 600),
+            AppKind::Slides => (1040, 660),
             AppKind::Browser => (1000, 640),
             _ => (660, 430),
         }
@@ -146,6 +152,10 @@ pub trait App {
         false
     }
     fn open_path(&mut self, _path: &str, _sys: &mut Sys) {}
+    /// Wants the whole screen (a slideshow): drawn without window, menu bar or dock.
+    fn fullscreen(&self) -> bool {
+        false
+    }
 }
 
 pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
@@ -164,6 +174,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
         AppKind::Camera => Box::new(phone::Camera),
         AppKind::Scripts => Box::new(scripts::Scripts::new()),
         AppKind::Grids => Box::new(grids::Grids::new()),
+        AppKind::Slides => Box::new(slides::Slides::new()),
     }
 }
 

@@ -10,6 +10,10 @@ pub mod hlp;
 pub mod zip;
 #[path = "../../kernel/src/doc.rs"]
 pub mod doc;
+#[path = "../../kernel/src/deck.rs"]
+pub mod deck;
+#[path = "../../kernel/src/deckio.rs"]
+pub mod deckio;
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
@@ -41,6 +45,8 @@ pub mod font {
 mod doc_tests;
 #[cfg(test)]
 mod grid_tests;
+#[cfg(test)]
+mod deck_tests;
 #[cfg(test)]
 mod web_tests;
 #[cfg(test)]

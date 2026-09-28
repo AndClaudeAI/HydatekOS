@@ -2,7 +2,7 @@
 # Run HydatekOS's automated tests that don't need a running VM:
 #   kernel crypto/QR/HLP, the browser engine, picture decoders (compared with
 #   Python's Pillow), TLS (needs the openssl command)
-#   and Hyda Scripts / Grids documents (Rust, on the host), web companion
+#   and Hyda Scripts / Grids / Slides files (Rust, on the host), web companion
 #   crypto (Node), Android protocol code (JVM). The last three check the same
 #   interop vectors.
 set -euo pipefail

@@ -25,6 +25,8 @@ mod image;
 mod input;
 mod crypto;
 mod doc;
+mod deck;
+mod deckio;
 mod link;
 mod linksrv;
 mod net;

@@ -53,6 +53,11 @@ impl Mobile {
         let old = ui.clip_in(r);
         let white = Color::rgb(0xF4EFE7);
         if let Some(app) = self.app.as_mut() {
+            if app.fullscreen() {
+                app.render(ui, r, sys, self.inst);
+                ui.set_clip(old);
+                return;
+            }
             ui.rect(r, t.surface);
             // status bar
             let sb = Rect::new(r.x, r.y, r.w, u(34));

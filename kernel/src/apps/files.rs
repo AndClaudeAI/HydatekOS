@@ -67,6 +67,8 @@ pub fn file_icon(name: &str, dir: bool) -> Icon {
         Icon::Image
     } else if [".hyds", ".docx"].iter().any(|e| name.to_ascii_lowercase().ends_with(e)) {
         Icon::Scripts
+    } else if [".hydp", ".pptx"].iter().any(|e| name.to_ascii_lowercase().ends_with(e)) {
+        Icon::Slides
     } else {
         Icon::Doc
     }

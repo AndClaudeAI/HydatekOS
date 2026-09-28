@@ -228,6 +228,11 @@ impl Sys {
                         Ok(d) => d.to_text(),
                         Err(_) => continue,
                     }
+                } else if lower.ends_with(".hydp") {
+                    match crate::deckio::from_hydp(&data) {
+                        Ok(d) => d.to_text(),
+                        Err(_) => continue,
+                    }
                 } else if lower.ends_with(".hydg") {
                     match crate::gridio::from_hydg(&data) {
                         Ok(sh) => sh.cells.values().map(|c| c.input.clone()).collect::<Vec<_>>().join(" "),

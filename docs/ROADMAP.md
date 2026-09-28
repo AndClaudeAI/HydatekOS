@@ -4,6 +4,7 @@
 - UEFI boot on x86-64; HydatekOS heap, compositor, window manager, fonts and icons
 - Desktop shell and mobile shell from the design mockups
 - Apps: Files, Notes, Settings, Calendar, Terminal, Phone Link, Messages, Mail, Browser, Music, Phone, Camera
+- ✅ Hyda Workspace: Hyda Scripts, Hyda Grids and Hyda Slides, with Word, Excel and PowerPoint import and export
 - Persistent storage on the boot disk; light and dark themes
 - PS/2 mouse driver; firmware keyboard, USB input, disk and framebuffer
 

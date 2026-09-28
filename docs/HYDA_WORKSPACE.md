@@ -1,9 +1,10 @@
 # Hyda Workspace
 
 Hyda Workspace is HydatekOS's office suite: **Hyda Scripts**, the word
-processor, and **Hyda Grids**, the spreadsheet. Like the rest of HydatekOS, it's written from scratch and
+processor, **Hyda Grids**, the spreadsheet, and **Hyda Slides**, the
+presentation program. Like the rest of HydatekOS, it's written from scratch and
 built on no other word processor: the document model, its own file format
-(`.hyds`), page layout, and the importers and exporters for other formats are
+(`.hyds`, `.hydg`, `.hydp`), page and slide layout, and the importers and exporters for other formats are
 all HydatekOS code, with no third-party libraries.
 
 ![Hyda Scripts](screenshots/hyda-scripts.png)
@@ -199,16 +200,165 @@ end f80f9715                    CRC-32 of every byte before this line
   times as values, and printing.
 - Excel functions Hyda Grids doesn't have show `#NAME?` (the formula is kept).
 
+## Hyda Slides
+
+![Hyda Slides](screenshots/hyda-slides.png)
+
+Hyda Slides makes presentations. Open it from the dock, the app launcher (**F1**,
+type "slides"), or by double-clicking a `.hydp` (or `.pptx`) file in Files. A
+sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
+
+### What it does
+
+- **Slides** in 16:9 (1280 × 720 units; 4:3 and other shapes from imported
+  files keep their shape). The strip on the left shows every slide; click one
+  to go to it, drag it to reorder, double-click it to play from there.
+- **Layouts:** title slide, title and content, section header, two columns,
+  title only and blank. **+ Slide** picks one for a new slide; **Layout**
+  changes the current slide's, carrying its text across. Empty placeholders
+  say "Click to add title" / "Click to add text" (only while editing: they
+  aren't shown in the slideshow or exports).
+- **Six themes:** Dune, Night, Paper, Lagos, Coral and Slate. A theme sets the
+  background, the title, text and accent colours and its decorations, for the
+  whole presentation at once.
+
+  ![Themes](screenshots/hyda-slides-themes.png)
+
+- **Text:** click a placeholder or text box and type. Bold, italic, underline;
+  left / centre / right alignment; bulleted and numbered lists with five
+  levels (**Tab** / **Shift+Tab**); **A−** / **A+** change the size. Text that
+  doesn't fit shrinks until it does, as in other presentation programs.
+  Double-click selects a word, drag or Shift+arrows select text.
+- **Shapes and pictures:** text boxes, rectangles and ellipses (with text
+  inside), and pictures (PNG, JPEG, GIF, BMP or WebP, from Pictures, Documents,
+  Downloads or Shared). Drag to move (it snaps to the slide's edges and
+  centre), drag the handles to resize (pictures keep their shape unless you
+  hold Shift), arrow keys nudge (Shift for one unit). **A** sets the fill of a
+  shape, the colour of text, a picture's border, or with nothing selected the
+  slide's background. Edit › Bring to Front / Send to Back.
+- **Speaker notes** under each slide.
+- **Slideshow:** the ▶ button or **F5** plays full screen, from the start (**F5**)
+  or the current slide (**Shift+F5**, the ▶ button, or View › Play from This
+  Slide). Next: click, →, ↓, Space, Enter or Page Down; back: ←, ↑ or Page Up;
+  **B** blacks the screen; **Esc** leaves, on the slide you stopped at.
+  Transitions: none, **fade** or **push** (Transition › Apply to all slides).
+
+  ![Slideshow](screenshots/hyda-slides-show.png)
+
+- **Undo and redo** (100 steps), cut, copy and paste of text or whole shapes
+  (pictures included), duplicate (**Ctrl+D**).
+- **On a phone** the slide strip folds away: ‹ › in the status bar move between
+  slides, and the slideshow fills the phone's screen.
+
+  <img src="screenshots/hyda-slides-phone.png" width="240" alt="Hyda Slides on the phone shell">
+
+### Keyboard
+
+| Keys | Action |
+|---|---|
+| F5 / Shift+F5 | Play from the start / from this slide |
+| Ctrl+M | New slide (like the current one) |
+| Ctrl+D | Duplicate the shape, or the slide |
+| Delete | Delete the shape (a placeholder empties), or with nothing selected the slide |
+| Enter / F2 | Edit the selected shape's text; with nothing selected, a new slide |
+| Esc | Stop editing text, then deselect |
+| Tab / Shift+Tab | While editing a list: indent / outdent. Otherwise: select the next / previous shape |
+| Arrows | Nudge the shape (Shift: finely); with nothing selected, go to the previous / next slide |
+| Ctrl+↑ / Ctrl+↓ | Move the slide up / down |
+| Ctrl+B / Ctrl+I / Ctrl+U | Bold / italic / underline |
+| Ctrl+L / Ctrl+E / Ctrl+R | Left / centre / right align |
+| Ctrl+[ / Ctrl+] | Smaller / bigger text |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
+| Ctrl+S / Ctrl+O / Ctrl+N | Save / open / new |
+
+### Saving, importing and exporting
+
+| | Format | What Hyda Slides does |
+|---|---|---|
+| **Save** | `.hydp` | The only format it saves to your storage. A new presentation goes to Documents › Presentations, named after its first title; click the name at the top to rename it. Closing the window saves your changes. Pictures are kept inside the file. |
+| **Import** | `.pptx` | Opens the file to read, edit and play ("Viewing a PowerPoint file"). Saving writes a **new `.hydp` next to it**; the original is never changed. |
+| **Export** | `.pptx` | File › Export as PowerPoint writes a copy for sharing, next to the presentation. It never replaces an existing file. |
+
+Exported PowerPoint files are standard Office Open XML with the slides, their
+shapes, text formatting, bullets and levels, pictures, backgrounds, the theme
+(as the slide master), transitions and speaker notes, so they open in
+PowerPoint and other presentation programs. They name Figtree, HydatekOS's
+font, which other computers may replace with one of theirs.
+
+When importing PowerPoint files, Hyda Slides reads the slide size, the order of
+slides (skipping hidden ones), titles, subtitles and content placeholders (with
+the positions, sizes and alignment they inherit from the layout and master),
+text boxes, rectangles, ellipses and other shapes (as rectangles), groups,
+pictures (PNG, JPEG, GIF, BMP, WebP), bold, italic, underline, strikethrough,
+bullets, numbering and levels, font sizes and colours, fills and outlines
+(theme colours too), backgrounds, transitions and speaker notes. The deck gets
+an "Imported" theme with the file's background, text and accent colours.
+
+![A PowerPoint file in Hyda Slides](screenshots/hyda-slides-pptx.png)
+
+### The .hydp format
+
+Line-based UTF-8 text, like `.hyds` and `.hydg`:
+
+```
+HYDP 1                          magic and format version
+app Hyda Slides                 the program that wrote it
+name Meet HydatekOS
+size 1280 720                   slide size in units (1/96 inch)
+theme dune                      a built-in theme, or
+                                theme custom <bg> <title> <text> <accent> (hex)
+slides 5                        number of slides
+slide content                   a slide and its layout
+bg 1C1A27                       its own background (optional)
+trans fade                      transition: fade or push (optional)
+notes One line\nand another     speaker notes
+shape title 80 36 1120 116 size=40 anchor=m fill=- line=- color=-
+p body left 0                   a paragraph: style, alignment, level
+t What's inside                 its text
+shape body 80 172 1120 480 size=24 anchor=t fill=- line=- color=-
+p bullet left 0
+t Hyda Workspace
+f 0:14:b                        formatting runs, as in .hyds
+shape picture 80 180 720 405 size=20 anchor=t fill=- line=- color=- pic=0
+pic png iVBORw0KGgo…            picture 0 (base64)
+end 1a2b3c4d                    CRC-32 of every byte before this line
+```
+
+- **Shapes:** `title`, `subtitle`, `body`, `text`, `rect`, `ellipse` or
+  `picture`, then x, y, width and height in slide units, the text size in
+  points, the text's vertical anchor (`t`, `m`, `b`), and fill, outline and
+  text colours (`-` for the theme's).
+- **Paragraph styles:** `body`, `bullet`, `number`; levels 0–8.
+- **Pictures** are PNG or JPEG, stored once and numbered from 0; other formats
+  are converted to PNG when inserted.
+- Checksum, versions and unknown records work as in `.hyds`.
+
+### Limits
+
+- **Not yet:** tables, charts, lines and arrows, rotation, animations of
+  shapes within a slide, gradient fills (a gradient imports as its first
+  colour), slide numbers and footers, presenter view, printing and PDF export.
+- **One text size per shape**, reduced for deeper list levels; imported text
+  with mixed sizes takes the size most of it uses. Per-run text colours become
+  one colour for the shape.
+- **One font** (Figtree); imported fonts are shown in Figtree.
+- Imported shapes other than rectangles and ellipses (arrows, stars…) show as
+  rectangles; charts, tables, SmartArt, video and audio are left out.
+
 ## How it's built
 
 | Part | Where |
 |---|---|
 | Document model, editing, the `.hyds` format, `.docx`/`.txt`/`.md` import and export | `kernel/src/doc.rs` |
-| Zip reading and writing, CRC-32, inflate (RFC 1951) | `kernel/src/zip.rs` |
+| Zip reading and writing, CRC-32, deflate and inflate (RFC 1951) | `kernel/src/zip.rs` |
 | The app: layout, pagination, rendering, input | `kernel/src/apps/scripts.rs` |
 | Hyda Grids: cells, formula parser and evaluator, number formats | `kernel/src/grid.rs` |
 | Hyda Grids files: `.hydg`, `.xlsx` import/export, CSV | `kernel/src/gridio.rs` |
 | The Hyda Grids app | `kernel/src/apps/grids.rs` |
+| Hyda Slides: slides, layouts, themes, text layout | `kernel/src/deck.rs` |
+| Hyda Slides files: `.hydp`, `.pptx` import/export, the PNG writer | `kernel/src/deckio.rs` |
+| The Hyda Slides app: editor, thumbnails, slideshow | `kernel/src/apps/slides.rs` |
 | Italic faces (slanted at build time), ₦, Σ and other symbols | `tools/fontgen.py` |
 
 A document is a list of paragraphs; each has a style, an alignment, its
@@ -218,8 +368,15 @@ spaces, keeps headings with the line after them, and flows lines onto A4 pages.
 
 ### Tests
 
-`tools/test.sh` runs these on the host (`tests-host/src/doc_tests.rs` and
-`grid_tests.rs`). For Hyda Grids: references, operator precedence, every
+`tools/test.sh` runs these on the host (`tests-host/src/doc_tests.rs`,
+`grid_tests.rs` and `deck_tests.rs`). For Hyda Slides: `.hydp` round trip,
+damage and version checks; text layout (wrapping, caret positions, bullets and
+numbering, shrinking to fit); changing layouts; the PNG writer and deflate
+(round trips through inflate); `.pptx` round trip; and importing PowerPoint
+files written by two other programs (a 4:3 deck made with python-pptx on its
+default template, and the same deck re-saved by LibreOffice Impress, built by
+`tests-host/fixtures/slides/make.py`). Exported `.pptx` files were also
+opened and rendered in LibreOffice Impress to check them. For Hyda Grids: references, operator precedence, every
 function, circular references, number formats and typed values, moving
 references, `.hydg` round trip and damage checks, CSV, `.xlsx` round trip, an
 Excel file written by another program, and shared formulas. For Hyda Scripts:

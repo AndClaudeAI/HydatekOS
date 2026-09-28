@@ -61,17 +61,19 @@ pub struct Para {
     pub fmt: Vec<u8>,
     pub style: Style,
     pub align: Align,
+    /// outline level (Hyda Slides' indented bullets; 0 in documents)
+    pub level: u8,
 }
 
 impl Para {
     pub fn new(style: Style) -> Para {
-        Para { text: Vec::new(), fmt: Vec::new(), style, align: Align::Left }
+        Para { text: Vec::new(), fmt: Vec::new(), style, align: Align::Left, level: 0 }
     }
     pub fn plain(s: &str, style: Style) -> Para {
         let text: Vec<char> = s.chars().collect();
-        Para { fmt: vec![0; text.len()], text, style, align: Align::Left }
+        Para { fmt: vec![0; text.len()], text, style, align: Align::Left, level: 0 }
     }
-    fn push(&mut self, s: &str, f: u8) {
+    pub fn push(&mut self, s: &str, f: u8) {
         for c in s.chars() {
             self.text.push(c);
             self.fmt.push(f);
@@ -159,7 +161,7 @@ impl Doc {
         let text = p.text.split_off(pos.i);
         let fmt = p.fmt.split_off(pos.i);
         let style = if p.style.heading() && text.is_empty() { Style::Body } else { p.style };
-        let np = Para { text, fmt, style, align: if style == p.style { p.align } else { Align::Left } };
+        let np = Para { text, fmt, style, align: if style == p.style { p.align } else { Align::Left }, level: if style == p.style { p.level } else { 0 } };
         self.paras.insert(pos.p + 1, np);
         Pos::new(pos.p + 1, 0)
     }
@@ -219,7 +221,7 @@ impl Doc {
             let p = &self.paras[pi];
             let s = if pi == a.p { a.i } else { 0 };
             let e = if pi == b.p { b.i } else { p.len() };
-            out.push(Para { text: p.text[s..e].to_vec(), fmt: p.fmt[s..e].to_vec(), style: p.style, align: p.align });
+            out.push(Para { text: p.text[s..e].to_vec(), fmt: p.fmt[s..e].to_vec(), style: p.style, align: p.align, level: p.level });
         }
         out
     }
@@ -256,6 +258,7 @@ impl Doc {
             if pos.i == 0 {
                 first.style = frag[0].style;
                 first.align = frag[0].align;
+                first.level = frag[0].level;
             }
         }
         let mid = &frag[1..frag.len() - 1];
@@ -272,6 +275,7 @@ impl Doc {
         if tail.text.len() == last.text.len() {
             tail.style = last.style;
             tail.align = last.align;
+            tail.level = last.level;
         }
         Pos::new(lp, last.len())
     }

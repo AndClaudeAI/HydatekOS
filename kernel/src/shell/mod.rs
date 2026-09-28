@@ -34,7 +34,7 @@ pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
 }
 const LOCAL_INST: u32 = 1_000_000;
 const PHONE_INST: u32 = 1_000_001;
-const DOCK_APPS: [AppKind; 10] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Grids, AppKind::Music, AppKind::Settings];
+const DOCK_APPS: [AppKind; 11] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Grids, AppKind::Slides, AppKind::Music, AppKind::Settings];
 const MENUS: [&str; 4] = ["File", "Edit", "View", "Go"];
 /// The linked phone renders at its native size and is scaled into Phone Link.
 const PHONE_W: i32 = 390;
@@ -436,6 +436,8 @@ impl Shell {
             AppKind::Grids
         } else if [".hyds", ".docx"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Scripts
+        } else if [".hydp", ".pptx"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
+            AppKind::Slides
         } else {
             AppKind::Notes
         };
@@ -782,7 +784,7 @@ impl Shell {
                 }
                 _ => {}
             }
-        } else if k == Key::Esc {
+        } else if k == Key::Esc && !self.local.app.as_ref().map_or(false, |a| a.fullscreen()) {
             return self.local.act(MobileAct::Home, &mut self.sys);
         }
         if let Some(inst) = self.focused_inst() {
@@ -844,6 +846,14 @@ impl Shell {
                     ui.button(hr, "Back to desktop", Action::Quick(9), true);
                 }
             }
+            self.zones = core::mem::take(&mut ui.zones);
+            return;
+        }
+        // a full-screen app (a slideshow) covers everything
+        if let Some(i) = self.top().filter(|&i| self.wins[i].app.fullscreen()) {
+            let Shell { wins, sys, .. } = self;
+            let id = wins[i].id;
+            wins[i].app.render(&mut ui, Rect::new(0, 0, w, h), sys, id);
             self.zones = core::mem::take(&mut ui.zones);
             return;
         }

@@ -16,6 +16,10 @@ Windows, macOS or Linux.
 |---|---|
 | ![Hyda Scripts](docs/screenshots/hyda-scripts.png) | ![Hyda Grids](docs/screenshots/hyda-grids.png) |
 
+| Hyda Slides (Hyda Workspace) | Its slideshow |
+|---|---|
+| ![Hyda Slides](docs/screenshots/hyda-slides.png) | ![Slideshow](docs/screenshots/hyda-slides-show.png) |
+
 | Desktop | Phone Link with a phone | Mobile shell |
 |---|---|---|
 | ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
@@ -68,6 +72,10 @@ Windows, macOS or Linux.
   formulas with 25 functions, ₦ currency and other number formats, copy/paste that
   moves references, AutoSum and resizable columns. Sheets are saved as **`.hydg`**;
   Excel (`.xlsx`) and CSV files open for viewing and editing and are export formats.
+  **Hyda Slides** makes presentations: layouts, six themes, bullets, text boxes,
+  shapes and pictures, speaker notes, and a full-screen slideshow with fade and
+  push transitions. Presentations are saved as **`.hydp`**; PowerPoint (`.pptx`)
+  files open for viewing and editing and are an export format.
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
 - **Browser and Hyda Search:** HydatekOS's own web browser (HTML, CSS, layout,
   pictures with its own JPEG / PNG / WebP / GIF decoders and SVG renderer,
@@ -81,7 +89,7 @@ Windows, macOS or Linux.
   list of authorities. The address bar can also search with DuckDuckGo, Mojeek,
   Bing, Brave Search, Google or Wikipedia (Settings › Browser, or `!d`, `!g`...
   shortcuts). Details: [docs/BROWSER.md](docs/BROWSER.md).
-- **Apps:** Files, Notes, Hyda Scripts, Hyda Grids, Settings, Calendar, Terminal (`hsh`), Phone Link,
+- **Apps:** Files, Notes, Hyda Scripts, Hyda Grids, Hyda Slides, Settings, Calendar, Terminal (`hsh`), Phone Link,
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
@@ -170,8 +178,9 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/net/         network stack: firmware NIC, ARP/IPv4/DHCP/TCP/mDNS
   src/crypto.rs    SHA-256, HKDF, ChaCha20-Poly1305; rng.rs; qr.rs
   src/hlp.rs       Hydatek Link Protocol; linksrv.rs its HTTP/WebSocket server
-  src/doc.rs       Hyda Scripts documents: editing, .hyds, .docx/.txt/.md; zip.rs zip + inflate
+  src/doc.rs       Hyda Scripts documents: editing, .hyds, .docx/.txt/.md; zip.rs zip, deflate, inflate
   src/grid.rs      Hyda Grids formulas and formats; gridio.rs .hydg, .xlsx, .csv
+  src/deck.rs      Hyda Slides slides, themes, text layout; deckio.rs .hydp, .pptx, PNG writer
   src/web/         browser engine: URL, DNS, HTTP, HTML, CSS/layout, Hyda Search
   src/image/       JPEG, PNG, WebP, GIF and BMP decoders; SVG renderer
   src/tls/         TLS 1.3/1.2, AES-GCM, X25519, P-256/384, RSA, X.509, CA list

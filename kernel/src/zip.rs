@@ -1,8 +1,9 @@
 //! Zip archives, enough for office documents (.docx is a zip of XML parts).
 //!
-//! Writing stores entries uncompressed (method 0), which every zip reader
-//! accepts. Reading handles stored and deflated (method 8) entries, with a
-//! small inflate implementation (RFC 1951).
+//! Writing compresses entries with a small deflate encoder (fixed Huffman
+//! codes and LZ77 matching), or stores them when that isn't smaller. Reading
+//! handles stored and deflated (method 8) entries, with a small inflate
+//! implementation (RFC 1951).
 
 use alloc::string::String;
 use alloc::vec;
@@ -46,9 +47,11 @@ impl Writer {
         Writer { out: Vec::new(), central: Vec::new(), count: 0 }
     }
 
-    /// Add a stored (uncompressed) entry.
+    /// Add an entry (deflated when that makes it smaller).
     pub fn add(&mut self, name: &str, data: &[u8]) {
         let crc = crc32(data);
+        let packed = deflate(data);
+        let (method, body): (u16, &[u8]) = if packed.len() < data.len() { (8, &packed) } else { (0, data) };
         let off = self.out.len() as u32;
         // DOS time/date: 2026-01-01 00:00
         let (time, date) = (0u16, ((2026 - 1980) << 9 | 1 << 5 | 1) as u16);
@@ -56,26 +59,26 @@ impl Writer {
         le32(o, 0x0403_4b50);
         le16(o, 20); // version needed
         le16(o, 0x0800); // flags: UTF-8 names
-        le16(o, 0); // stored
+        le16(o, method);
         le16(o, time);
         le16(o, date);
         le32(o, crc);
-        le32(o, data.len() as u32);
+        le32(o, body.len() as u32);
         le32(o, data.len() as u32);
         le16(o, name.len() as u16);
         le16(o, 0);
         o.extend_from_slice(name.as_bytes());
-        o.extend_from_slice(data);
+        o.extend_from_slice(body);
         let c = &mut self.central;
         le32(c, 0x0201_4b50);
         le16(c, 20); // made by
         le16(c, 20);
         le16(c, 0x0800);
-        le16(c, 0);
+        le16(c, method);
         le16(c, time);
         le16(c, date);
         le32(c, crc);
-        le32(c, data.len() as u32);
+        le32(c, body.len() as u32);
         le32(c, data.len() as u32);
         le16(c, name.len() as u16);
         le16(c, 0); // extra
@@ -103,6 +106,140 @@ impl Writer {
         le16(o, 0);
         self.out
     }
+}
+
+// ---- deflate ----------------------------------------------------------------
+
+struct BitOut {
+    out: Vec<u8>,
+    acc: u64,
+    n: u32,
+}
+
+impl BitOut {
+    fn put(&mut self, v: u32, bits: u32) {
+        self.acc |= (v as u64) << self.n;
+        self.n += bits;
+        while self.n >= 8 {
+            self.out.push(self.acc as u8);
+            self.acc >>= 8;
+            self.n -= 8;
+        }
+    }
+    /// A Huffman code (sent most significant bit first).
+    fn code(&mut self, c: u32, bits: u32) {
+        let mut r = 0;
+        for i in 0..bits {
+            r |= ((c >> i) & 1) << (bits - 1 - i);
+        }
+        self.put(r, bits);
+    }
+    fn lit(&mut self, v: u32) {
+        match v {
+            0..=143 => self.code(0x30 + v, 8),
+            144..=255 => self.code(0x190 + v - 144, 9),
+            256..=279 => self.code(v - 256, 7),
+            _ => self.code(0xC0 + v - 280, 8),
+        }
+    }
+    fn finish(mut self) -> Vec<u8> {
+        if self.n > 0 {
+            self.out.push(self.acc as u8);
+        }
+        self.out
+    }
+}
+
+/// Compress to a raw deflate stream (RFC 1951): one block of fixed Huffman
+/// codes, with matches found through hash chains over a 32 KB window.
+pub fn deflate(data: &[u8]) -> Vec<u8> {
+    const WIN: usize = 32768;
+    const HBITS: u32 = 15;
+    const CHAIN: usize = 48;
+    let mut b = BitOut { out: Vec::with_capacity(data.len() / 2 + 16), acc: 0, n: 0 };
+    b.put(1, 1); // final block
+    b.put(1, 2); // fixed Huffman codes
+    let n = data.len();
+    let mut head = vec![u32::MAX; 1 << HBITS];
+    let mut prev = vec![u32::MAX; WIN];
+    let hash = |i: usize| -> usize { ((data[i] as u32) << 10 ^ (data[i + 1] as u32) << 5 ^ data[i + 2] as u32).wrapping_mul(2654435761) as usize >> (32 - HBITS) & ((1 << HBITS) - 1) };
+    let insert = |head: &mut Vec<u32>, prev: &mut Vec<u32>, i: usize| {
+        if i + 2 < n {
+            let h = hash(i);
+            prev[i % WIN] = head[h];
+            head[h] = i as u32;
+        }
+    };
+    let mut i = 0;
+    while i < n {
+        let (mut best_len, mut best_dist) = (0usize, 0usize);
+        if i + 2 < n {
+            let mut cand = head[hash(i)];
+            let mut steps = 0;
+            let max = (n - i).min(258);
+            while cand != u32::MAX && steps < CHAIN {
+                let c = cand as usize;
+                if i - c > WIN - 1 || c >= i {
+                    break;
+                }
+                if data[c + best_len.min(max - 1)] == data[i + best_len.min(max - 1)] {
+                    let mut l = 0;
+                    while l < max && data[c + l] == data[i + l] {
+                        l += 1;
+                    }
+                    if l > best_len {
+                        best_len = l;
+                        best_dist = i - c;
+                        if l == max {
+                            break;
+                        }
+                    }
+                }
+                cand = prev[c % WIN];
+                steps += 1;
+            }
+        }
+        if best_len >= 3 {
+            let li = LBASE.iter().rposition(|&x| x as usize <= best_len).unwrap();
+            b.lit(257 + li as u32);
+            b.put((best_len - LBASE[li] as usize) as u32, LEXT[li] as u32);
+            let di = DBASE.iter().rposition(|&x| x as usize <= best_dist).unwrap();
+            b.code(di as u32, 5);
+            b.put((best_dist - DBASE[di] as usize) as u32, DEXT[di] as u32);
+            for k in i..i + best_len {
+                insert(&mut head, &mut prev, k);
+            }
+            i += best_len;
+        } else {
+            b.lit(data[i] as u32);
+            insert(&mut head, &mut prev, i);
+            i += 1;
+        }
+    }
+    b.lit(256);
+    b.finish()
+}
+
+/// Adler-32, the zlib checksum.
+pub fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for chunk in data.chunks(5552) {
+        for &x in chunk {
+            a += x as u32;
+            b += a;
+        }
+        a %= 65521;
+        b %= 65521;
+    }
+    (b << 16) | a
+}
+
+/// A zlib stream (RFC 1950): header, deflate data, Adler-32.
+pub fn zlib(data: &[u8]) -> Vec<u8> {
+    let mut z = vec![0x78, 0x01];
+    z.extend_from_slice(&deflate(data));
+    z.extend_from_slice(&adler32(data).to_be_bytes());
+    z
 }
 
 // ---- reading ----------------------------------------------------------------

@@ -67,7 +67,26 @@ impl Vfs {
             }
         }
         v.seed();
+        v.seed_slides();
         v
+    }
+
+    /// The Hyda Slides sample (also added once to disks made before it existed).
+    fn seed_slides(&mut self) {
+        const MARK: &str = "/system/slides-sample";
+        if self.exists(MARK) || self.get("/home").is_none() {
+            return;
+        }
+        let pic = dunes_png();
+        self.mkdir("/home/Documents/Presentations");
+        if !self.exists("/home/Pictures/Dunes at dusk.png") {
+            self.write("/home/Pictures/Dunes at dusk.png", &pic);
+        }
+        let path = "/home/Documents/Presentations/Meet HydatekOS.hydp";
+        if !self.exists(path) {
+            self.write(path, crate::deckio::to_hydp(&sample_deck(pic)).as_bytes());
+        }
+        self.write(MARK, b"1");
     }
 
     fn seed(&mut self) {
@@ -381,6 +400,103 @@ fn load_dir(vol: *mut File, npath: &str, name: &str, depth: u32) -> Node {
         }
     }
     n
+}
+
+/// A picture for the samples: dunes under an evening sky.
+fn dunes_png() -> Vec<u8> {
+    use crate::gfx::sin_q14;
+    let (w, h) = (640i32, 360i32);
+    let mut px = alloc::vec![0u32; (w * h) as usize];
+    let mix = |a: u32, b: u32, t: i32| -> u32 {
+        let t = t.clamp(0, 256) as u32;
+        let f = |s: u32| ((((a >> s) & 255) * (256 - t) + ((b >> s) & 255) * t) >> 8) << s;
+        0xFF00_0000 | f(16) | f(8) | f(0)
+    };
+    let dunes = [(250, 22, 3, 100, 0xC97B45u32), (285, 26, 2, 400, 0xA65A33), (320, 18, 4, 700, 0x6E3A26)];
+    for y in 0..h {
+        for x in 0..w {
+            // sky: violet to amber towards the horizon
+            let mut c = mix(0x2B2045, 0xF0A868, y * 256 / 260);
+            // the sun and its glow
+            let (dx, dy) = (x - 430, y - 205);
+            let d2 = dx * dx + dy * dy;
+            if d2 < 58 * 58 {
+                c = 0xFFF8D58C;
+            } else if d2 < 120 * 120 {
+                c = mix(c, 0xF8D58C, (120 * 120 - d2) * 90 / (120 * 120 - 58 * 58));
+            }
+            for &(base, amp, freq, phase, col) in &dunes {
+                let a = (x * freq * 1024 / w + phase) & 1023;
+                let top = base + amp * sin_q14(a) / 16384;
+                if y >= top {
+                    // lighter along the crest
+                    c = mix(col, 0xFFE0B0, (12 - (y - top)).max(0) * 6);
+                }
+            }
+            px[(y * w + x) as usize] = c;
+        }
+    }
+    crate::deckio::png_encode(w as u32, h as u32, &px)
+}
+
+/// The sample presentation for Hyda Slides.
+fn sample_deck(pic: Vec<u8>) -> crate::deck::Deck {
+    use crate::deck::*;
+    use crate::doc::{Pos, Style, BOLD};
+    let mut d = Deck::new();
+    d.name = String::from("Meet HydatekOS");
+    d.slides.clear();
+    let bullets = |sh: &mut Shape, items: &[(&str, u8)]| {
+        let text: Vec<&str> = items.iter().map(|x| x.0).collect();
+        sh.set_plain(&text.join("\n"));
+        for (p, (_, lvl)) in sh.text.paras.iter_mut().zip(items.iter()) {
+            p.style = Style::Bullet;
+            p.level = *lvl;
+        }
+    };
+    let mut s = d.new_slide(Layout::Title);
+    s.shapes[0].set_plain("Meet HydatekOS");
+    s.shapes[1].set_plain("An operating system built from scratch · Lagos, 2026");
+    s.notes = String::from("Welcome everyone.\nEverything you will see today runs on HydatekOS, and this deck was made in Hyda Slides.");
+    s.trans = Trans::Fade;
+    d.slides.push(s);
+    let mut s = d.new_slide(Layout::TitleContent);
+    s.shapes[0].set_plain("What's inside");
+    bullets(&mut s.shapes[1], &[("A desktop and a phone shell", 0), ("Hyda Workspace", 0), ("Scripts, Grids and Slides", 1), ("Documents, sheets and presentations", 1), ("A browser with its own search engine", 0), ("Phone Link to your phone", 0)]);
+    s.shapes[1].text.set_fmt(Pos::new(1, 0), Pos::new(1, 14), BOLD, true);
+    s.notes = String::from("One line per item; details come later.");
+    s.trans = Trans::Fade;
+    d.slides.push(s);
+    let mut s = d.new_slide(Layout::TwoContent);
+    s.shapes[0].set_plain("Built from scratch");
+    bullets(&mut s.shapes[1], &[("Kernel and drivers", 0), ("Graphics, fonts and icons", 0), ("TCP/IP and TLS", 0)]);
+    bullets(&mut s.shapes[2], &[("Picture decoders", 0), ("Office file formats", 0), ("Every app you see", 0)]);
+    s.trans = Trans::Fade;
+    d.slides.push(s);
+    let mut s = d.new_slide(Layout::TitleOnly);
+    s.shapes[0].set_plain("Pictures, shapes and text");
+    d.pics.push(Pic { data: alloc::rc::Rc::new(pic) });
+    let mut p = Shape::new(Kind::Picture, 80, 180, 720, 405);
+    p.pic = Some(0);
+    s.shapes.push(p);
+    let mut r = Shape::new(Kind::Rect, 840, 200, 360, 170);
+    r.set_plain("Dunes at dusk");
+    r.size = 28;
+    s.shapes.push(r);
+    let mut e = Shape::new(Kind::Ellipse, 930, 410, 180, 180);
+    e.fill = Some(0xF2B544);
+    e.set_plain("New");
+    e.size = 24;
+    e.color = Some(0x1E1B2C);
+    s.shapes.push(e);
+    s.trans = Trans::Push;
+    d.slides.push(s);
+    let mut s = d.new_slide(Layout::Section);
+    s.shapes[0].set_plain("Thank you");
+    s.shapes[1].set_plain("Press Esc to leave the slideshow");
+    s.trans = Trans::Fade;
+    d.slides.push(s);
+    d
 }
 
 /// The starter sheet for Hyda Grids.
