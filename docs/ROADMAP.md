@@ -12,7 +12,8 @@
 - Drivers: PS/2 keyboard, xHCI + USB HID (keyboard, mouse, touchpad), I2C-HID touchpads
 - AHCI and NVMe storage; a native FAT32 driver, then a HydatekOS file system
 - Preemptive scheduler, processes and a syscall ABI; apps move out of the kernel
-- PNG/JPEG decoders and an image viewer
+- ✅ JPEG, PNG, GIF and BMP decoders; pictures open from Files
+- WebP and SVG; a photo viewer with zoom and slideshows
 
 ## M3 — connected
 - ✅ TCP/IP stack: ARP, IPv4, ICMP, UDP, DHCP, TCP, mDNS/DNS-SD (over the firmware NIC driver)
@@ -22,7 +23,8 @@
 - Native virtio-net, Intel e1000/i219 and Realtek RTL8111 drivers; IPv6
 - Wi-Fi (Intel iwlwifi-class hardware) with WPA2/WPA3
 - ✅ Browser: HTML/CSS subset renderer, Hyda Search
-- Browser: images, external stylesheets, tabs; Mail: IMAP/SMTP
+- ✅ Browser pictures
+- Browser: external stylesheets, tabs; Mail: IMAP/SMTP
 - Phone Link: X25519 key exchange (HLP/2), real-phone screen mirroring, iOS companion app
 
 ## M4 — senses

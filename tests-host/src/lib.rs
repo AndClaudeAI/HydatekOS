@@ -14,6 +14,8 @@ pub mod doc;
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
 pub mod gridio;
+#[path = "../../kernel/src/image/mod.rs"]
+pub mod image;
 #[path = "../../kernel/src/tls/mod.rs"]
 pub mod tls;
 #[path = "../../kernel/src/web/mod.rs"]
@@ -43,6 +45,8 @@ mod grid_tests;
 mod web_tests;
 #[cfg(test)]
 mod tls_tests;
+#[cfg(test)]
+mod image_tests;
 #[cfg(test)]
 mod tls_vectors;
 

@@ -9,14 +9,23 @@ use alloc::vec::Vec;
 
 pub const USER_AGENT: &str = "Mozilla/5.0 (HydatekOS 0.1) Hyda/0.1";
 
-pub fn request(method: &str, url: &Url, body: &[u8], content_type: &str, cookies: &str) -> Vec<u8> {
+/// What a page request accepts.
+pub const ACCEPT_PAGE: &str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8";
+/// Image requests ask for the formats HydatekOS decodes.
+pub const ACCEPT_IMAGE: &str = "image/png,image/jpeg,image/gif,image/bmp;q=0.9,image/*;q=0.5,*/*;q=0.3";
+
+pub fn request(method: &str, url: &Url, body: &[u8], content_type: &str, cookies: &str, accept: &str, referer: &str) -> Vec<u8> {
     let mut h = format!(
-        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8\r\nAccept-Language: en\r\nAccept-Encoding: gzip, deflate\r\nConnection: close\r\n",
+        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {}\r\nAccept-Language: en\r\nAccept-Encoding: gzip, deflate\r\nConnection: close\r\n",
         method,
         url.path,
         url.host_header(),
-        USER_AGENT
+        USER_AGENT,
+        accept
     );
+    if !referer.is_empty() {
+        h.push_str(&format!("Referer: {}\r\n", referer));
+    }
     if !cookies.is_empty() {
         h.push_str(&format!("Cookie: {}\r\n", cookies));
     }

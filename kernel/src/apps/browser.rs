@@ -11,8 +11,11 @@ use crate::ui::{Action, Key, Ui};
 use crate::web::{engines, html};
 use crate::web::render::{self, Control, Item, Page};
 use crate::web::url::{self, Url};
+use crate::image::{self as picture, Image};
 use crate::web::Progress;
+use alloc::collections::BTreeMap;
 use alloc::format;
+use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -30,11 +33,52 @@ const C_FIELD: u32 = 100_000;
 const PAD: i32 = 24;
 const STATUS: i32 = 24;
 
+/// An image on the page.
+enum Pic {
+    Queued,
+    Loading(u32),
+    /// the picture, and a copy scaled for the screen (w, h, pixels)
+    Ready(Rc<Image>, Option<(i32, i32, Vec<u32>)>),
+    Broken,
+}
+
+/// Images fetched at once.
+const MAX_IMAGE_LOADS: usize = 6;
+
+/// The key an image address is stored under: an absolute URL (or the
+/// data:/file: address itself).
+fn image_key(page: &Url, src: &str) -> Option<String> {
+    if src.starts_with("data:") || src.starts_with("file:") {
+        return Some(src.to_string());
+    }
+    page.join(src).filter(|u| u.scheme == "http" || u.scheme == "https").map(|u| u.without_fragment())
+}
+
+/// The bytes of a data: address (base64 or percent-encoded).
+fn data_uri(s: &str) -> Option<Vec<u8>> {
+    let (head, body) = s.strip_prefix("data:")?.split_once(',')?;
+    if head.ends_with(";base64") {
+        crate::crypto::base64_decode(&body.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+    } else {
+        Some(url::decode(body).into_bytes())
+    }
+}
+
+fn decode_pic(data: &[u8]) -> Pic {
+    match picture::decode(data) {
+        Ok(img) => Pic::Ready(Rc::new(img), None),
+        Err(_) => Pic::Broken,
+    }
+}
+
 struct Loaded {
     url: Url,
     title: String,
-    html: String,
+    dom: html::Dom,
     page: Page,
+    images: BTreeMap<String, Pic>,
+    /// an image arrived: lay the page out again
+    relayout: bool,
     width: i32,
     /// edited values of text fields (by field index)
     values: Vec<(usize, String)>,
@@ -60,6 +104,7 @@ pub struct Browser {
     show_security: bool,
     /// the address that failed, while an error shows
     error_url: Option<String>,
+    pump_ticks: u64,
 }
 
 fn esc(s: &str) -> String {
@@ -75,9 +120,26 @@ const PAGE_CSS: &str = "body{margin:0} .wrap{max-width:720px;margin:0 auto;paddi
 h2{font-size:18px;margin:26px 0 8px} .box{background:#f6f1ea;padding:14px 18px;margin:18px 0}
 .small{font-size:13px;color:#77716a}";
 
+impl Loaded {
+    fn layout(&mut self, width: i32) {
+        let (url, images) = (&self.url, &self.images);
+        let status = |src: &str| match image_key(url, src).and_then(|k| images.get(&k)) {
+            Some(Pic::Ready(img, _)) => render::ImgStatus::Ready(img.w, img.h),
+            Some(Pic::Broken) => render::ImgStatus::Broken,
+            _ => render::ImgStatus::Loading,
+        };
+        self.page = render::layout_with(&self.dom, "", width, &status);
+        self.width = width;
+    }
+
+    fn images_left(&self) -> usize {
+        self.images.values().filter(|p| matches!(p, Pic::Queued | Pic::Loading(_))).count()
+    }
+}
+
 impl Browser {
     pub fn new() -> Browser {
-        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false, show_security: false, error_url: None };
+        let mut b = Browser { edit: None, history: vec![], forward: vec![], loading: None, cur: None, error: None, scroll: 0, focus_field: None, area: Rect::default(), pending_fragment: None, fresh: false, show_security: false, error_url: None, pump_ticks: 0 };
         b.pending_fragment = None;
         b
     }
@@ -116,6 +178,7 @@ impl Browser {
             sys.web.stop(id);
         }
         if url.scheme == "hydatek" {
+            self.drop_images(sys);
             self.internal(sys, url);
             return;
         }
@@ -137,11 +200,99 @@ impl Browser {
         let dom = html::parse(&html);
         let title = dom.title();
         let width = (self.area.w - 2 * PAD).max(200);
-        let page = render::layout(&dom, "", width);
-        self.cur = Some(Loaded { url, title, html, page, width, values: vec![], security: None });
+        let mut images = BTreeMap::new();
+        for n in 0..dom.nodes.len() {
+            if dom.tag(n) != "img" {
+                continue;
+            }
+            let Some(key) = render::img_src(&dom, n).and_then(|s| image_key(&url, &s)) else { continue };
+            if images.contains_key(&key) {
+                continue;
+            }
+            let pic = if key.starts_with("data:") {
+                data_uri(&key).map_or(Pic::Broken, |d| decode_pic(&d))
+            } else if key.starts_with("file:") {
+                Pic::Broken // filled in by show_image
+            } else {
+                Pic::Queued
+            };
+            images.insert(key, pic);
+        }
+        let mut c = Loaded { url, title, dom, page: Page::default(), images, relayout: false, width, values: vec![], security: None };
+        c.layout(width);
+        self.cur = Some(c);
         self.scroll = 0;
         if let Some(f) = self.pending_fragment.take() {
             self.scroll_to(&f);
+        }
+    }
+
+    /// Show a picture on its own (an image address, or a file).
+    fn show_image(&mut self, url: Url, key: String, pic: Result<Image, &'static str>) {
+        let name = url::decode(key.rsplit('/').next().unwrap_or("")).split('?').next().unwrap_or("").to_string();
+        match pic {
+            Ok(img) => {
+                let title = format!("{} ({} × {})", if name.is_empty() { "Image" } else { &name }, img.w, img.h);
+                let html = format!("<html><head><title>{}</title><style>body{{margin:0;background:#2b2733}}</style></head><body><center><img src=\"{}\"></center></body></html>", esc(&title), esc(&key));
+                self.show(url, html);
+                if let Some(c) = self.cur.as_mut() {
+                    c.images.insert(key, Pic::Ready(Rc::new(img), None));
+                    let w = c.width;
+                    c.layout(w);
+                }
+            }
+            Err(why) => {
+                self.error = Some((String::from("Can't show this image"), format!("{} {}.", name, why)));
+                self.error_url = Some(url.to_string());
+            }
+        }
+    }
+
+    /// Cancel the current page's image downloads.
+    fn drop_images(&mut self, sys: &mut Sys) {
+        if let Some(c) = &self.cur {
+            for p in c.images.values() {
+                if let Pic::Loading(id) = p {
+                    sys.web.stop(*id);
+                }
+            }
+        }
+    }
+
+    /// Fetch queued images, take finished ones, and relayout when they change.
+    fn pump_images(&mut self, sys: &mut Sys) {
+        self.pump_ticks += 1;
+        let Some(c) = &mut self.cur else { return };
+        let mut changed = false;
+        let mut active = 0;
+        for p in c.images.values_mut() {
+            if let Pic::Loading(id) = p {
+                match sys.web.take(*id) {
+                    Some(Ok(r)) if r.status < 400 => *p = decode_pic(&r.body),
+                    Some(_) => *p = Pic::Broken,
+                    None => active += 1,
+                }
+                if !matches!(p, Pic::Loading(_)) {
+                    changed = true;
+                }
+            }
+        }
+        let referer = c.url.without_fragment();
+        for (k, p) in c.images.iter_mut() {
+            if active >= MAX_IMAGE_LOADS {
+                break;
+            }
+            if matches!(p, Pic::Queued) {
+                *p = Pic::Loading(sys.web.get_image(k, &referer));
+                active += 1;
+            }
+        }
+        c.relayout |= changed;
+        // lay out again when images arrive, at most a few times a second
+        if c.relayout && (active == 0 || self.pump_ticks % 30 == 0) {
+            let w = c.width;
+            c.layout(w);
+            c.relayout = false;
         }
     }
 
@@ -177,6 +328,12 @@ impl Browser {
                 self.index_page(sys)
             }
             "index" => self.index_page(sys),
+            "view" => {
+                let path = url.param("path").unwrap_or_default();
+                let pic = sys.fs.read(&path).ok_or("wasn't found").and_then(|d| picture::decode(&d));
+                self.show_image(url, format!("file:{}", path), pic);
+                return;
+            }
             "engine" => {
                 if let Some(id) = url.param("id") {
                     sys.search_engine = engines::by_id(&id).id.to_string();
@@ -392,11 +549,9 @@ impl Browser {
         let width = (area.w - 2 * PAD).max(200);
         if width != c.width {
             // the window was resized: lay the page out again
-            let dom = html::parse(&c.html);
-            c.page = render::layout(&dom, "", width);
-            c.width = width;
+            c.layout(width);
         }
-        let page = &c.page;
+        let (page, images, page_url) = (&c.page, &mut c.images, &c.url);
         let max = (page.height - area.h + PAD * 2).max(0);
         self.scroll = self.scroll.clamp(0, max);
         ui.rect(area, Color::rgb(page.bg));
@@ -408,6 +563,18 @@ impl Browser {
             match it {
                 Item::Rect { x, y, w, h, color } if visible(*y, *h) => ui.rect(Rect::new(ox + x, oy + y, *w, *h), Color::rgb(*color)),
                 Item::Frame { x, y, w, h, color } if visible(*y, *h) => ui.stroke(Rect::new(ox + x, oy + y, *w, *h), 0, 1, Color::rgb(*color)),
+                Item::Image { x, y, w, h, img } if visible(*y, *h) => match image_key(page_url, &page.images[*img]).and_then(|k| images.get_mut(&k)) {
+                    Some(Pic::Ready(im, cache)) => {
+                        let (dw, dh) = (w * s, h * s);
+                        if cache.as_ref().map_or(true, |(cw, ch, _)| (*cw, *ch) != (dw, dh)) {
+                            *cache = Some((dw, dh, crate::gfx::scale_argb(&im.px, im.w as i32, im.h as i32, dw, dh)));
+                        }
+                        if let Some((_, _, px)) = cache.as_ref() {
+                            ui.c.blend_argb(px, dw, dh, (ox + x) * s, (oy + y) * s);
+                        }
+                    }
+                    _ => ui.rect(Rect::new(ox + x, oy + y, *w, *h), Color::rgb(0xece6dd)),
+                },
                 Item::Text { x, y, size, face, color, text, underline, strike } if visible(*y - size, size + 4) => {
                     let w = crate::font::draw(ui.c, (ox + x) * s, (oy + y) * s, *face, size * s, text, Color::rgb(*color)) / s;
                     if *underline {
@@ -591,6 +758,7 @@ impl App for Browser {
                     None => String::new(),
                 },
                 (None, _) if self.error.is_some() => String::new(),
+                (None, Some(c)) if c.images_left() > 0 => format!("Loading images… {} to go", c.images_left()),
                 (None, Some(c)) => c.title.clone(),
                 _ => String::new(),
             };
@@ -603,9 +771,11 @@ impl App for Browser {
         if self.cur.is_none() && self.loading.is_none() && self.error.is_none() {
             self.go(sys, "hydatek://start", false);
         }
+        self.pump_images(sys);
         let Some((id, requested)) = self.loading.clone() else { return };
         let Some(res) = sys.web.take(id) else { return };
         self.loading = None;
+        self.drop_images(sys);
         match res {
             Ok(resp) => {
                 let url = Url::parse(&resp.url).or_else(|| Url::parse(&requested)).unwrap();
@@ -624,7 +794,16 @@ impl App for Browser {
                     self.error_url = Some(requested.clone());
                     return;
                 }
-                if ctype.contains("html") || ctype.is_empty() && text.trim_start().starts_with('<') {
+                let sniffed = picture::sniff(&resp.body);
+                let is_picture = ctype.starts_with("image/") || matches!(sniffed, Some(picture::Format::Png | picture::Format::Jpeg | picture::Format::Gif | picture::Format::Bmp));
+                if is_picture && !matches!(sniffed, Some(picture::Format::Svg)) {
+                    let key = image_key(&url, &url.to_string()).unwrap_or_else(|| url.to_string());
+                    let security = resp.security.clone();
+                    self.show_image(url, key, picture::decode(&resp.body));
+                    if let Some(c) = self.cur.as_mut() {
+                        c.security = security;
+                    }
+                } else if ctype.contains("html") || ctype.is_empty() && text.trim_start().starts_with('<') {
                     let dom = html::parse(&text);
                     sys.search.visited(&url.without_fragment(), &dom);
                     self.show(url, text);
@@ -845,7 +1024,12 @@ impl App for Browser {
         }
     }
 
+    fn open_path(&mut self, p: &str, sys: &mut Sys) {
+        let u = format!("hydatek://view?path={}", url::encode(p));
+        self.go(sys, &u, true);
+    }
+
     fn animating(&self) -> bool {
-        self.edit.is_some() || self.loading.is_some() || self.focus_field.is_some()
+        self.edit.is_some() || self.loading.is_some() || self.focus_field.is_some() || self.cur.as_ref().is_some_and(|c| c.relayout || c.images_left() > 0)
     }
 }

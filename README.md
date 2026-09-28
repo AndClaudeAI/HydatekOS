@@ -70,7 +70,8 @@ Windows, macOS or Linux.
   Excel (`.xlsx`) and CSV files open for viewing and editing and are export formats.
   Details: [docs/HYDA_WORKSPACE.md](docs/HYDA_WORKSPACE.md).
 - **Browser and Hyda Search:** HydatekOS's own web browser (HTML, CSS, layout,
-  links, forms, cookies, redirects, gzip) and search engine. Hyda Search indexes
+  pictures with its own JPEG / PNG / GIF decoders, links, forms, cookies,
+  redirects, gzip) and search engine. Hyda Search indexes
   the pages you visit, sites you add (with a polite crawler) and your files, and
   ranks results with BM25, privately on your computer. Secure sites work too,
   with HydatekOS's own TLS 1.3 / 1.2 and certificate checks against Mozilla's
@@ -89,8 +90,9 @@ An operating system is a long project. Here's what's still missing; the plan is 
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - **Wired Ethernet only, through the firmware's driver.** There are no Wi-Fi or
-  Bluetooth drivers yet. The browser shows no images, runs no JavaScript and
-  doesn't load external stylesheets, so most of today's sites look plain. Mail
+  Bluetooth drivers yet. The browser runs no JavaScript, doesn't load external
+  stylesheets and can't show WebP or SVG pictures yet, so most of today's
+  sites look plain. Mail
   holds local messages.
 - **Phone Link can't mirror a real phone's screen yet.** The demo phone shows how
   it will look. The Android app has been built and statically checked, and its
@@ -168,6 +170,7 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/doc.rs       Hyda Scripts documents: editing, .hyds, .docx/.txt/.md; zip.rs zip + inflate
   src/grid.rs      Hyda Grids formulas and formats; gridio.rs .hydg, .xlsx, .csv
   src/web/         browser engine: URL, DNS, HTTP, HTML, CSS/layout, Hyda Search
+  src/image/       JPEG, PNG, GIF and BMP decoders
   src/tls/         TLS 1.3/1.2, AES-GCM, X25519, P-256/384, RSA, X.509, CA list
 companion/web/     browser companion for phones (served by HydatekOS)
 companion/android/ HydatekOS Link for Android (built without the Android SDK)

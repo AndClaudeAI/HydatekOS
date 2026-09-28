@@ -30,6 +30,39 @@ index and crawler. None of it comes from another browser or search engine.
 
 ![An article](screenshots/browser-article.png)
 
+## Pictures
+
+![A page with pictures](screenshots/browser-images.png)
+
+HydatekOS decodes pictures itself, with its own decoders (`kernel/src/image/`):
+
+- **JPEG**, baseline and progressive, any chroma subsampling, restart
+  markers, greyscale, CMYK, and phone photos' EXIF rotation.
+- **PNG**, every colour type and bit depth, transparency and interlacing.
+- **GIF** (the first frame, with transparency) and **BMP**.
+
+On a page, pictures take the size the page gives them (`width` / `height`
+attributes or CSS), or their own, and are never wider than the text column:
+large ones shrink to fit, keeping their shape. They sit in lines of text like
+words, can be links, and keep their transparency. Pictures load six at a
+time after the text, and the page makes room as they arrive; lazily loaded
+pictures (`data-src`), `srcset` and `data:` addresses work. A picture that
+can't be shown shows its description (`alt` text) instead.
+
+![Thumbnails and a GIF icon](screenshots/browser-images-cards.png)
+
+Opening a picture's address shows it on its own, with its size in the status
+bar, and pictures in **Files** open the same way:
+
+![A picture from Files](screenshots/image-view.png)
+
+The decoders are compared with Pillow (libjpeg, libpng) pixel by pixel:
+PNG, GIF and BMP match exactly; JPEG is within a few levels (a slightly
+different inverse DCT). With Go installed, they're also checked against Go's
+image test files: the PNG suite and a photo in every JPEG subsampling,
+progressive and restart variant. 1,500 randomly damaged files check that a
+bad picture never crashes anything.
+
 ## Hyda Search
 
 ![Hyda Search results](screenshots/hyda-search.png)
@@ -135,7 +168,9 @@ a server refuses X25519).
 
 ## Not yet
 
-- **Images, JavaScript, web fonts and external stylesheets** (`<link rel=stylesheet>`).
+- **WebP, AVIF and SVG pictures** (they show their description), animation
+  (a GIF shows its first frame), and CSS background images.
+- **JavaScript, web fonts and external stylesheets** (`<link rel=stylesheet>`).
 - **Tabs, bookmarks, find in page, downloads list, and text selection on pages.**
 - **Layout:** floats, flexbox and grid are laid out as ordinary blocks, so
   multi-column pages stack their columns.
@@ -150,6 +185,7 @@ a server refuses X25519).
 | HTML parser | `kernel/src/web/html.rs` |
 | CSS, style and layout | `kernel/src/web/render.rs` |
 | Hyda Search: index, ranking, crawler | `kernel/src/web/search.rs` |
+| Picture decoders: JPEG, PNG, GIF, BMP | `kernel/src/image/` |
 | TLS: hashes, AES-GCM, X25519, P-256/P-384, RSA, X.509, the handshake | `kernel/src/tls/` |
 | The browser app and its built-in pages | `kernel/src/apps/browser.rs` |
 

@@ -21,6 +21,7 @@ mod gridio;
 mod heap;
 mod hlp;
 mod icons;
+mod image;
 mod input;
 mod crypto;
 mod doc;

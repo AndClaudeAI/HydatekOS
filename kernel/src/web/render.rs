@@ -323,6 +323,7 @@ struct Style {
     margin: [i32; 4],
     padding: [i32; 4],
     width: Option<i32>,
+    height: Option<i32>,
     max_width: Option<i32>,
     center_box: bool,
     border: Option<u32>,
@@ -373,6 +374,7 @@ fn default_style(tag: &str, parent: &Style) -> Style {
     s.margin = [0; 4];
     s.padding = [0; 4];
     s.width = None;
+    s.height = None;
     s.max_width = None;
     s.center_box = false;
     s.border = None;
@@ -533,6 +535,7 @@ fn apply(s: &mut Style, parent: &Style, prop: &str, v: &str, containing_w: i32) 
             }
         }
         "width" => s.width = length(&vl, s.size, containing_w),
+        "height" => s.height = if vl.ends_with('%') { None } else { length(&vl, s.size, 0) },
         "max-width" => s.max_width = length(&vl, s.size, containing_w),
         "border" | "border-bottom" | "border-top" => {
             if vl.contains("none") || vl.starts_with('0') {
@@ -559,6 +562,55 @@ pub enum Item {
     Rect { x: i32, y: i32, w: i32, h: i32, color: u32 },
     Text { x: i32, y: i32, size: i32, face: Face, color: u32, text: String, underline: bool, strike: bool },
     Frame { x: i32, y: i32, w: i32, h: i32, color: u32 },
+    /// an image: index into `Page::images`
+    Image { x: i32, y: i32, w: i32, h: i32, img: usize },
+}
+
+/// What the browser knows about an image while laying out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImgStatus {
+    Loading,
+    Ready(u32, u32),
+    Broken,
+}
+
+/// The address an <img> shows: `src`, unless that's a placeholder for a
+/// lazily loaded image (data-src) or missing (srcset).
+pub fn img_src(dom: &Dom, n: NodeId) -> Option<String> {
+    let get = |a: &str| dom.attr(n, a).map(str::trim).filter(|v| !v.is_empty());
+    let lazy = get("data-src").or_else(|| get("data-lazy-src")).or_else(|| get("data-original"));
+    let src = get("src");
+    let placeholder = src.map_or(true, |v| v.starts_with("data:") && v.len() < 300);
+    if let (false, Some(v)) = (placeholder, src) {
+        return Some(v.to_string());
+    }
+    if let Some(v) = lazy {
+        return Some(v.to_string());
+    }
+    // srcset: the widest candidate up to 1200px, or the 1x one
+    if let Some(set) = get("srcset").or_else(|| get("data-srcset")) {
+        let mut best: Option<(i32, &str)> = None;
+        for cand in set.split(", ") {
+            let mut parts = cand.split_whitespace();
+            let Some(url) = parts.next() else { continue };
+            let d = parts.next().unwrap_or("1x");
+            let score = if let Some(w) = d.strip_suffix('w') {
+                let w: i32 = w.parse().unwrap_or(0);
+                if w <= 1200 { w } else { -w }
+            } else if d == "1x" {
+                1000
+            } else {
+                0
+            };
+            if best.map_or(true, |(b, _)| score > b) {
+                best = Some((score, url));
+            }
+        }
+        if let Some((_, u)) = best {
+            return Some(u.to_string());
+        }
+    }
+    src.map(|v| v.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -585,6 +637,7 @@ pub struct Form {
     pub post: bool,
 }
 
+#[derive(Default)]
 pub struct Page {
     pub items: Vec<Item>,
     /// (x, y, w, h, href)
@@ -596,6 +649,8 @@ pub struct Page {
     pub bg: u32,
     /// y of elements with an id (for #fragment links)
     pub anchors: Vec<(String, i32)>,
+    /// image addresses, as written in the page
+    pub images: Vec<String>,
 }
 
 struct Frag {
@@ -610,6 +665,8 @@ struct Frag {
     link: Option<usize>,
     /// a form control drawn inline: index into fields
     field: Option<usize>,
+    /// an image drawn inline: index into Page::images
+    image: Option<usize>,
     h: i32,
 }
 
@@ -641,6 +698,7 @@ fn measure(f: Face, size: i32, s: &str) -> i32 {
 
 struct Engine<'a> {
     dom: &'a Dom,
+    images: &'a dyn Fn(&str) -> ImgStatus,
     rules: Vec<(Selector, usize, &'a [(String, String)])>,
     out: Page,
 }
@@ -712,8 +770,8 @@ impl<'a> Engine<'a> {
             }
             return;
         }
-        let lh = l.cur.iter().map(|f| if f.field.is_some() { f.h + 4 } else { f.size * 135 / 100 }).max().unwrap_or(16);
-        let asc = l.cur.iter().map(|f| if f.field.is_some() { f.h } else { f.size * 95 / 100 }).max().unwrap_or(12);
+        let lh = l.cur.iter().map(|f| if f.image.is_some() { f.h } else if f.field.is_some() { f.h + 4 } else { f.size * 135 / 100 }).max().unwrap_or(16);
+        let asc = l.cur.iter().map(|f| if f.field.is_some() || f.image.is_some() { f.h } else { f.size * 95 / 100 }).max().unwrap_or(12);
         let base = l.y + (lh - asc) / 2 + asc - 2;
         let used: i32 = l.cur_w;
         let dx = match l.align {
@@ -727,6 +785,14 @@ impl<'a> Engine<'a> {
                 let fld = &mut self.out.fields[fi];
                 fld.x = x;
                 fld.y = base - f.h + 4;
+                continue;
+            }
+            if let Some(img) = f.image {
+                let y = base - f.h + 2;
+                if let Some(li) = f.link {
+                    self.out.links.push((x, y, f.w, f.h, li));
+                }
+                self.out.items.push(Item::Image { x, y, w: f.w, h: f.h, img });
                 continue;
             }
             if let Some(li) = f.link {
@@ -750,7 +816,7 @@ impl<'a> Engine<'a> {
         let space = if l.pending_space && !l.cur.is_empty() { measure(f, size, " ") } else { 0 };
         // extend the previous fragment when the style continues
         if let Some(prev) = l.cur.last_mut() {
-            if prev.field.is_none() && prev.face == f && prev.size == size && prev.color == s.color && prev.link == s.link && prev.underline == s.underline && prev.strike == s.strike {
+            if prev.field.is_none() && prev.image.is_none() && prev.face == f && prev.size == size && prev.color == s.color && prev.link == s.link && prev.underline == s.underline && prev.strike == s.strike {
                 if space > 0 {
                     prev.text.push(' ');
                 }
@@ -763,7 +829,7 @@ impl<'a> Engine<'a> {
             }
         }
         l.cur_w += space;
-        l.cur.push(Frag { x: l.cur_w, w, text: word.to_string(), face: f, size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, h: 0 });
+        l.cur.push(Frag { x: l.cur_w, w, text: word.to_string(), face: f, size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0 });
         l.cur_w += w;
         l.pending_space = false;
     }
@@ -779,7 +845,7 @@ impl<'a> Engine<'a> {
                     l.pending_space = false;
                     let f = face(s);
                     let w = measure(f, s.size, &line);
-                    l.cur.push(Frag { x: l.cur_w, w, text: line, face: f, size: s.size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, h: 0 });
+                    l.cur.push(Frag { x: l.cur_w, w, text: line, face: f, size: s.size, color: s.color, underline: s.underline, strike: s.strike, link: s.link, field: None, image: None, h: 0 });
                     l.cur_w += w;
                 }
             }
@@ -811,7 +877,7 @@ impl<'a> Engine<'a> {
         }
         let fi = self.out.fields.len();
         self.out.fields.push(Field { x: 0, y: 0, w, h, form, ctl });
-        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: None, field: Some(fi), h });
+        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: None, field: Some(fi), image: None, h });
         l.cur_w += w;
         l.pending_space = true;
     }
@@ -838,15 +904,7 @@ impl<'a> Engine<'a> {
                         return;
                     }
                     "img" => {
-                        let alt = self.dom.attr(n, "alt").unwrap_or("").trim().to_string();
-                        if !alt.is_empty() {
-                            let mut st = cs.clone();
-                            st.italic = true;
-                            if st.link.is_none() {
-                                st.color = 0x77716a;
-                            }
-                            self.text(l, &st, &alloc::format!("[{}]", alt));
-                        }
+                        self.image(n, &cs, l);
                         return;
                     }
                     "input" | "button" | "textarea" | "select" => {
@@ -879,6 +937,68 @@ impl<'a> Engine<'a> {
             }
             Kind::Document => {}
         }
+    }
+
+    fn alt_text(&mut self, n: NodeId, s: &Style, l: &mut Lines) {
+        let alt = self.dom.attr(n, "alt").unwrap_or("").trim().to_string();
+        if !alt.is_empty() {
+            let mut st = s.clone();
+            st.italic = true;
+            if st.link.is_none() {
+                st.color = 0x77716a;
+            }
+            self.text(l, &st, &alloc::format!("[{}]", alt));
+        }
+    }
+
+    /// An <img> as an inline box: its size from CSS, its width/height
+    /// attributes and the picture itself, no wider than the line.
+    fn image(&mut self, n: NodeId, s: &Style, l: &mut Lines) {
+        let Some(src) = img_src(self.dom, n) else {
+            self.alt_text(n, s, l);
+            return;
+        };
+        let status = (self.images)(&src);
+        let attr = |a: &str| self.dom.attr(n, a).and_then(|v| v.trim().trim_end_matches("px").parse::<i32>().ok()).filter(|&v| v > 0);
+        let cw = s.width.filter(|&v| v > 0).or_else(|| attr("width"));
+        let ch = s.height.filter(|&v| v > 0).or_else(|| attr("height"));
+        let natural = match status {
+            ImgStatus::Ready(w, h) if w > 0 && h > 0 => Some((w as i32, h as i32)),
+            _ => None,
+        };
+        let size = match (cw, ch, natural) {
+            (Some(w), Some(h), _) => Some((w, h)),
+            (Some(w), None, Some((nw, nh))) => Some((w, (w as i64 * nh as i64 / nw as i64) as i32)),
+            (None, Some(h), Some((nw, nh))) => Some(((h as i64 * nw as i64 / nh as i64) as i32, h)),
+            (None, None, Some(nat)) => Some(nat),
+            _ => None,
+        };
+        let size = if status == ImgStatus::Broken { None } else { size };
+        let Some((mut w, mut h)) = size else {
+            if status == ImgStatus::Broken {
+                self.alt_text(n, s, l);
+            }
+            return;
+        };
+        let max = s.max_width.map_or(l.width, |m| m.min(l.width)).max(1);
+        if w > max {
+            h = (h as i64 * max as i64 / w as i64) as i32;
+            w = max;
+        }
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        if l.cur_w + w > l.width && !l.cur.is_empty() {
+            self.flush_line(l, false);
+        }
+        if l.pending_space && !l.cur.is_empty() {
+            l.cur_w += measure(face(s), s.size, " ");
+        }
+        let img = self.out.images.len();
+        self.out.images.push(src);
+        l.cur.push(Frag { x: l.cur_w, w, text: String::new(), face: face(s), size: s.size, color: s.color, underline: false, strike: false, link: s.link, field: None, image: Some(img), h });
+        l.cur_w += w;
+        l.pending_space = false;
     }
 
     fn control(&mut self, n: NodeId, tag: &str, s: &Style, l: &mut Lines, form: usize) {
@@ -979,6 +1099,13 @@ impl<'a> Engine<'a> {
             self.out.items.push(Item::Rect { x: bx, y: cy, w: bw, h: 1, color: 0xcfc8bd });
             return cy + 1 + mb.max(0);
         }
+        if tag == "img" {
+            // display: block
+            let mut lines = Lines { x0: x + ml.max(0), width: w - ml.max(0) - mr.max(0), y: cy, cur: vec![], cur_w: 0, align: if s.center_box { Align::Center } else { Align::Left }, pending_space: false };
+            self.image(n, &s, &mut lines);
+            self.flush_line(&mut lines, false);
+            return lines.y + pb + mb.max(0);
+        }
         if s.disp == Disp::Row {
             // cells side by side, equal widths
             let cells: Vec<NodeId> = self.dom.nodes[n].children.iter().copied().filter(|&c| matches!(self.dom.tag(c), "td" | "th")).collect();
@@ -1046,8 +1173,15 @@ fn is_inside(dom: &Dom, mut n: NodeId, anc: NodeId) -> bool {
     false
 }
 
-/// Style and lay out a parsed page for a viewport `width` px wide.
+/// Style and lay out a parsed page for a viewport `width` px wide, without
+/// images (their alt text shows). Used by the host tests.
+#[allow(dead_code)]
 pub fn layout(dom: &Dom, extra_css: &str, width: i32) -> Page {
+    layout_with(dom, extra_css, width, &|_| ImgStatus::Broken)
+}
+
+/// Lay out a page; `images` says what's known about each image address.
+pub fn layout_with(dom: &Dom, extra_css: &str, width: i32, images: &dyn Fn(&str) -> ImgStatus) -> Page {
     // stylesheets: <style> blocks in order (external sheets aren't fetched)
     let mut css = String::from(extra_css);
     for n in 0..dom.nodes.len() {
@@ -1082,12 +1216,13 @@ pub fn layout(dom: &Dom, extra_css: &str, width: i32) -> Page {
         margin: [0; 4],
         padding: [0; 4],
         width: None,
+        height: None,
         max_width: None,
         center_box: false,
         border: None,
         link: None,
     };
-    let mut e = Engine { dom, rules, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![] } };
+    let mut e = Engine { dom, images, rules, out: Page { items: vec![], links: vec![], hrefs: vec![], fields: vec![], forms: vec![Form { action: String::new(), post: false }], height: 0, bg: 0xffffff, anchors: vec![], images: vec![] } };
     let mut y = 0;
     let top: Vec<NodeId> = dom.nodes[0].children.clone();
     let mut lines = Lines { x0: 0, width, y: 0, cur: vec![], cur_w: 0, align: Align::Left, pending_space: false };

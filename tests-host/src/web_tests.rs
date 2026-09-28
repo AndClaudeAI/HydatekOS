@@ -106,7 +106,7 @@ fn http_responses() {
     let mut p = http::Parser::default();
     p.feed(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc").unwrap();
     assert!(p.finish("u").is_err());
-    let req = String::from_utf8(http::request("GET", &url::Url::parse("http://a.ng:8080/x?y").unwrap(), b"", "", "")).unwrap();
+    let req = String::from_utf8(http::request("GET", &url::Url::parse("http://a.ng:8080/x?y").unwrap(), b"", "", "", http::ACCEPT_PAGE, "")).unwrap();
     assert!(req.starts_with("GET /x?y HTTP/1.1\r\nHost: a.ng:8080\r\n"), "{}", req);
 }
 
@@ -184,4 +184,48 @@ fn search_engines() {
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[i + 1..].contains(k), "duplicate shortcut {}", k);
     }
+}
+
+#[test]
+fn images_in_layout() {
+    use render::{ImgStatus, Item};
+    let d = html::parse(
+        "<p>Logo <img src=/logo.png alt=Logo> here</p>\
+         <img src=big.jpg>\
+         <img src=sized.gif width=40 height=30>\
+         <img src=gone.png alt=\"A lost cat\">\
+         <img src=\"data:image/gif;base64,R0lGOD\" data-src=/real.jpg>\
+         <img srcset=\"s.jpg 300w, m.jpg 800w, l.jpg 2000w\">\
+         <img src=wait.png>",
+    );
+    let status = |src: &str| match src {
+        "/logo.png" => ImgStatus::Ready(64, 32),
+        "big.jpg" => ImgStatus::Ready(2000, 1000),
+        "gone.png" => ImgStatus::Broken,
+        "/real.jpg" => ImgStatus::Ready(100, 50),
+        "m.jpg" => ImgStatus::Ready(800, 400),
+        _ => ImgStatus::Loading,
+    };
+    let p = render::layout_with(&d, "", 600, &status);
+    let imgs: Vec<(String, i32, i32)> = p.items.iter().filter_map(|i| if let Item::Image { w, h, img, .. } = i { Some((p.images[*img].clone(), *w, *h)) } else { None }).collect();
+    assert_eq!(
+        imgs,
+        vec![
+            ("/logo.png".to_string(), 64, 32),
+            // no wider than the page, keeping its shape
+            ("big.jpg".to_string(), 600, 300),
+            // the page's size wins, even before it loads
+            ("sized.gif".to_string(), 40, 30),
+            ("/real.jpg".to_string(), 100, 50),
+            ("m.jpg".to_string(), 800.min(600), 300),
+        ]
+    );
+    // a broken image shows its alt text; one still loading shows nothing yet
+    let texts: Vec<String> = p.items.iter().filter_map(|i| if let Item::Text { text, .. } = i { Some(text.clone()) } else { None }).collect();
+    assert!(texts.join(" ").contains("[A lost cat]"), "{:?}", texts);
+    assert!(!texts.join(" ").contains("[Logo]"));
+    // the logo sits inline between the words
+    let logo_x = p.items.iter().find_map(|i| if let Item::Image { x, .. } = i { Some(*x) } else { None }).unwrap();
+    let here_x = p.items.iter().find_map(|i| if let Item::Text { x, text, .. } = i { (text == "here").then_some(*x) } else { None }).unwrap();
+    assert!(here_x > logo_x + 64);
 }

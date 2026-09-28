@@ -289,6 +289,22 @@ impl Canvas {
         }
     }
 
+    /// Draw ARGB pixels (w × h, straight alpha) at (x, y), blending by alpha.
+    pub fn blend_argb(&mut self, px: &[u32], w: i32, h: i32, x: i32, y: i32) {
+        let d = Rect::new(x, y, w, h).intersect(&self.clip);
+        if d.is_empty() {
+            return;
+        }
+        for yy in d.y..d.b() {
+            let src = ((yy - y) * w + (d.x - x)) as usize;
+            let dst = (yy * self.w + d.x) as usize;
+            for i in 0..d.w as usize {
+                let p = px[src + i];
+                blend(&mut self.px[dst + i], p, p >> 24);
+            }
+        }
+    }
+
     /// Horizontal span with fractional coverage at both ends (for wallpaper curves).
     pub fn vspan_aa(&mut self, x: i32, y_top_q8: i32, y_bot: i32, c: Color) {
         if x < self.clip.x || x >= self.clip.r() {
@@ -452,4 +468,66 @@ pub fn sin_q14(i: i32) -> i32 {
         2 => -v(j),
         _ => -v(256 - j),
     }
+}
+
+/// Resize ARGB pixels (straight alpha) to dw × dh: an area average when
+/// shrinking, bilinear when enlarging. Colours are weighted by alpha so
+/// transparent edges don't darken.
+pub fn scale_argb(src: &[u32], sw: i32, sh: i32, dw: i32, dh: i32) -> Vec<u32> {
+    let (sw, sh, dw, dh) = (sw.max(1) as i64, sh.max(1) as i64, dw.max(1) as i64, dh.max(1) as i64);
+    let mut out = vec![0u32; (dw * dh) as usize];
+    let chan = |p: u32| [(p >> 16) & 255, (p >> 8) & 255, p & 255, p >> 24];
+    let pack = |r: u64, g: u64, b: u64, a: u64, n: u64| -> u32 {
+        if a == 0 {
+            return 0;
+        }
+        // colour sums are alpha-weighted: divide by the alpha sum
+        (((a / n).min(255) as u32) << 24) | (((r / a).min(255) as u32) << 16) | (((g / a).min(255) as u32) << 8) | ((b / a).min(255) as u32)
+    };
+    if dw >= sw && dh >= sh {
+        // enlarge: bilinear, sample centres aligned
+        for y in 0..dh {
+            let fy = ((2 * y + 1) * sh * 128 / dh - 128).clamp(0, (sh - 1) * 256);
+            let (y0, wy) = (fy / 256, (fy % 256) as u64);
+            let y1 = (y0 + 1).min(sh - 1);
+            for x in 0..dw {
+                let fx = ((2 * x + 1) * sw * 128 / dw - 128).clamp(0, (sw - 1) * 256);
+                let (x0, wx) = (fx / 256, (fx % 256) as u64);
+                let x1 = (x0 + 1).min(sw - 1);
+                let mut acc = [0u64; 4];
+                for (px, wgt) in [(src[(y0 * sw + x0) as usize], (256 - wx) * (256 - wy)), (src[(y0 * sw + x1) as usize], wx * (256 - wy)), (src[(y1 * sw + x0) as usize], (256 - wx) * wy), (src[(y1 * sw + x1) as usize], wx * wy)] {
+                    let c = chan(px);
+                    let aw = c[3] as u64 * wgt;
+                    acc[0] += c[0] as u64 * aw;
+                    acc[1] += c[1] as u64 * aw;
+                    acc[2] += c[2] as u64 * aw;
+                    acc[3] += aw;
+                }
+                out[(y * dw + x) as usize] = pack(acc[0], acc[1], acc[2], acc[3], 65536);
+            }
+        }
+        return out;
+    }
+    // shrink (or mixed): average the source pixels under each output pixel
+    for y in 0..dh {
+        let y0 = y * sh / dh;
+        let y1 = ((y + 1) * sh / dh).max(y0 + 1).min(sh);
+        for x in 0..dw {
+            let x0 = x * sw / dw;
+            let x1 = ((x + 1) * sw / dw).max(x0 + 1).min(sw);
+            let mut acc = [0u64; 4];
+            for yy in y0..y1 {
+                let row = (yy * sw) as usize;
+                for xx in x0..x1 {
+                    let c = chan(src[row + xx as usize]);
+                    acc[0] += (c[0] * c[3]) as u64;
+                    acc[1] += (c[1] * c[3]) as u64;
+                    acc[2] += (c[2] * c[3]) as u64;
+                    acc[3] += c[3] as u64;
+                }
+            }
+            out[(y * dw + x) as usize] = pack(acc[0], acc[1], acc[2], acc[3], ((y1 - y0) * (x1 - x0)) as u64);
+        }
+    }
+    out
 }

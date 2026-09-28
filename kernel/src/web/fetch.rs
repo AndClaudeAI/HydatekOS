@@ -28,6 +28,8 @@ struct Job {
     method: &'static str,
     body: Vec<u8>,
     content_type: String,
+    accept: &'static str,
+    referer: String,
     redirects: u32,
     step: Step,
     ip: [u8; 4],
@@ -176,6 +178,8 @@ impl Fetcher {
                     method: r.method,
                     body: r.body,
                     content_type: r.content_type,
+                    accept: r.accept,
+                    referer: r.referer,
                     redirects: 0,
                     step: Step::Resolve,
                     ip: [0; 4],
@@ -224,6 +228,8 @@ impl Fetcher {
                                             method: if keep { j.method } else { "GET" },
                                             body: if keep { j.body } else { Vec::new() },
                                             content_type: j.content_type,
+                                            accept: j.accept,
+                                            referer: j.referer,
                                             redirects: j.redirects + 1,
                                             step: Step::Resolve,
                                             ip: [0; 4],
@@ -324,7 +330,7 @@ impl Fetcher {
                 let j = &mut self.jobs[k];
                 let c = j.conn?;
                 if !j.sent {
-                    let req = http::request(j.method, &j.url, &j.body, &j.content_type, &cookies);
+                    let req = http::request(j.method, &j.url, &j.body, &j.content_type, &cookies, j.accept, &j.referer);
                     match j.tls.as_mut() {
                         Some(t) => {
                             t.write(&req);

@@ -430,9 +430,8 @@ impl Shell {
     fn open_path(&mut self, p: &str) {
         let kind = if self.sys.fs.is_dir(p) {
             AppKind::Files
-        } else if p.ends_with(".img") {
-            self.toast("Files", "Image preview arrives with the image codecs in milestone 2");
-            return;
+        } else if [".png", ".jpg", ".jpeg", ".gif", ".bmp"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
+            AppKind::Browser
         } else if [".hydg", ".xlsx", ".csv"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
             AppKind::Grids
         } else if [".hyds", ".docx"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {

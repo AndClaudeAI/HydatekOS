@@ -33,6 +33,9 @@ pub struct Request {
     pub method: &'static str,
     pub body: Vec<u8>,
     pub content_type: String,
+    pub accept: &'static str,
+    /// the page that asked (for images)
+    pub referer: String,
 }
 
 /// Requests from apps and their results; the main loop's fetcher drains it.
@@ -47,17 +50,22 @@ pub struct WebQueue {
 
 impl WebQueue {
     pub fn get(&mut self, url: &str) -> u32 {
-        self.push(url, "GET", Vec::new(), String::new())
+        self.push(url, "GET", Vec::new(), String::new(), http::ACCEPT_PAGE, String::new())
+    }
+
+    /// An image for the page at `referer`.
+    pub fn get_image(&mut self, url: &str, referer: &str) -> u32 {
+        self.push(url, "GET", Vec::new(), String::new(), http::ACCEPT_IMAGE, String::from(referer))
     }
 
     pub fn post(&mut self, url: &str, body: Vec<u8>, content_type: &str) -> u32 {
-        self.push(url, "POST", body, String::from(content_type))
+        self.push(url, "POST", body, String::from(content_type), http::ACCEPT_PAGE, String::new())
     }
 
-    fn push(&mut self, url: &str, method: &'static str, body: Vec<u8>, content_type: String) -> u32 {
+    fn push(&mut self, url: &str, method: &'static str, body: Vec<u8>, content_type: String, accept: &'static str, referer: String) -> u32 {
         self.next += 1;
         let id = self.next;
-        self.queue.push(Request { id, url: String::from(url), method, body, content_type });
+        self.queue.push(Request { id, url: String::from(url), method, body, content_type, accept, referer });
         self.progress.insert(id, Progress::Resolving);
         id
     }
