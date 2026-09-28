@@ -18,6 +18,8 @@ pub mod deckio;
 pub mod pdf;
 #[path = "../../kernel/src/profile.rs"]
 pub mod profile;
+#[path = "../../kernel/src/accounts.rs"]
+pub mod accounts;
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
@@ -53,6 +55,8 @@ mod grid_tests;
 mod deck_tests;
 #[cfg(test)]
 mod profile_tests;
+#[cfg(test)]
+mod accounts_tests;
 #[cfg(test)]
 mod web_tests;
 #[cfg(test)]

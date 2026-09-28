@@ -89,9 +89,9 @@ and a missing photo falls back to your initials. The PIN and password stay in
 
 ## Limits
 
-- **One profile per computer.** Separate accounts for several people, with
-  their own files and permissions, are planned for milestone 5
-  ([ROADMAP.md](ROADMAP.md)).
+- Each account has its own profile ([ACCOUNTS.md](ACCOUNTS.md)). The files
+  above are the first account's; other accounts keep theirs in
+  `/system/users/<id>/`.
 - Photos can't be moved or zoomed within the circle: the middle square is used.
   There is no camera driver yet, so there is no "take a photo".
 - In a live session (read-only disk) the profile lasts until you restart, and the

@@ -12,6 +12,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub struct Terminal {
+    /// the signed-in account's name, for the prompt
+    login: String,
     cwd: String,
     out: Vec<String>,
     input: String,
@@ -31,12 +33,16 @@ const HELP: &[&str] = &[
     "  uname             system name           neofetch        system summary",
     "  theme dark|light  switch palette        clear           clear the screen",
     "  reboot            restart               shutdown        power off",
-    "  lock              lock the screen",
+    "  lock              lock the screen       whoami          who is signed in",
+    "  users             everyone's accounts",
 ];
 
 impl Terminal {
-    pub fn new() -> Terminal {
+    pub fn new(sys: &Sys) -> Terminal {
+        // the prompt's name: the first name in lower case, or the account id
+        let first: String = crate::profile::first_name(&sys.profile.name).chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
         Terminal {
+            login: if first.is_empty() { sys.user.clone() } else { first },
             cwd: "/home".to_string(),
             out: vec!["HydatekOS shell (hsh) 0.1 — type 'help' for commands.".to_string(), String::new()],
             input: String::new(),
@@ -69,7 +75,7 @@ impl Terminal {
 
     fn prompt(&self) -> String {
         let d = if self.cwd == "/home" { "~".to_string() } else if let Some(r) = self.cwd.strip_prefix("/home/") { format!("~/{}", r) } else { self.cwd.clone() };
-        format!("hydatek:{}$ ", d)
+        format!("{}@hydatek:{}$ ", self.login, d)
     }
 
     fn print(&mut self, s: &str) {
@@ -199,6 +205,20 @@ impl Terminal {
                 self.print(&format!("heap: {} KB used of {} MB · RAM: {} MB", u >> 10, t >> 20, sys.mem_total >> 20));
             }
             "uname" => self.print("HydatekOS 0.1 Dune x86_64-uefi"),
+            "whoami" => {
+                let kind = if sys.is_admin() { "administrator" } else { "standard account" };
+                let name = if sys.profile.ready() { sys.profile.name.clone() } else { sys.user.clone() };
+                self.print(&format!("{} ({}, {})", name, sys.user, kind));
+            }
+            "users" => {
+                if sys.people.is_empty() {
+                    self.print("one account (not set up yet)");
+                }
+                for p in &sys.people {
+                    let line = format!("{} {:<24} {:<5} {}{}", if p.id == sys.user { "*" } else { " " }, p.name, p.id, if p.admin { "administrator" } else { "standard" }, if p.new { ", not set up yet" } else { "" });
+                    self.out.push(line);
+                }
+            }
             "neofetch" => {
                 let (w, h, _) = sys.screen;
                 let (u, _) = crate::heap::HEAP.stats();

@@ -165,7 +165,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
         AppKind::Notes => Box::new(notes::Notes::new(sys)),
         AppKind::Settings => Box::new(settings::Settings::new(sys)),
         AppKind::Calendar => Box::new(calendar::Calendar::new(sys)),
-        AppKind::Terminal => Box::new(terminal::Terminal::new()),
+        AppKind::Terminal => Box::new(terminal::Terminal::new(sys)),
         AppKind::PhoneLink => Box::new(phonelink::PhoneLink::new()),
         AppKind::Messages => Box::new(messages::Messages::new()),
         AppKind::Mail => Box::new(mail::Mail::new()),

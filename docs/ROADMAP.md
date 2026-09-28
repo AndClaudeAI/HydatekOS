@@ -37,6 +37,7 @@
 
 ## M5 — everyday OS
 - Graphical installer for internal disks with dual-boot support
-- User accounts (several people, each with their own files), permissions, disk encryption
+- ✅ Accounts: several people, each with their own files, settings and sign-in, a Shared folder, administrators
+- Per-file permissions and sharing with one person, disk encryption, several people signed in at once
 - Updates, Secure Boot signing, an app SDK and package format
 - HydatekOS Mobile on ARM64 phones and tablets

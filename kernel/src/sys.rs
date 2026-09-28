@@ -102,6 +102,45 @@ pub struct Sys {
     pub avatar: crate::gfx::Canvas,
     /// a section Settings should show when it next draws
     pub settings_page: Option<usize>,
+    /// the accounts on this computer, and who is signed in
+    pub accounts: crate::accounts::Accounts,
+    pub user: String,
+    /// every account as the lock screen shows it
+    pub people: Vec<Person>,
+}
+
+/// A PIN or password: (salt, stretched hash).
+type Cred = ([u8; 16], [u8; 32]);
+
+/// An account as the lock screen and Settings see it.
+pub struct Person {
+    pub id: String,
+    pub admin: bool,
+    /// not set up by its owner yet
+    pub new: bool,
+    pub name: String,
+    pub avatar: crate::gfx::Canvas,
+    pin: Option<Cred>,
+    pw: Option<Cred>,
+    pub finger: bool,
+}
+
+impl Person {
+    pub fn has_pin(&self) -> bool {
+        self.pin.is_some()
+    }
+    pub fn has_password(&self) -> bool {
+        self.pw.is_some()
+    }
+    pub fn secured(&self) -> bool {
+        self.pin.is_some() || self.pw.is_some()
+    }
+    pub fn check_pin(&self, pin: &str) -> bool {
+        Sys::matches(&self.pin, pin)
+    }
+    pub fn check_password(&self, pw: &str) -> bool {
+        Sys::matches(&self.pw, pw)
+    }
 }
 
 /// Size the profile picture is rendered at (it is shown up to 128 points
@@ -161,14 +200,207 @@ impl Sys {
             photo: None,
             avatar: crate::gfx::Canvas::new(1, 1),
             settings_page: None,
+            accounts: Default::default(),
+            user: String::from(crate::accounts::FIRST),
+            people: Vec::new(),
         };
-        s.load_settings();
-        s.load_profile();
+        s.load_accounts();
+        s.user = if s.accounts.last.is_empty() { String::from(crate::accounts::FIRST) } else { s.accounts.last.clone() };
+        s.load_personal();
         s.load_link();
-        s.load_lock();
-        s.load_search();
-        s.load_events();
+        s.refresh_people();
         s
+    }
+
+    // ---- accounts ------------------------------------------------------------------
+
+    /// A file in the signed-in account's system folder.
+    fn sys_file(&self, name: &str) -> String {
+        alloc::format!("{}/{}", crate::accounts::system_dir(&self.user), name)
+    }
+
+    fn load_accounts(&mut self) {
+        if let Some(d) = self.fs.read_raw("/system/users.txt") {
+            self.accounts = crate::accounts::Accounts::parse(&String::from_utf8_lossy(&d));
+        }
+        if self.accounts.list.is_empty() && self.fs.exists_raw("/system/profile.txt") {
+            // set up before accounts existed: that person is the first account
+            self.ensure_first_account();
+        }
+    }
+
+    fn save_accounts(&mut self) {
+        let text = self.accounts.to_text();
+        self.fs.write_raw("/system/users.txt", text.as_bytes());
+    }
+
+    /// The first account, made when the computer is first set up.
+    pub fn ensure_first_account(&mut self) {
+        use crate::accounts::{Account, FIRST};
+        if self.accounts.list.is_empty() {
+            self.accounts.list.push(Account { id: String::from(FIRST), admin: true, new: false });
+            self.accounts.last = String::from(FIRST);
+            self.save_accounts();
+        }
+    }
+
+    /// Load everything that belongs to the signed-in account.
+    fn load_personal(&mut self) {
+        self.fs.scope = Some(crate::accounts::Scope::of(&self.user));
+        self.load_settings();
+        self.load_profile();
+        self.load_lock();
+        self.load_events();
+        self.load_search();
+    }
+
+    /// Forget the signed-in account's things (before loading another's).
+    fn reset_personal(&mut self) {
+        self.dark = false;
+        self.accent = 0;
+        self.focus = false;
+        self.mobile_shell = false;
+        self.pointer_speed = 3;
+        self.search_engine = String::from(crate::web::engines::HYDA);
+        self.lock_on_boot = true;
+        self.lock_idle = 10;
+        self.lock_pin = None;
+        self.lock_pw = None;
+        self.lock_finger = false;
+        self.profile = crate::profile::Profile::default();
+        self.photo = None;
+        self.events.clear();
+        self.search = crate::web::search::Search::default();
+        self.clipboard.clear();
+        self.settings_page = None;
+    }
+
+    /// Sign `id` in (the shell closes the previous account's apps first).
+    pub fn switch_user(&mut self, id: &str) {
+        if self.accounts.get(id).is_none() || id == self.user {
+            return;
+        }
+        self.save_settings();
+        self.reset_personal();
+        self.user = String::from(id);
+        self.accounts.last = String::from(id);
+        self.save_accounts();
+        self.load_personal();
+        self.refresh_people();
+    }
+
+    /// Rebuild the lock screen's list of accounts.
+    pub fn refresh_people(&mut self) {
+        use crate::profile::{Avatar, Profile, PIC_SIZE};
+        let mut people = Vec::new();
+        for a in self.accounts.list.clone() {
+            let dir = crate::accounts::system_dir(&a.id);
+            let (profile, photo) = if a.id == self.user {
+                (self.profile.clone(), self.photo.clone())
+            } else {
+                let p = self.fs.read_raw(&alloc::format!("{}/profile.txt", dir)).map(|d| Profile::parse(&String::from_utf8_lossy(&d))).unwrap_or_default();
+                let photo = if p.avatar == Avatar::Picture {
+                    self.fs.read_raw(&alloc::format!("{}/profile.png", dir)).and_then(|d| crate::image::decode(&d).ok()).map(|img| crate::profile::square(&img.px, img.w, img.h, PIC_SIZE))
+                } else {
+                    None
+                };
+                (p, photo)
+            };
+            let (pin, pw, finger) = if a.id == self.user { (self.lock_pin, self.lock_pw, self.lock_finger) } else { self.read_creds(&a.id) };
+            let name = if profile.ready() { profile.name.clone() } else { String::from("New account") };
+            people.push(Person { id: a.id.clone(), admin: a.admin, new: a.new, avatar: crate::avatar::render(profile.avatar, &profile.name, photo.as_deref(), 128), name, pin, pw, finger });
+        }
+        self.people = people;
+    }
+
+    /// The signed-in account may add and remove accounts.
+    pub fn is_admin(&self) -> bool {
+        self.accounts.get(&self.user).map_or(true, |a| a.admin)
+    }
+
+    /// The setup assistant should run: no profile yet, or an account someone
+    /// else made that its owner hasn't set up.
+    pub fn needs_setup(&self) -> bool {
+        !self.profile.ready() || self.accounts.get(&self.user).map_or(false, |a| a.new)
+    }
+
+    /// The setup assistant finished for the signed-in account.
+    pub fn setup_done(&mut self) {
+        self.ensure_first_account();
+        let user = self.user.clone();
+        if let Some(a) = self.accounts.get_mut(&user) {
+            a.new = false;
+        }
+        self.save_accounts();
+        self.refresh_people();
+    }
+
+    /// Add an account for `name` (administrators only). Its owner finishes
+    /// setting it up the first time they sign in.
+    pub fn add_account(&mut self, name: &str, admin: bool) -> Result<String, &'static str> {
+        use crate::accounts::{home_dir, system_dir, trash_dir, Account, MAX};
+        if !self.is_admin() {
+            return Err("Only an administrator can add accounts");
+        }
+        let name = crate::profile::clean_name(name).ok_or("Type the person's name")?;
+        if self.accounts.list.len() >= MAX {
+            return Err("This computer has the most accounts it can hold");
+        }
+        self.ensure_first_account();
+        let id = self.accounts.new_id();
+        let home = home_dir(&id);
+        for d in ["Documents", "Pictures", "Downloads"] {
+            self.fs.mkdir_raw(&alloc::format!("{}/{}", home, d));
+        }
+        self.fs.mkdir_raw(&trash_dir(&id));
+        let welcome = alloc::format!("Welcome to HydatekOS, {}!\n\nThis is your home folder: only you can see it. Put things in Shared\nto share them with everyone who uses this computer.\n", crate::profile::first_name(&name));
+        self.fs.write_raw(&alloc::format!("{}/Welcome.txt", home), welcome.as_bytes());
+        let dir = system_dir(&id);
+        let profile = crate::profile::Profile { avatar: crate::profile::Avatar::Initials(crate::profile::colour_for(&name)), name, since: (self.now.year, self.now.month, self.now.day) };
+        self.fs.write_raw(&alloc::format!("{}/profile.txt", dir), profile.to_text().as_bytes());
+        // an empty calendar (no sample events)
+        self.fs.write_raw(&alloc::format!("{}/calendar.txt", dir), b"");
+        self.accounts.list.push(Account { id: id.clone(), admin, new: true });
+        self.save_accounts();
+        self.refresh_people();
+        Ok(id)
+    }
+
+    /// Remove an account and everything it keeps (administrators only).
+    pub fn remove_account(&mut self, id: &str) -> Result<(), &'static str> {
+        if !self.is_admin() {
+            return Err("Only an administrator can remove accounts");
+        }
+        if id == self.user {
+            return Err("You can't remove the account you're signed in to");
+        }
+        if !self.accounts.removable(id) {
+            return Err("This account can't be removed");
+        }
+        for d in crate::accounts::account_dirs(id) {
+            self.fs.remove_raw(&d);
+        }
+        self.accounts.list.retain(|a| a.id != id);
+        self.save_accounts();
+        self.refresh_people();
+        Ok(())
+    }
+
+    /// Make an account an administrator or a standard account.
+    pub fn set_admin(&mut self, id: &str, admin: bool) -> Result<(), &'static str> {
+        if !self.is_admin() {
+            return Err("Only an administrator can change accounts");
+        }
+        if !admin && !self.accounts.demotable(id) {
+            return Err("There must be at least one administrator");
+        }
+        match self.accounts.get_mut(id) {
+            Some(a) => a.admin = admin,
+            None => return Err("No such account"),
+        }
+        self.save_accounts();
+        self.refresh_people();
+        Ok(())
     }
 
     pub fn toast(&mut self, title: &str, body: &str) {
@@ -176,7 +408,7 @@ impl Sys {
     }
 
     fn load_settings(&mut self) {
-        let Some(data) = self.fs.read("/system/settings.txt") else { return };
+        let Some(data) = self.fs.read_raw(&self.sys_file("settings.txt")) else { return };
         let text = String::from_utf8_lossy(&data).to_string();
         for line in text.lines() {
             let mut kv = line.splitn(2, '=');
@@ -214,18 +446,19 @@ impl Sys {
             self.lock_idle,
             self.search_engine
         );
-        self.fs.write("/system/settings.txt", s.as_bytes());
+        let f = self.sys_file("settings.txt");
+        self.fs.write_raw(&f, s.as_bytes());
     }
 
     // ---- profile ---------------------------------------------------------------------
 
     fn load_profile(&mut self) {
         use crate::profile::{Avatar, Profile, PIC_SIZE};
-        if let Some(data) = self.fs.read("/system/profile.txt") {
+        if let Some(data) = self.fs.read_raw(&self.sys_file("profile.txt")) {
             self.profile = Profile::parse(&String::from_utf8_lossy(&data));
         }
         if self.profile.avatar == Avatar::Picture {
-            self.photo = self.fs.read("/system/profile.png").and_then(|d| crate::image::decode(&d).ok()).map(|img| crate::profile::square(&img.px, img.w, img.h, PIC_SIZE));
+            self.photo = self.fs.read_raw(&self.sys_file("profile.png")).and_then(|d| crate::image::decode(&d).ok()).map(|img| crate::profile::square(&img.px, img.w, img.h, PIC_SIZE));
             if self.photo.is_none() {
                 self.profile.avatar = Avatar::Initials(crate::profile::colour_for(&self.profile.name));
             }
@@ -239,18 +472,22 @@ impl Sys {
         if self.profile.avatar == Avatar::Picture {
             if let Some(px) = &self.photo {
                 let png = crate::deckio::png_encode(PIC_SIZE, PIC_SIZE, px);
-                self.fs.write("/system/profile.png", &png);
+                let f = self.sys_file("profile.png");
+                self.fs.write_raw(&f, &png);
             }
         } else {
             self.photo = None;
-            self.fs.remove("/system/profile.png");
+            let f = self.sys_file("profile.png");
+            self.fs.remove_raw(&f);
         }
         if self.profile.since.0 == 0 {
             self.profile.since = (self.now.year, self.now.month, self.now.day);
         }
         let text = self.profile.to_text();
-        self.fs.write("/system/profile.txt", text.as_bytes());
+        let f = self.sys_file("profile.txt");
+        self.fs.write_raw(&f, text.as_bytes());
         self.refresh_avatar();
+        self.refresh_people();
     }
 
     pub fn refresh_avatar(&mut self) {
@@ -270,7 +507,7 @@ impl Sys {
     // ---- Hyda Search ---------------------------------------------------------------
 
     fn load_search(&mut self) {
-        if let Some(d) = self.fs.read("/system/search.hydx") {
+        if let Some(d) = self.fs.read_raw(&self.sys_file("search.hydx")) {
             self.search.index = crate::web::search::Index::load(&d);
         }
         self.index_files();
@@ -324,7 +561,8 @@ impl Sys {
         let now = self.ticks;
         self.search.tick(&mut self.web, now);
         if let Some(data) = self.search.to_save(now) {
-            self.fs.write("/system/search.hydx", &data);
+            let f = self.sys_file("search.hydx");
+            self.fs.write_raw(&f, &data);
         }
     }
 
@@ -362,10 +600,13 @@ impl Sys {
         diff == 0
     }
 
-    fn load_lock(&mut self) {
-        let Some(data) = self.fs.read("/system/lock.txt") else { return };
+    /// An account's PIN, password and fingerprint setting (its lock.txt).
+    fn read_creds(&self, id: &str) -> (Option<Cred>, Option<Cred>, bool) {
+        let path = alloc::format!("{}/lock.txt", crate::accounts::system_dir(id));
+        let Some(data) = self.fs.read_raw(&path) else { return (None, None, false) };
         let text = String::from_utf8_lossy(&data).to_string();
         let mut v: [Option<Vec<u8>>; 4] = Default::default();
+        let mut finger = false;
         for line in text.lines() {
             let Some((k, val)) = line.split_once('=') else { continue };
             // "salt"/"hash" are the PIN (the original format)
@@ -375,7 +616,7 @@ impl Sys {
                 "pw_salt" => (2, 16),
                 "pw_hash" => (3, 32),
                 "finger" => {
-                    self.lock_finger = val == "1";
+                    finger = val == "1";
                     continue;
                 }
                 _ => continue,
@@ -386,17 +627,24 @@ impl Sys {
             (Some(s), Some(h)) => Some((s.as_slice().try_into().unwrap(), h.as_slice().try_into().unwrap())),
             _ => None,
         };
-        self.lock_pin = pair(&v[0], &v[1]);
-        self.lock_pw = pair(&v[2], &v[3]);
-        if !self.secured() {
-            self.lock_finger = false;
-        }
+        let (pin, pw) = (pair(&v[0], &v[1]), pair(&v[2], &v[3]));
+        let finger = finger && (pin.is_some() || pw.is_some());
+        (pin, pw, finger)
+    }
+
+    fn load_lock(&mut self) {
+        let (pin, pw, finger) = self.read_creds(&self.user.clone());
+        self.lock_pin = pin;
+        self.lock_pw = pw;
+        self.lock_finger = finger;
     }
 
     fn save_lock(&mut self) {
         if !self.secured() {
             self.lock_finger = false;
-            self.fs.remove("/system/lock.txt");
+            let f = self.sys_file("lock.txt");
+            self.fs.remove_raw(&f);
+            self.refresh_people();
             return;
         }
         let b = crate::crypto::base64;
@@ -408,7 +656,9 @@ impl Sys {
             s += &format!("pw_salt={}\npw_hash={}\n", b(salt), b(hash));
         }
         s += &format!("finger={}\n", self.lock_finger as u8);
-        self.fs.write("/system/lock.txt", s.as_bytes());
+        let f = self.sys_file("lock.txt");
+        self.fs.write_raw(&f, s.as_bytes());
+        self.refresh_people();
     }
 
     pub fn has_pin(&self) -> bool {
@@ -477,13 +727,18 @@ impl Sys {
     /// Fingerprint unlock can be offered right now: allowed, and a real paired
     /// phone with a fingerprint sensor is connected.
     pub fn finger_ready(&self) -> bool {
-        self.lock_finger && !self.link.is_demo() && self.link.online && self.link.caps.iter().any(|c| c == "bio")
+        self.lock_finger && self.phone_can_confirm()
+    }
+
+    /// A real paired phone with a fingerprint sensor is connected.
+    pub fn phone_can_confirm(&self) -> bool {
+        !self.link.is_demo() && self.link.online && self.link.caps.iter().any(|c| c == "bio")
     }
 
     /// Pairing secret and the last paired phone (`/system/link.txt`).
     fn load_link(&mut self) {
         let mut have_key = false;
-        if let Some(data) = self.fs.read("/system/link.txt") {
+        if let Some(data) = self.fs.read_raw("/system/link.txt") {
             let text = String::from_utf8_lossy(&data).to_string();
             let mut phone = false;
             for line in text.lines() {
@@ -525,7 +780,7 @@ impl Sys {
             l.kind,
             l.caps.join(",")
         );
-        self.fs.write("/system/link.txt", s.as_bytes());
+        self.fs.write_raw("/system/link.txt", s.as_bytes());
     }
 
     /// Forget the paired phone and issue a new pairing code.
@@ -537,7 +792,7 @@ impl Sys {
     }
 
     fn load_events(&mut self) {
-        if let Some(data) = self.fs.read("/system/calendar.txt") {
+        if let Some(data) = self.fs.read_raw(&self.sys_file("calendar.txt")) {
             let text = String::from_utf8_lossy(&data).to_string();
             for line in text.lines() {
                 let f: Vec<&str> = line.split('|').collect();
@@ -576,7 +831,8 @@ impl Sys {
         for e in &self.events {
             s.push_str(&format!("{:04}-{:02}-{:02} {:02}:{:02}|{}|{}\n", e.y, e.m, e.d, e.hh, e.mm, e.title, e.place));
         }
-        self.fs.write("/system/calendar.txt", s.as_bytes());
+        let f = self.sys_file("calendar.txt");
+        self.fs.write_raw(&f, s.as_bytes());
     }
 
     pub fn add_event(&mut self, e: CalEvent) {
@@ -608,9 +864,9 @@ impl Sys {
     pub fn trust_store(&self) -> crate::tls::x509::Roots {
         let mut roots = crate::tls::x509::Roots::builtin();
         let builtin = roots.anchors.len();
-        for (name, dir, _) in self.fs.list(CERTS_DIR) {
+        for (name, dir, _) in self.fs.list_raw(CERTS_DIR) {
             if !dir {
-                if let Some(data) = self.fs.read(&crate::fs::join(CERTS_DIR, &name)) {
+                if let Some(data) = self.fs.read_raw(&crate::fs::join(CERTS_DIR, &name)) {
                     roots.add_file(&data);
                 }
             }

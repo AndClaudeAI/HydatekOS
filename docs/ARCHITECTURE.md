@@ -136,7 +136,16 @@ the boot volume, using the UEFI Simple File System. It's read back in full at bo
 /system/settings.txt, /system/calendar.txt    settings and events
 /system/profile.txt, /system/profile.png      your profile and its photo
 /system/lock.txt                              PIN and password hashes
+/system/users.txt                             the accounts
+/users/<id>/{home,trash}, /system/users/<id>  other accounts' files and settings
 ```
+
+Apps see the tree through the signed-in account's **scope**
+(`accounts::map`). In a session, `/home` and `/trash` are that account's own
+folders and `/home/Shared` is common to everyone, while `/system` and `/users`
+can't be reached at all, so another account's files and every sign-in hash are
+out of reach of Files, the dialogs and the Terminal. The system itself uses the
+`*_raw` methods, which see the tree as stored. See [ACCOUNTS.md](ACCOUNTS.md).
 
 If the boot volume is read-only, HydatekOS runs as a live session.
 

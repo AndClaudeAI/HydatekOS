@@ -7,7 +7,7 @@ use super::wallpaper;
 use crate::font::Face;
 use crate::gfx::{sin_q14, Rect};
 use crate::icons::Icon;
-use crate::sys::Sys;
+use crate::sys::{Person, Sys};
 use crate::ui::{Action, Key, Ui};
 use alloc::format;
 use alloc::string::String;
@@ -22,6 +22,8 @@ pub const MODE_PASSWORD: u8 = 21;
 pub const MODE_FINGER: u8 = 22;
 pub const RETRY: u8 = 23;
 pub const FIELD: u8 = 24;
+/// PERSON + n: choose account n (with several accounts)
+pub const PERSON: u8 = 40;
 // on-screen keyboard
 pub const KB_TOGGLE: u8 = 30;
 
@@ -39,6 +41,8 @@ pub enum Mode {
 
 #[derive(Default)]
 pub struct Lock {
+    /// with several accounts: the one being signed in to (index in sys.people)
+    pub who: usize,
     pub mode: Mode,
     pub entry: String,
     pub password: String,
@@ -58,25 +62,76 @@ pub enum Outcome {
     Unlock,
 }
 
+// ---- whose sign-in: with several accounts, the one chosen on the lock screen
+
+/// The chosen account, when there are several (otherwise the signed-in one's
+/// own settings are used).
+fn person(sys: &Sys, who: usize) -> Option<&Person> {
+    if sys.people.len() > 1 { sys.people.get(who) } else { None }
+}
+
+fn has_pin(sys: &Sys, who: usize) -> bool {
+    person(sys, who).map_or(sys.has_pin(), |p| p.has_pin())
+}
+
+fn has_password(sys: &Sys, who: usize) -> bool {
+    person(sys, who).map_or(sys.has_password(), |p| p.has_password())
+}
+
+fn secured(sys: &Sys, who: usize) -> bool {
+    person(sys, who).map_or(sys.secured(), |p| p.secured())
+}
+
+fn finger(sys: &Sys, who: usize) -> bool {
+    person(sys, who).map_or(sys.lock_finger, |p| p.finger)
+}
+
+fn check_pin(sys: &Sys, who: usize, pin: &str) -> bool {
+    person(sys, who).map_or_else(|| sys.check_pin(pin), |p| p.check_pin(pin))
+}
+
+fn check_password(sys: &Sys, who: usize, pw: &str) -> bool {
+    person(sys, who).map_or_else(|| sys.check_password(pw), |p| p.check_password(pw))
+}
+
 fn touch(sys: &Sys) -> bool {
     sys.screen.1 > sys.screen.0
 }
 
-fn methods(sys: &Sys) -> Vec<Mode> {
+fn methods(sys: &Sys, who: usize) -> Vec<Mode> {
     let mut m = Vec::new();
-    if sys.has_pin() {
+    if has_pin(sys, who) {
         m.push(Mode::Pin);
     }
-    if sys.has_password() {
+    if has_password(sys, who) {
         m.push(Mode::Password);
     }
-    if sys.lock_finger && sys.secured() {
+    if finger(sys, who) && secured(sys, who) {
         m.push(Mode::Finger);
     }
     m
 }
 
 impl Lock {
+    /// Start on the signed-in account (called on every lock).
+    pub fn select_current(&mut self, sys: &Sys) {
+        self.who = sys.people.iter().position(|p| p.id == sys.user).unwrap_or(0);
+    }
+
+    /// The account chosen to sign in to, when there are several.
+    pub fn chosen<'a>(&self, sys: &'a Sys) -> Option<&'a str> {
+        person(sys, self.who).map(|p| p.id.as_str())
+    }
+
+    /// Choose another account: whatever was typed is forgotten.
+    fn choose(&mut self, i: usize, sys: &mut Sys) {
+        if i < sys.people.len() && i != self.who {
+            self.cancel_finger(sys);
+            self.who = i;
+            self.reset(sys);
+        }
+    }
+
     /// Clear what was typed; also called on every lock. Starts on the PIN if
     /// there is one, otherwise on the password.
     pub fn reset(&mut self, sys: &Sys) {
@@ -84,7 +139,7 @@ impl Lock {
         self.password.clear();
         self.error.clear();
         self.finger = None;
-        self.mode = if sys.has_pin() { Mode::Pin } else { Mode::Password };
+        self.mode = if has_pin(sys, self.who) { Mode::Pin } else { Mode::Password };
         self.kb.reset();
         // touch-first (portrait) screens open the keyboard with the password
         self.osk = self.mode == Mode::Password && touch(sys);
@@ -112,14 +167,14 @@ impl Lock {
         }
         match self.mode {
             Mode::Pin if !self.entry.is_empty() => {
-                if sys.check_pin(&self.entry) {
+                if check_pin(sys, self.who, &self.entry) {
                     return self.unlocked(sys);
                 }
                 self.entry.clear();
                 self.failed(now, "PIN");
             }
             Mode::Password if !self.password.is_empty() => {
-                if sys.check_password(&self.password) {
+                if check_password(sys, self.who, &self.password) {
                     return self.unlocked(sys);
                 }
                 self.password.clear();
@@ -163,7 +218,7 @@ impl Lock {
     }
 
     fn set_mode(&mut self, m: Mode, sys: &mut Sys, now: u64) {
-        if !methods(sys).contains(&m) {
+        if !methods(sys, self.who).contains(&m) {
             return;
         }
         if self.mode == Mode::Finger && m != Mode::Finger {
@@ -182,7 +237,7 @@ impl Lock {
     /// Send a fingerprint request to the paired phone.
     fn ask_phone(&mut self, sys: &mut Sys, now: u64) {
         self.error.clear();
-        if !sys.finger_ready() {
+        if !(finger(sys, self.who) && sys.phone_can_confirm()) {
             return;
         }
         let mut id = [0u8; 8];
@@ -203,7 +258,7 @@ impl Lock {
     /// The phone answered a fingerprint request.
     pub fn phone_answer(&mut self, id: &str, ok: bool, sys: &Sys, now: u64) -> Outcome {
         let Some((want, sent)) = &self.finger else { return Outcome::Stay };
-        if want != id || now > sent + FINGER_TICKS || !sys.lock_finger {
+        if want != id || now > sent + FINGER_TICKS || !finger(sys, self.who) {
             return Outcome::Stay;
         }
         self.finger = None;
@@ -228,7 +283,11 @@ impl Lock {
 
     /// A click or tap on the lock screen.
     pub fn action(&mut self, a: u8, sys: &mut Sys, now: u64) -> Outcome {
-        if !sys.secured() {
+        if (PERSON..PERSON + crate::accounts::MAX as u8).contains(&a) {
+            self.choose((a - PERSON) as usize, sys);
+            return Outcome::Stay;
+        }
+        if !secured(sys, self.who) {
             return Outcome::Unlock;
         }
         match a {
@@ -252,7 +311,7 @@ impl Lock {
             d if (DIGIT..DIGIT + 10).contains(&d) && self.mode == Mode::Pin => {
                 self.digit((b'0' + d - DIGIT) as char, now);
                 // unlock as soon as a correct PIN is complete (tap-friendly)
-                if self.entry.len() >= 4 && sys.check_pin(&self.entry) {
+                if self.entry.len() >= 4 && check_pin(sys, self.who, &self.entry) {
                     return self.submit(sys, now);
                 }
             }
@@ -262,15 +321,24 @@ impl Lock {
     }
 
     pub fn key(&mut self, k: Key, sys: &mut Sys, now: u64) -> Outcome {
-        if !sys.secured() {
+        // with several accounts, ← and → choose (except while typing a password)
+        let n = sys.people.len();
+        if n > 1 && (self.mode != Mode::Password || self.password.is_empty() || !secured(sys, self.who)) {
+            match k {
+                Key::Left => return self.choose_step(n - 1, sys),
+                Key::Right => return self.choose_step(1, sys),
+                _ => {}
+            }
+        }
+        if !secured(sys, self.who) {
             return Outcome::Unlock;
         }
         // typing picks a method: digits the PIN, anything else the password
         // (once in the password, digits stay there)
         if let Key::Char(c) = k {
             if self.mode != Mode::Password {
-                let want = if c.is_ascii_digit() && sys.has_pin() { Mode::Pin } else { Mode::Password };
-                if self.mode != want && methods(sys).contains(&want) {
+                let want = if c.is_ascii_digit() && has_pin(sys, self.who) { Mode::Pin } else { Mode::Password };
+                if self.mode != want && methods(sys, self.who).contains(&want) {
                     self.set_mode(want, sys, now);
                 }
             }
@@ -279,7 +347,7 @@ impl Lock {
             Mode::Pin => match k {
                 Key::Char(c) if c.is_ascii_digit() => {
                     self.digit(c, now);
-                    if self.entry.len() >= 4 && sys.check_pin(&self.entry) {
+                    if self.entry.len() >= 4 && check_pin(sys, self.who, &self.entry) {
                         return self.submit(sys, now);
                     }
                 }
@@ -310,6 +378,12 @@ impl Lock {
         Outcome::Stay
     }
 
+    fn choose_step(&mut self, by: usize, sys: &mut Sys) -> Outcome {
+        let n = sys.people.len();
+        self.choose((self.who + by) % n, sys);
+        Outcome::Stay
+    }
+
     /// Needs redrawing every tick (shake, lockout countdown, caret, waiting)?
     pub fn animating(&self, now: u64) -> bool {
         now < self.shake_from + 40 || self.waiting(now) || self.mode == Mode::Password || self.finger.is_some()
@@ -324,8 +398,8 @@ impl Lock {
         // status icons
         ui.icon(Icon::Battery, r.r() - u(40), r.y + u(14), u(18), t.text);
         ui.icon(Icon::Wifi, r.r() - u(66), r.y + u(14), u(16), if sys.net.ip.is_some() { t.text } else { t.text3 });
-        let secured = sys.secured();
-        let methods = methods(sys);
+        let secured = secured(sys, self.who);
+        let methods = methods(sys, self.who);
         let mode = if methods.contains(&self.mode) { self.mode } else { *methods.first().unwrap_or(&Mode::Pin) };
         let keypad = mode == Mode::Pin && (tall || r.h >= 600);
         let key = if tall { u(54) } else { 52 };
@@ -342,7 +416,15 @@ impl Lock {
         };
         // one centred column: date, clock, Up next, who's signing in, sign-in,
         // sign-in options
-        let user_h = if sys.profile.ready() { u(if tall { 58 } else { 64 }) } else { 0 };
+        let many = sys.people.len() > 1;
+        let pd = u(if tall { 44 } else { 52 });
+        let user_h = if many {
+            pd + u(46)
+        } else if sys.profile.ready() {
+            u(if tall { 58 } else { 64 })
+        } else {
+            0
+        };
         let head_h = u(20) + u(16) + cs * 3 / 4 + u(34) + u(86) + user_h;
         let body_h = match mode {
             _ if !secured => 0,
@@ -370,9 +452,12 @@ impl Lock {
         ui.rrect(card, u(24), t.surface.with_alpha(235));
         let ic = Rect::new(card.x + u(18), card.y + u(21), u(44), u(44));
         ui.rrect(ic, u(12), t.accent);
-        ui.icon_in(Icon::Calendar, ic, u(20), t.on_accent);
-        ui.label(card.x + u(76), card.y + u(28), u(11), "UP NEXT", t.accent);
+        // another account chosen: nothing of the signed-in person's shows
+        let other = person(sys, self.who).map_or(false, |p| p.id != sys.user);
+        ui.icon_in(if other { Icon::User } else { Icon::Calendar }, ic, u(20), t.on_accent);
+        ui.label(card.x + u(76), card.y + u(28), u(11), if other { "SIGN IN" } else { "UP NEXT" }, t.accent);
         let (title, sub) = match sys.next_event() {
+            _ if other => (String::from("Choose your account"), String::from(if tall { "Tap your picture below" } else { "Click your picture, or use ← and →" })),
             Some(e) => (e.title.clone(), format!("{}{}{}", sys.event_when(e), if e.place.is_empty() { "" } else { " · " }, e.place)),
             None => (String::from("Nothing scheduled"), String::from("Enjoy your day")),
         };
@@ -382,7 +467,28 @@ impl Lock {
         ui.text(card.x + u(76), card.y + u(52), Face::Semibold, u(16), &title, t.text);
         ui.text(card.x + u(76), card.y + u(71), Face::Regular, u(13), &sub, t.text2);
 
-        if user_h > 0 {
+        if many {
+            // everyone who uses this computer; the chosen one is ringed
+            let n = sys.people.len() as i32;
+            let iw = u(88).min((r.w - u(24)) / n);
+            let x0 = cx - iw * n / 2;
+            let y = card.b() + u(16);
+            for (i, p) in sys.people.iter().enumerate() {
+                let c = x0 + i as i32 * iw + iw / 2;
+                let a = Action::Lock(PERSON + i as u8);
+                let on = i == self.who;
+                if on || ui.hot(a) {
+                    ui.circle(c, y + pd / 2, pd / 2 + u(4), if on { t.accent } else { t.surface });
+                }
+                ui.circle(c, y + pd / 2, pd / 2 + u(2), t.surface.with_alpha(235));
+                ui.avatar(Rect::new(c - pd / 2, y, pd, pd), &p.avatar);
+                let face = if on { Face::Semibold } else { Face::Medium };
+                let name = ui.fit(face, u(13), crate::profile::first_name(&p.name), iw - u(8));
+                let nw = ui.tw(face, u(13), &name);
+                ui.text(c - nw / 2, y + pd + u(20), face, u(13), &name, if on { t.text } else { t.text2 });
+                ui.zone(Rect::new(c - iw / 2, y - u(4), iw, pd + u(30)), a);
+            }
+        } else if user_h > 0 {
             // the profile picture and name
             let d = u(if tall { 38 } else { 44 });
             let name = ui.fit(Face::Semibold, u(17), &sys.profile.name, card.w - d - u(20));
@@ -439,12 +545,14 @@ impl Lock {
         let cx = r.x + r.w / 2;
         // phone notifications (titles only: bodies stay private while locked)
         let mut ny = card.b() + u(14);
-        let unread = sys.link.unread();
+        // (not while another account is chosen)
+        let other = person(sys, self.who).map_or(false, |p| p.id != sys.user);
+        let unread = if other { 0 } else { sys.link.unread() };
         let mut rows: Vec<(Icon, String, String)> = Vec::new();
         if unread > 0 {
             rows.push((Icon::Chat, String::from("Messages"), format!("{} unread conversation{}", unread, if unread == 1 { "" } else { "s" })));
         }
-        for n in sys.link.notifs.iter().take(3 - rows.len().min(3)) {
+        for n in sys.link.notifs.iter().take(if other { 0 } else { 3 - rows.len().min(3) }) {
             rows.push((Icon::Bell, n.app.clone(), n.title.clone()));
         }
         let hy = r.b() - if tall { u(150) } else { 140 };
@@ -459,7 +567,15 @@ impl Lock {
             ui.text(row.x + u(50), row.y + u(42), Face::Regular, u(13), &l, t.text2);
             ny += u(64);
         }
-        let hint = if tall { "Tap to unlock" } else { "Click or press any key to unlock" };
+        let signin;
+        let hint = match person(sys, self.who) {
+            Some(p) => {
+                signin = format!("{} to sign in as {}", if tall { "Tap" } else { "Click or press Enter" }, crate::profile::first_name(&p.name));
+                signin.as_str()
+            }
+            None if tall => "Tap to unlock",
+            None => "Click or press any key to unlock",
+        };
         let fs = u(14);
         let hw = ui.tw(Face::Medium, fs, hint);
         let pill = Rect::new(cx - hw / 2 - u(20), hy - u(24), hw + u(40), u(36));
@@ -603,7 +719,7 @@ impl Lock {
             (self.error.clone(), String::from("Tap the fingerprint to try again"))
         } else if !sys.link.online || sys.link.is_demo() {
             (String::from("Your phone isn't connected"), String::from("Open HydatekOS Link on your phone"))
-        } else if !sys.finger_ready() {
+        } else if !(finger(sys, self.who) && sys.phone_can_confirm()) {
             (format!("{} can't confirm fingerprints", phone), String::from("Set up a fingerprint on the phone first"))
         } else {
             (String::from("Unlock with your phone"), String::from("Tap the fingerprint to send a request"))

@@ -29,6 +29,7 @@ mod deck;
 mod deckio;
 mod pdf;
 mod profile;
+mod accounts;
 mod avatar;
 mod link;
 mod linksrv;

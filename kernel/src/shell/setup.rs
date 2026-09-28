@@ -73,6 +73,8 @@ pub struct Setup {
     secured: bool,
     /// running again from Settings (can be left without changes)
     pub again: bool,
+    /// a new account on a computer someone else set up
+    joining: bool,
     kb: Osk,
     osk: bool,
     preview: Option<(Choice, String, Canvas)>,
@@ -107,7 +109,8 @@ impl Setup {
             field: 0,
             error: String::new(),
             secured: sys.secured(),
-            again: p.ready(),
+            again: !sys.needs_setup(),
+            joining: sys.accounts.list.len() > 1 && sys.needs_setup(),
             kb: Osk::default(),
             osk: touch(sys),
             preview: None,
@@ -214,6 +217,7 @@ impl Setup {
         let since = sys.profile.since;
         sys.profile = Profile { name: self.name.clone(), avatar, since };
         sys.save_profile();
+        sys.setup_done();
         if !self.secured {
             match self.method {
                 Method::Pin => {
@@ -486,7 +490,11 @@ impl Setup {
         let top = if tall { body.y + u(30) } else { body.y + ((body.h - 250) / 2).max(20) };
         ui.shadow(Rect::new(cx - size / 2, top, size, size), u(20), u(14), u(6), 50);
         logo(ui, cx - size / 2, top, size, t.accent, t.on_accent);
-        let (title, sub) = if self.again {
+        let hello;
+        let (title, sub) = if self.joining {
+            hello = format!("Welcome, {}", profile::first_name(&self.name));
+            (hello.as_str(), "An account has been made for you on this computer. Let's make it yours: your name, a picture, how you sign in and how it looks.")
+        } else if self.again {
             ("Set up your profile", "Change your name, picture and look. Your files and apps stay as they are.")
         } else {
             ("Welcome to HydatekOS", "Let's make this computer yours: your name, a picture, how you sign in and how it looks. It takes about a minute.")

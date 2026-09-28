@@ -33,6 +33,13 @@ pub struct Vfs {
     pub root: Node,
     vol: *mut File,
     pub persistent: bool,
+    /// the signed-in account's view (None while starting up)
+    pub scope: Option<crate::accounts::Scope>,
+}
+
+/// Folders first, then names in alphabetical order (ignoring case).
+fn sort_listing(v: &mut Vec<(String, bool, usize)>) {
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.to_lowercase().cmp(&b.0.to_lowercase())));
 }
 
 pub fn split(path: &str) -> Vec<&str> {
@@ -57,7 +64,7 @@ pub fn basename(path: &str) -> &str {
 
 impl Vfs {
     pub fn mount() -> Vfs {
-        let mut v = Vfs { root: Node::dir(""), vol: open_volume(), persistent: false };
+        let mut v = Vfs { root: Node::dir(""), vol: open_volume(), persistent: false, scope: None };
         if !v.vol.is_null() {
             // Make sure \HYDATEK exists and is writable.
             if let Some(h) = open(v.vol, "\\HYDATEK", true, true) {
@@ -128,7 +135,7 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         self.write("/home/Documents/Invoices/INV-0042.txt", b"Invoice 0042\nTotal: 480.00\n");
     }
 
-    pub fn get(&self, path: &str) -> Option<&Node> {
+    pub fn get_raw(&self, path: &str) -> Option<&Node> {
         let mut n = &self.root;
         for part in split(path) {
             n = n.children.iter().find(|c| c.name == part)?;
@@ -144,35 +151,35 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         Some(n)
     }
 
-    pub fn exists(&self, path: &str) -> bool {
-        self.get(path).is_some()
+    pub fn exists_raw(&self, path: &str) -> bool {
+        self.get_raw(path).is_some()
     }
 
-    pub fn is_dir(&self, path: &str) -> bool {
-        self.get(path).map(|n| n.dir).unwrap_or(false)
+    pub fn is_dir_raw(&self, path: &str) -> bool {
+        self.get_raw(path).map(|n| n.dir).unwrap_or(false)
     }
 
-    pub fn list(&self, path: &str) -> Vec<(String, bool, usize)> {
-        let mut v: Vec<(String, bool, usize)> = match self.get(path) {
+    pub fn list_raw(&self, path: &str) -> Vec<(String, bool, usize)> {
+        let mut v: Vec<(String, bool, usize)> = match self.get_raw(path) {
             Some(n) => n.children.iter().filter(|c| !c.name.starts_with('.')).map(|c| (c.name.clone(), c.dir, c.size())).collect(),
             None => vec![],
         };
-        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        sort_listing(&mut v);
         v
     }
 
-    pub fn read(&self, path: &str) -> Option<Vec<u8>> {
-        self.get(path).filter(|n| !n.dir).map(|n| n.data.clone())
+    pub fn read_raw(&self, path: &str) -> Option<Vec<u8>> {
+        self.get_raw(path).filter(|n| !n.dir).map(|n| n.data.clone())
     }
 
-    pub fn mkdir(&mut self, path: &str) -> bool {
+    pub fn mkdir_raw(&mut self, path: &str) -> bool {
         let parts = split(path);
         let mut cur = String::new();
         for p in parts {
             let par = if cur.is_empty() { String::from("/") } else { cur.clone() };
             cur.push('/');
             cur.push_str(p);
-            if self.get(&cur).is_none() {
+            if self.get_raw(&cur).is_none() {
                 match self.get_mut(&par) {
                     Some(n) if n.dir => n.children.push(Node::dir(p)),
                     _ => return false,
@@ -187,10 +194,10 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         true
     }
 
-    pub fn write(&mut self, path: &str, data: &[u8]) -> bool {
+    pub fn write_raw(&mut self, path: &str, data: &[u8]) -> bool {
         let dir = parent(path);
         let name = basename(path).to_string();
-        if !self.mkdir(&dir) {
+        if !self.mkdir_raw(&dir) {
             return false;
         }
         let d = self.get_mut(&dir).unwrap();
@@ -205,7 +212,7 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
         true
     }
 
-    pub fn remove(&mut self, path: &str) -> bool {
+    pub fn remove_raw(&mut self, path: &str) -> bool {
         let dir = parent(path);
         let name = basename(path).to_string();
         if self.persistent {
@@ -222,26 +229,108 @@ The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. 
     }
 
     /// Move a file or folder (implemented as copy + delete for the disk backend).
-    pub fn rename(&mut self, from: &str, to: &str) -> bool {
-        if self.exists(to) || !self.exists(from) {
+    pub fn rename_raw(&mut self, from: &str, to: &str) -> bool {
+        if self.exists_raw(to) || !self.exists_raw(from) {
             return false;
         }
         fn copy(v: &mut Vfs, from: &str, to: &str) {
             let (dir, data, kids) = {
-                let n = v.get(from).unwrap();
+                let n = v.get_raw(from).unwrap();
                 (n.dir, n.data.clone(), n.children.iter().map(|c| c.name.clone()).collect::<Vec<_>>())
             };
             if dir {
-                v.mkdir(to);
+                v.mkdir_raw(to);
                 for k in kids {
                     copy(v, &join(from, &k), &join(to, &k));
                 }
             } else {
-                v.write(to, &data);
+                v.write_raw(to, &data);
             }
         }
         copy(self, from, to);
-        self.remove(from)
+        self.remove_raw(from)
+    }
+
+    // ---- the signed-in session's view ------------------------------------------
+    //
+    // Apps use these: `/home` and `/trash` are the account's own, `/home/Shared`
+    // is everyone's, and other accounts' folders and the system folder can't
+    // be reached (see accounts::map). The `*_raw` versions work on the tree as
+    // stored, for the system itself.
+
+    /// Where `path` is kept, if this session may reach it.
+    fn phys(&self, path: &str) -> Option<String> {
+        match &self.scope {
+            None => Some(path.to_string()),
+            Some(sc) => crate::accounts::map(sc, path),
+        }
+    }
+
+    /// A folder every session has (it can't be moved or removed).
+    fn fixed(&self, path: &str) -> bool {
+        self.scope.is_some() && crate::accounts::is_fixed(path)
+    }
+
+    pub fn get(&self, path: &str) -> Option<&Node> {
+        self.get_raw(&self.phys(path)?)
+    }
+
+    pub fn exists(&self, path: &str) -> bool {
+        self.phys(path).map_or(false, |p| self.exists_raw(&p))
+    }
+
+    pub fn is_dir(&self, path: &str) -> bool {
+        self.phys(path).map_or(false, |p| self.is_dir_raw(&p))
+    }
+
+    pub fn list(&self, path: &str) -> Vec<(String, bool, usize)> {
+        let Some(p) = self.phys(path) else { return vec![] };
+        let mut v = self.list_raw(&p);
+        if let Some(sc) = &self.scope {
+            if p == "/" {
+                v.retain(|e| !crate::accounts::hidden_at_root(&e.0));
+            }
+            // the shared folder shows in every home
+            if p == sc.home && sc.home != "/home" && !v.iter().any(|e| e.0 == "Shared") {
+                if let Some(n) = self.get_raw(crate::accounts::SHARED) {
+                    v.push((String::from("Shared"), true, n.size()));
+                    sort_listing(&mut v);
+                }
+            }
+        }
+        v
+    }
+
+    pub fn read(&self, path: &str) -> Option<Vec<u8>> {
+        self.read_raw(&self.phys(path)?)
+    }
+
+    pub fn mkdir(&mut self, path: &str) -> bool {
+        match self.phys(path) {
+            Some(p) => self.mkdir_raw(&p),
+            None => false,
+        }
+    }
+
+    pub fn write(&mut self, path: &str, data: &[u8]) -> bool {
+        match self.phys(path) {
+            Some(p) if !self.fixed(path) => self.write_raw(&p, data),
+            _ => false,
+        }
+    }
+
+    pub fn remove(&mut self, path: &str) -> bool {
+        match self.phys(path) {
+            Some(p) if !self.fixed(path) => self.remove_raw(&p),
+            _ => false,
+        }
+    }
+
+    pub fn rename(&mut self, from: &str, to: &str) -> bool {
+        match (self.phys(from), self.phys(to)) {
+            (Some(f), Some(t)) if !self.fixed(from) && !self.fixed(to) => self.rename_raw(&f, &t),
+            _ => false,
+        }
     }
 
     /// A name in `dir` that does not exist yet ("Untitled 2.txt").

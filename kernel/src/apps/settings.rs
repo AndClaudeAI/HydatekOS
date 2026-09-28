@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 9] = ["Profile", "Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
+pub const SECTIONS: [&str; 10] = ["Profile", "Accounts", "Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -38,6 +38,12 @@ pub struct Settings {
     picker: crate::avatar::Picker,
     /// the picture last chosen in the grid
     chosen: Option<crate::avatar::Choice>,
+    /// Accounts: the new account's name and type, the account waiting for
+    /// "Remove?" to be confirmed, and the last message
+    acc_name: String,
+    acc_admin: bool,
+    acc_confirm: Option<String>,
+    acc_msg: String,
     /// Phone layout: a section page is open (otherwise the section list).
     page: bool,
     /// what's being typed into the PIN / password field
@@ -54,7 +60,77 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+    }
+
+    /// The Accounts section: everyone who uses this computer.
+    fn render_accounts(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        let t = ui.t;
+        let admin = sys.is_admin();
+        let rh = 60;
+        let n = sys.people.len().max(1) as i32;
+        card(ui, Rect::new(m.x, m.y, m.w, n * rh + 8));
+        if sys.people.is_empty() {
+            ui.text(m.x + 16, m.y + 36, Face::Regular, 13, "Finish setting up this computer to add accounts.", t.text2);
+        }
+        for (i, p) in sys.people.iter().enumerate() {
+            let y = m.y + 4 + i as i32 * rh;
+            if i > 0 {
+                ui.rect(Rect::new(m.x + 16, y, m.w - 32, 1), t.line);
+            }
+            ui.avatar(Rect::new(m.x + 16, y + 12, 36, 36), &p.avatar);
+            let me = p.id == sys.user;
+            let right = m.r() - 16;
+            let tx = m.x + 64;
+            if self.acc_confirm.as_deref() == Some(p.id.as_str()) {
+                let q = format!("Remove {} and their files?", crate::profile::first_name(&p.name));
+                let q = ui.fit(Face::Semibold, 13, &q, right - 184 - tx);
+                ui.text(tx, y + 35, Face::Semibold, 13, &q, t.danger);
+                ui.button(Rect::new(right - 176, y + 14, 84, 32), "Cancel", Action::App(inst, C_ACC_CANCEL), false);
+                ui.button(Rect::new(right - 84, y + 14, 84, 32), "Remove", Action::App(inst, C_ACC_CONFIRM + i as u32), true);
+                continue;
+            }
+            let buttons = if admin && !me { 208 } else { 0 };
+            let name = ui.fit(Face::Semibold, 14, &p.name, right - buttons - tx);
+            ui.text(tx, y + 27, Face::Semibold, 14, &name, t.text);
+            let mut sub = String::from(if p.admin { "Administrator" } else { "Standard" });
+            if me {
+                sub.push_str(" · You");
+            }
+            if p.new {
+                sub.push_str(" · Not set up yet");
+            }
+            let sub = ui.fit(Face::Regular, 12, &sub, right - buttons - tx);
+            ui.text(tx, y + 45, Face::Regular, 12, &sub, t.text2);
+            if buttons > 0 {
+                let label = if p.admin { "Make standard" } else { "Make admin" };
+                ui.button(Rect::new(right - 208, y + 14, 120, 32), label, Action::App(inst, C_ACC_TYPE + i as u32), false);
+                ui.button(Rect::new(right - 80, y + 14, 80, 32), "Remove", Action::App(inst, C_ACC_REMOVE + i as u32), false);
+            }
+        }
+        let mut y = m.y + n * rh + 22;
+        if admin && !sys.people.is_empty() {
+            card(ui, Rect::new(m.x, y, m.w, 106));
+            ui.text(m.x + 16, y + 26, Face::Semibold, 14, "Add an account", t.text);
+            let f = Rect::new(m.x + 16, y + 42, (m.w - 32 - 96 - 150).max(120), 34);
+            ui.field(f, &self.acc_name, "Their name", self.focus == C_ACC_NAME, Action::App(inst, C_ACC_NAME));
+            ui.text(f.r() + 14, y + 64, Face::Regular, 13, "Administrator", t.text);
+            ui.switch(f.r() + 104, y + 48, self.acc_admin, Action::App(inst, C_ACC_ADMIN));
+            ui.button(Rect::new(m.r() - 16 - 80, y + 43, 80, 32), "Add", Action::App(inst, C_ACC_ADD), true);
+            let hint = "They set up their picture and sign-in the first time they sign in.";
+            let hint = ui.fit(Face::Regular, 12, hint, m.w - 32);
+            ui.text(m.x + 16, y + 96, Face::Regular, 12, &hint, t.text3);
+            y += 120;
+        }
+        let msg = if !self.acc_msg.is_empty() {
+            self.acc_msg.clone()
+        } else if admin {
+            String::from("Each account has its own files, settings and sign-in. Shared is for everyone.")
+        } else {
+            String::from("Only an administrator can add or remove accounts.")
+        };
+        let msg = ui.fit(Face::Regular, 12, &msg, m.w - 16);
+        ui.text(m.x + 8, y + 8, Face::Regular, 12, &msg, t.text2);
     }
 
     /// The Profile section.
@@ -113,7 +189,7 @@ impl Settings {
             _ => "None: any key or click unlocks",
         };
         row(ui, inner, y + 12, "Sign-in", st);
-        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Sign-in options", Action::App(inst, C_SECTION + 5), false);
+        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Sign-in options", Action::App(inst, C_SECTION + 6), false);
         y += 78;
         card(ui, Rect::new(m.x, y, m.w, 64));
         let inner = Rect::new(m.x + 16, y, m.w - 32, 64);
@@ -137,7 +213,15 @@ const C_NAME_FIELD: u32 = 23;
 const C_NAME_SAVE: u32 = 24;
 const C_PICTURE: u32 = 25;
 const C_SETUP: u32 = 26;
+const C_ACC_NAME: u32 = 27;
+const C_ACC_ADD: u32 = 28;
+const C_ACC_ADMIN: u32 = 29;
+const C_ACC_CANCEL: u32 = 30;
 const C_PICK: u32 = 1000;
+/// + account index
+const C_ACC_TYPE: u32 = 1100;
+const C_ACC_REMOVE: u32 = 1200;
+const C_ACC_CONFIRM: u32 = 1300;
 const IDLE_STEPS: [u32; 6] = [0, 2, 5, 10, 15, 30];
 
 fn row(ui: &mut Ui, r: Rect, y: i32, title: &str, sub: &str) {
@@ -204,7 +288,8 @@ impl App for Settings {
         let sw_x = m.r() - 54;
         match self.sec {
             0 => self.render_profile(ui, m, sys, inst),
-            1 => {
+            1 => self.render_accounts(ui, m, sys, inst),
+            2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
                 row(ui, inner, m.y + 12, "Dark mode", "Dusk palette for evenings");
@@ -238,7 +323,7 @@ impl App for Settings {
                 row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
                 ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
             }
-            2 => {
+            3 => {
                 let n = &sys.net;
                 card(ui, Rect::new(m.x, m.y, m.w, 210));
                 let (status, sub) = match (n.present, n.ip) {
@@ -258,7 +343,7 @@ impl App for Settings {
                 row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", "Wi-Fi adapter drivers are not included yet; use Ethernet");
                 ui.switch(sw_x, m.y + 244, sys.wifi, Action::App(inst, C_WIFI));
             }
-            3 => {
+            4 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 64));
                 row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, "Bluetooth", if sys.bt { "On" } else { "Off" });
                 ui.switch(sw_x, m.y + 20, sys.bt, Action::App(inst, C_BT));
@@ -270,7 +355,7 @@ impl App for Settings {
                     ui.text(m.x + 16, m.y + 128 + i as i32 * 20, Face::Regular, 13, &l, t.text2);
                 }
             }
-            4 => {
+            5 => {
                 let l = &sys.link;
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let st = match l.source {
@@ -298,7 +383,7 @@ impl App for Settings {
                     ui.button(Rect::new(m.x + 160, m.y + 146, 110, 32), "Unpair", Action::App(inst, C_UNPAIR), false);
                 }
             }
-            5 => {
+            6 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 124));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 124);
                 row(ui, inner, m.y + 12, "Show at startup", "Lock the screen when HydatekOS starts");
@@ -354,7 +439,7 @@ impl App for Settings {
                 ui.button(Rect::new(m.x, top + 202, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
                 ui.text(m.x + 142, top + 222, Face::Regular, 12, "or press F12", t.text3);
             }
-            6 => {
+            7 => {
                 use crate::web::engines::ENGINES;
                 ui.text(m.x, m.y + 14, Face::Semibold, 14, "Search engine", t.text);
                 let tip = ui.fit(Face::Regular, 12, "For searches typed in the address bar. Add !d, !g, !w... to a search to use another once.", m.w);
@@ -379,7 +464,7 @@ impl App for Settings {
                     ui.zone(rr, a);
                 }
             }
-            7 => {
+            8 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
@@ -405,8 +490,68 @@ impl App for Settings {
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
         let was = self.focus;
-        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE].contains(&code) { code } else { 0 };
+        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN].contains(&code) { code } else { 0 };
+        if self.focus == C_ACC_ADMIN {
+            self.focus = C_ACC_NAME;
+        }
+        if !(C_ACC_REMOVE..C_ACC_REMOVE + 16).contains(&code) {
+            self.acc_confirm = None;
+        }
         match code {
+            C_ACC_NAME | C_ACC_CANCEL => return,
+            C_ACC_ADMIN => {
+                self.acc_admin = !self.acc_admin;
+                return;
+            }
+            C_ACC_ADD => {
+                let admin = self.acc_admin;
+                self.acc_msg = match sys.add_account(&self.acc_name, admin) {
+                    Ok(_) => {
+                        let msg = format!("Added {}. They can sign in from the lock screen.", crate::profile::first_name(&crate::profile::clean_name(&self.acc_name).unwrap_or_default()));
+                        self.acc_name.clear();
+                        self.acc_admin = false;
+                        msg
+                    }
+                    Err(e) => {
+                        self.focus = C_ACC_NAME;
+                        String::from(e)
+                    }
+                };
+                return;
+            }
+            c if (C_ACC_TYPE..C_ACC_TYPE + 16).contains(&c) => {
+                if let Some(p) = sys.people.get((c - C_ACC_TYPE) as usize) {
+                    let (id, admin) = (p.id.clone(), !p.admin);
+                    self.acc_msg = match sys.set_admin(&id, admin) {
+                        Ok(()) => String::new(),
+                        Err(e) => String::from(e),
+                    };
+                }
+                return;
+            }
+            c if (C_ACC_REMOVE..C_ACC_REMOVE + 16).contains(&c) => {
+                if let Some(p) = sys.people.get((c - C_ACC_REMOVE) as usize) {
+                    if sys.accounts.removable(&p.id) && p.id != sys.user {
+                        self.acc_confirm = Some(p.id.clone());
+                        self.acc_msg.clear();
+                    } else if p.id == crate::accounts::FIRST {
+                        self.acc_msg = String::from("The first account holds the computer's original folders, so it stays.");
+                    } else {
+                        self.acc_msg = String::from("There must be at least one administrator.");
+                    }
+                }
+                return;
+            }
+            c if (C_ACC_CONFIRM..C_ACC_CONFIRM + 16).contains(&c) => {
+                if let Some(p) = sys.people.get((c - C_ACC_CONFIRM) as usize) {
+                    let (id, name) = (p.id.clone(), String::from(crate::profile::first_name(&p.name)));
+                    self.acc_msg = match sys.remove_account(&id) {
+                        Ok(()) => format!("Removed {}'s account and files.", name),
+                        Err(e) => String::from(e),
+                    };
+                }
+                return;
+            }
             C_NAME_FIELD => {
                 if was != C_NAME_FIELD {
                     self.name = sys.profile.name.clone();
@@ -542,6 +687,18 @@ impl App for Settings {
     }
 
     fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+        if self.focus == C_ACC_NAME {
+            match k {
+                Key::Char(c) if !c.is_control() && self.acc_name.chars().count() < crate::profile::NAME_MAX => self.acc_name.push(c),
+                Key::Backspace => {
+                    self.acc_name.pop();
+                }
+                Key::Enter => self.action(C_ACC_ADD, false, sys),
+                Key::Esc => self.focus = 0,
+                _ => {}
+            }
+            return;
+        }
         if self.focus == C_NAME_FIELD {
             match k {
                 Key::Char(c) if !c.is_control() && self.name.chars().count() < crate::profile::NAME_MAX => self.name.push(c),

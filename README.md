@@ -24,6 +24,10 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Desktop](docs/screenshots/desktop.png) | ![Phone Link](docs/screenshots/phone-link-real-phone.png) | ![Mobile shell](docs/screenshots/mobile-shell.png) |
 
+| Choosing an account | Settings › Accounts | A new account's first sign-in |
+|---|---|---|
+| ![Choosing an account](docs/screenshots/accounts-chooser.png) | ![Settings › Accounts](docs/screenshots/accounts-settings.png) | ![Welcome](docs/screenshots/accounts-welcome.png) |
+
 | Setup assistant | Choosing a profile picture | Settings › Profile |
 |---|---|---|
 | ![Setup assistant](docs/screenshots/setup-welcome.png) | ![Picture](docs/screenshots/setup-picture.png) | ![Settings › Profile](docs/screenshots/settings-profile.png) |
@@ -47,6 +51,12 @@ Windows, macOS or Linux.
   menu bar, the desktop greets you, and documents you make carry your name as
   their author (in Word, Excel, PowerPoint and PDF files too). Change it all in
   Settings › Profile. Details: [docs/PROFILE.md](docs/PROFILE.md).
+- **Accounts:** several people can share the computer, each with their own home
+  folder, Bin, settings, sign-in, calendar and search. A Shared folder is common
+  to all. Administrators add, remove and promote accounts in Settings › Accounts,
+  and new people set up their own picture and PIN the first time they sign in.
+  The lock screen shows everyone's picture to choose from, and inside HydatekOS
+  nobody can reach anyone else's files. Details: [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 - **Boot logo and lock screen:** after the PC maker's logo the screen goes black
   and the **Hydatek Systems** wordmark fades in, in white, with a thin progress bar
   while drivers, files and the network come up, then a fade into the lock screen (clock,
@@ -126,8 +136,8 @@ An operating system is a long project. Here's what's still missing; the plan is 
   works through a paired Android phone's sensor instead. The on-screen keyboard is
   on the lock screen and in the setup assistant so far; other text fields still
   need a physical keyboard.
-- **One profile per computer:** accounts for several people, with their own files
-  and permissions, come later.
+- **Accounts keep people apart inside HydatekOS only:** files aren't encrypted
+  yet, and one person is signed in at a time.
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
 
@@ -172,6 +182,7 @@ covers putting HydatekOS on the internal disk next to another OS.
 | Bold / italic / underline in Hyda Scripts | **Ctrl+B** / **Ctrl+I** / **Ctrl+U** |
 | Rename / delete a file | **F2** / **Delete** (File menu has the same actions) |
 | Lock the screen | **F12**, the logo menu, or `lock` in Terminal |
+| Switch account / sign out | Lock the screen and choose another picture / profile menu › **Sign Out** |
 | Shell commands | Open Terminal and type `help` |
 | Restart / shut down | HydatekOS logo menu, or Settings › About |
 
@@ -190,6 +201,7 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
   src/fs.rs        virtual file system persisted to the boot disk
   src/shell/       desktop shell, window manager, mobile shell, lock screen, setup assistant
   src/profile.rs   your profile (name, picture); avatar.rs draws profile pictures
+  src/accounts.rs  accounts: the list, where each one's files are, what a session may reach
   src/apps/        built-in applications
   assets/fonts.bin prebuilt glyph atlases (regenerate with tools/fontgen.py)
   assets/boot-logo.png  the boot wordmark (made by tools/bootlogo.py from
@@ -209,7 +221,7 @@ tests-host/        host-side tests of kernel modules
 assets/branding/   the Hydatek Systems wordmark (source of the boot logo)
 assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans and Sans Mono) + licences
 tools/             image builder, QEMU runner, GPT writer, font generator, boot logo maker
-docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, roadmap
+docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, accounts, roadmap
 ```
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

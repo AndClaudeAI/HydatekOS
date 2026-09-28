@@ -78,6 +78,7 @@ enum Cmd {
     Restart,
     Shutdown,
     Profile,
+    SignOut,
     None,
 }
 
@@ -162,6 +163,8 @@ pub struct Shell {
     last_input: u64,
     /// the setup assistant, while it's showing
     setup: Option<setup::Setup>,
+    /// signed out: the next sign-in starts a fresh session
+    signed_out: bool,
 }
 
 impl Shell {
@@ -194,12 +197,13 @@ impl Shell {
             unlocking: None,
             last_input: 0,
             setup: None,
+            signed_out: false,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
             sh.open_app(AppKind::Files);
         }
-        let first = !sh.sys.profile.ready();
+        let first = sh.sys.needs_setup();
         if first {
             // a computer with a PIN or password stays locked until it's given
             sh.setup = Some(setup::Setup::new(&sh.sys));
@@ -208,7 +212,9 @@ impl Shell {
             let hello = alloc::format!("{}!", sh.sys.greeting());
             sh.sys.toast(&hello, msg);
         }
-        sh.locked = sh.sys.lock_on_boot && (!first || sh.sys.secured());
+        // with several accounts, everyone starts at the lock screen to choose
+        sh.locked = (sh.sys.lock_on_boot && (!first || sh.sys.secured())) || sh.sys.people.len() > 1;
+        sh.lock.select_current(&sh.sys);
         sh.lock.reset(&sh.sys);
         sh
     }
@@ -324,6 +330,7 @@ impl Shell {
     pub fn lock_now(&mut self) {
         self.locked = true;
         self.unlocking = None;
+        self.lock.select_current(&self.sys);
         self.lock.reset(&self.sys);
         self.menu = None;
         self.launcher = None;
@@ -332,10 +339,61 @@ impl Shell {
     }
 
     fn unlock(&mut self) {
+        // someone else chose their account on the lock screen: sign them in
+        let chosen = self.lock.chosen(&self.sys).map(String::from);
+        if let Some(id) = chosen.filter(|id| *id != self.sys.user) {
+            self.sign_in(&id);
+        } else if self.signed_out {
+            self.start_session();
+        }
         self.unlocking = Some(self.sys.ticks);
         self.lock.cancel_finger(&mut self.sys);
         self.lock.reset(&self.sys);
         self.dirty = true;
+    }
+
+    /// Close every app (each saves its work), as when signing out.
+    fn close_apps(&mut self) {
+        for mut w in core::mem::take(&mut self.wins) {
+            w.app.close(&mut self.sys);
+        }
+        self.local.act(MobileAct::Home, &mut self.sys);
+        self.menu = None;
+        self.launcher = None;
+        self.drag = None;
+        self.toasts.clear();
+        self.kfocus = KFocus::Top;
+    }
+
+    /// Sign out: close the apps and show the lock screen, where anyone can
+    /// choose their account.
+    fn sign_out(&mut self) {
+        self.close_apps();
+        self.signed_out = true;
+        self.lock_now();
+    }
+
+    /// Switch the session to account `id`.
+    fn sign_in(&mut self, id: &str) {
+        self.close_apps();
+        self.sys.switch_user(id);
+        self.start_session();
+    }
+
+    /// A fresh session for the signed-in account: the setup assistant if it
+    /// hasn't been set up, otherwise the desktop with Files.
+    fn start_session(&mut self) {
+        self.signed_out = false;
+        if self.sys.needs_setup() {
+            self.setup = Some(setup::Setup::new(&self.sys));
+            return;
+        }
+        self.setup = None;
+        if !self.mobile_mode() {
+            self.open_app(AppKind::Files);
+        }
+        let hello = alloc::format!("{}!", self.sys.greeting());
+        self.toast(&hello, "Welcome back.");
     }
 
     /// Advance one tick (10 ms). Returns true if the screen needs redrawing.
@@ -608,6 +666,9 @@ impl Shell {
             let first = self.setup.as_ref().map_or(false, |s| !s.again && s.step == setup::Step::Done);
             self.setup = None;
             self.hover = None;
+            if self.wins.is_empty() && !self.mobile_mode() {
+                self.open_app(AppKind::Files);
+            }
             if first {
                 let msg = if self.sys.fs.persistent { "Your files are saved to this disk." } else { "Live session: files are kept in memory." };
                 let hello = alloc::format!("Welcome, {}", self.sys.profile.first_name());
@@ -802,6 +863,7 @@ impl Shell {
             Cmd::Shutdown => self.sys.reqs.push(Req::Shutdown),
             Cmd::Lock => self.lock_now(),
             Cmd::Profile => self.sys.reqs.push(Req::Settings(0)),
+            Cmd::SignOut => self.sign_out(),
             Cmd::None => {}
         }
     }
@@ -1222,6 +1284,10 @@ impl Shell {
                 items.push(("-".to_string(), Cmd::None));
                 items.push(("Profile…".to_string(), Cmd::Profile));
                 items.push(("Lock Screen   F12".to_string(), Cmd::Lock));
+                if self.sys.people.len() > 1 {
+                    items.push(("-".to_string(), Cmd::None));
+                    items.push(("Sign Out".to_string(), Cmd::SignOut));
+                }
             }
             3 => {
                 items.push((if self.sys.dark { "Light Mode" } else { "Dark Mode" }.to_string(), Cmd::Dark));
