@@ -10,7 +10,7 @@
 use crate::gfx::{scale_argb, Canvas, Color, Rect};
 use alloc::vec::Vec;
 
-const LOGO: &[u8] = include_bytes!("../../assets/boot-logo.png");
+use crate::brand::LOGO;
 
 pub struct Splash {
     /// the wordmark's coverage at its size on screen (0-255 per pixel)

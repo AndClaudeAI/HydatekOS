@@ -1551,7 +1551,7 @@ impl Shell {
         ui.shadow(panel, 24, 20, 10, 90);
         ui.rrect(panel, 24, t.surface);
         ui.text(panel.x + 32, panel.y + 46, Face::Semibold, 22, "Keyboard shortcuts", t.text);
-        let what = if crate::input::ctrl_is_gen() { "Gen is the ⊞ or ⌘ key (Ctrl works too). Aux is Alt, or ⌥ Option." } else { "Gen is the ⊞ or ⌘ key. Aux is Alt, or ⌥ Option." };
+        let what = if crate::input::ctrl_is_gen() { "Gen is the Ctrl key, or ⌘ on a Mac (the Hydatek key works too). Aux is Alt, or ⌥ Option." } else { "Gen is the Hydatek key, or ⌘ on a Mac. Aux is Alt, or ⌥ Option." };
         let what = ui.fit(Face::Regular, 13, what, pw - 64);
         ui.text(panel.x + 32, panel.y + 70, Face::Regular, 13, &what, t.text2);
         let cw = (pw - 64) / cols as i32;

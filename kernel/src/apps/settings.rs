@@ -112,9 +112,11 @@ impl Tester {
 }
 
 /// "Gen+Shift+S": a stroke with its modifiers.
-fn stroke_label(r: &crate::input::Raw) -> String {
+/// The Ctrl key is Gen (and the Hydatek key too), unless Ctrl is left to apps.
+fn stroke_label(r: &crate::input::Raw, ctrl_gen: bool) -> String {
     let mut s = String::new();
-    for (on, name) in [(r.logo, "Gen"), (r.ctrl, "Ctrl"), (r.aux, "Aux"), (r.shift, "Shift")] {
+    let gen = r.logo || (r.ctrl && ctrl_gen);
+    for (on, name) in [(gen, "Gen"), (r.ctrl && !ctrl_gen, "Ctrl"), (r.aux, "Aux"), (r.shift, "Shift")] {
         if on {
             s.push_str(name);
             s.push('+');
@@ -170,11 +172,11 @@ impl Settings {
         // Gen
         let top = m.y;
         card(ui, Rect::new(m.x, top, m.w, 204));
-        let gen_about = "Gen is HydatekOS's shortcut key, like Ctrl on Windows and Command on a Mac. Hold it and press a letter: Gen+S saves, Gen+C copies, Gen+Space opens an app.";
-        let y = intro(ui, top, "The Gen key", gen_about, "Gen", "⊞", "⌘");
+        let gen_about = "Gen is HydatekOS's shortcut key: the key Windows calls Ctrl and a Mac calls Command. Hold it and press a letter: Gen+S saves, Gen+C copies, Gen+Space opens an app.";
+        let y = intro(ui, top, "The Gen key", gen_about, "Gen", if sys.ctrl_gen { "Ctrl" } else { "Hydatek" }, "⌘");
         ui.rect(Rect::new(m.x + 16, y + 2, m.w - 32, 1), t.line);
-        let sub = if sys.ctrl_gen { "Ctrl+S saves, like Gen+S" } else { "Ctrl is left to apps: in Terminal, Ctrl+C cancels a line" };
-        row(ui, Rect::new(m.x + 16, y, m.w - 32, 60), y + 8, "Ctrl works as Gen", sub);
+        let sub = if sys.ctrl_gen { "The Hydatek key beside it works as Gen too" } else { "Off: only the Hydatek key is Gen, and apps get Ctrl (Terminal: Ctrl+C cancels a line)" };
+        row(ui, Rect::new(m.x + 16, y, m.w - 32, 60), y + 8, "Ctrl is the Gen key", sub);
         ui.switch(m.r() - 54, y + 16, sys.ctrl_gen, Action::App(inst, C_CTRL_GEN));
 
         // Aux
@@ -225,7 +227,7 @@ impl Settings {
                 "Shift" => ts.mods[0],
                 "Ctrl" => ts.mods[1],
                 "Aux" => ts.mods[2],
-                "Gen" => ts.mods[3] || (ts.mods[1] && sys.ctrl_gen),
+                "Logo" => ts.mods[3],
                 "Caps Lock" => caps == Some(true),
                 n => ts.seen.iter().any(|s| s == n),
             }
@@ -246,7 +248,11 @@ impl Settings {
                     (t.chip, t.text2)
                 };
                 ui.rrect(r, 5, bg);
-                if !label.is_empty() {
+                // the Ctrl key is Gen, unless it's left to apps
+                let label = if *name == "Ctrl" && !sys.ctrl_gen { &"Ctrl" } else { label };
+                if *label == "Hydatek" {
+                    ui.brand(Rect::new(r.x + 2, r.y + 3, r.w - 4, r.h - 6), fg);
+                } else if !label.is_empty() {
                     // smaller type for the long labels on narrow keys
                     let size = if ui.tw(Face::Medium, 10, label) > r.w - 4 { 8 } else { 10 };
                     let l = ui.fit(Face::Medium, size, label, r.w - 2);
@@ -282,7 +288,7 @@ impl Settings {
         }
         for (i, r) in ts.log.iter().rev().enumerate() {
             let ry = y + 4 + i as i32 * rh;
-            let label = ui.fit(Face::Semibold, 13, &stroke_label(r), m.w - 230);
+            let label = ui.fit(Face::Semibold, 13, &stroke_label(r, sys.ctrl_gen), m.w - 230);
             ui.text(m.x + 16, ry + 20, Face::Semibold, 13, &label, if i == 0 { t.text } else { t.text2 });
             let code = format!("scan {:#06x}  char {:#06x}", r.scan, r.unicode);
             let cw = ui.tw(Face::Mono, 11, &code);

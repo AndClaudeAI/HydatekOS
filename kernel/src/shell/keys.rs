@@ -2,8 +2,10 @@
 //! keycaps for drawing them.
 //!
 //! **Gen** is HydatekOS's shortcut key, like Ctrl on Windows and Command on a
-//! Mac. It's the logo key (⊞ on PC keyboards, ⌘ on Apple keyboards); Ctrl
-//! works as Gen too, unless it's turned off in Settings › Keyboard.
+//! Mac: the Ctrl key (⌘ on Apple keyboards). The Hydatek key beside it (⊞ on
+//! Windows keyboards; drawn with the Hydatek Systems wordmark, keycap
+//! "Hydatek") works as Gen too, and is the only Gen when Settings › Keyboard
+//! leaves Ctrl to apps.
 
 use crate::font::Face;
 use crate::gfx::Rect;
@@ -88,7 +90,9 @@ pub fn keycaps(ui: &mut Ui, x: i32, cy: i32, combo: &str, size: i32) -> i32 {
         if i > 0 {
             pen += 4;
         }
-        let w = (ui.tw(Face::Medium, size, part) + 12).max(h);
+        // the Hydatek key carries the Hydatek Systems wordmark
+        let logo = part == "Hydatek";
+        let w = if logo { h * 5 / 2 } else { (ui.tw(Face::Medium, size, part) + 12).max(h) };
         let r = Rect::new(pen, cy - h / 2, w, h);
         let (bg, fg) = match part {
             "Gen" => (Some(t.accent), t.on_accent),
@@ -99,7 +103,11 @@ pub fn keycaps(ui: &mut Ui, x: i32, cy: i32, combo: &str, size: i32) -> i32 {
         if bg.is_none() {
             ui.stroke(r, 6, 1, t.line);
         }
-        ui.text_in(r, if bg.is_some() { Face::Semibold } else { Face::Medium }, size, part, fg, 1);
+        if logo {
+            ui.brand(r.inset(4), fg);
+        } else {
+            ui.text_in(r, if bg.is_some() { Face::Semibold } else { Face::Medium }, size, part, fg, 1);
+        }
         pen += w;
     }
     pen - x

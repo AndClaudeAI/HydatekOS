@@ -68,7 +68,7 @@ Windows, macOS or Linux.
   The lock screen shows everyone's picture to choose from, and inside HydatekOS
   nobody can reach anyone else's files. Details: [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 - **Gen and Aux keys:** HydatekOS's own modifiers. **Gen** is the shortcut key
-  (the ⊞ or ⌘ key, and Ctrl): Gen+S saves, Gen+Space opens an app, Gen+/ shows
+  (the Ctrl key, or ⌘ on a Mac; the Hydatek key beside it works too): Gen+S saves, Gen+Space opens an app, Gen+/ shows
   every shortcut, and menus show each one. **Aux** (Alt, or ⌥ Option) types
   special characters (Aux+N ₦, Aux+E €, Aux+- –) and switches windows with
   Aux+Tab. The volume, brightness and sleep keys work, F11 maximises a window,

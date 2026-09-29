@@ -12,6 +12,7 @@ extern crate alloc;
 #[macro_use]
 mod serial;
 mod apps;
+mod brand;
 mod efi;
 mod font;
 mod fs;

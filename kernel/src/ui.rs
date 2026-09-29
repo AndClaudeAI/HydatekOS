@@ -319,6 +319,15 @@ impl<'a> Ui<'a> {
         self.zone(r, a);
     }
 
+    /// The Hydatek Systems wordmark, as large as fits in `r`, centred.
+    pub fn brand(&mut self, r: Rect, c: Color) {
+        let a = crate::brand::aspect();
+        let w = (r.w * self.s).min(r.h * self.s * a / 1000);
+        let Some((cov, h)) = crate::brand::coverage(w) else { return };
+        let p = r.scale(self.s);
+        self.c.mask(p.x + (p.w - w) / 2, p.y + (p.h - h) / 2, w, h, cov, c);
+    }
+
     /// Toggle switch.
     pub fn switch(&mut self, x: i32, y: i32, on: bool, a: Action) {
         let t = self.t;

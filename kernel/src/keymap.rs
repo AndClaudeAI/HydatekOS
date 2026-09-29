@@ -1,8 +1,9 @@
 //! HydatekOS's modifier keys, and what Aux types.
 //!
-//! - **Gen** (general) is the shortcut key, like Ctrl on Windows and Command
-//!   on a Mac: the logo key (⊞, or ⌘ on an Apple keyboard), and Ctrl too
-//!   unless that's turned off in Settings › Keyboard.
+//! - **Gen** (general) is the shortcut key: the key Windows calls Ctrl and a
+//!   Mac calls Command (⌘). The Hydatek key (the logo key beside it, which
+//!   carries the Hydatek Systems wordmark) works as Gen too. Settings ›
+//!   Keyboard can leave Ctrl to apps instead, and then the Hydatek key is Gen.
 //! - **Aux** (auxiliary) is the second modifier, like Alt on Windows and
 //!   Option on a Mac: the Alt key (⌥ Option on an Apple keyboard). Held with a
 //!   key it types a special character, following the Mac's Option layout where
@@ -133,12 +134,13 @@ pub fn key_name(scan: u16, unicode: u16) -> alloc::string::String {
 }
 
 /// A picture of the keyboard for the tester: rows of (the key's name as
-/// `key_name` gives it, its label, its width in quarter keys).
+/// `key_name` gives it, its label, its width in quarter keys). The Ctrl key
+/// is labelled Gen: that's HydatekOS's name for it.
 pub const LAYOUT: &[&[(&str, &str, u8)]] = &[
     &[("Esc", "Esc", 7), ("F1", "F1", 4), ("F2", "F2", 4), ("F3", "F3", 4), ("F4", "F4", 4), ("F5", "F5", 4), ("F6", "F6", 4), ("F7", "F7", 4), ("F8", "F8", 4), ("F9", "F9", 4), ("F10", "F10", 4), ("F11", "F11", 4), ("F12", "F12", 4), ("Insert", "Ins", 4), ("Delete", "Del", 5)],
     &[("`", "`", 4), ("1", "1", 4), ("2", "2", 4), ("3", "3", 4), ("4", "4", 4), ("5", "5", 4), ("6", "6", 4), ("7", "7", 4), ("8", "8", 4), ("9", "9", 4), ("0", "0", 4), ("-", "-", 4), ("=", "=", 4), ("Backspace", "Back", 7), ("Home", "Home", 5)],
     &[("Tab", "Tab", 6), ("Q", "Q", 4), ("W", "W", 4), ("E", "E", 4), ("R", "R", 4), ("T", "T", 4), ("Y", "Y", 4), ("U", "U", 4), ("I", "I", 4), ("O", "O", 4), ("P", "P", 4), ("[", "[", 4), ("]", "]", 4), ("\\", "\\", 5), ("Page Up", "PgUp", 5)],
     &[("Caps Lock", "Caps", 7), ("A", "A", 4), ("S", "S", 4), ("D", "D", 4), ("F", "F", 4), ("G", "G", 4), ("H", "H", 4), ("J", "J", 4), ("K", "K", 4), ("L", "L", 4), (";", ";", 4), ("'", "'", 4), ("Enter", "Enter", 8), ("Page Down", "PgDn", 5)],
     &[("Shift", "Shift", 9), ("Z", "Z", 4), ("X", "X", 4), ("C", "C", 4), ("V", "V", 4), ("B", "B", 4), ("N", "N", 4), ("M", "M", 4), (",", ",", 4), (".", ".", 4), ("/", "/", 4), ("Shift", "Shift", 6), ("↑", "↑", 4), ("End", "End", 5)],
-    &[("Ctrl", "Ctrl", 6), ("Gen", "Gen", 5), ("Aux", "Aux", 5), ("Space", "", 24), ("Aux", "Aux", 5), ("Ctrl", "Ctrl", 6), ("←", "←", 4), ("↓", "↓", 4), ("→", "→", 5)],
+    &[("Ctrl", "Gen", 6), ("Logo", "Hydatek", 5), ("Aux", "Aux", 5), ("Space", "", 24), ("Aux", "Aux", 5), ("Ctrl", "Gen", 6), ("←", "←", 4), ("↓", "↓", 4), ("→", "→", 5)],
 ];

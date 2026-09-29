@@ -5,7 +5,7 @@ system's keyboards:
 
 | HydatekOS | What it does | On a PC keyboard | On an Apple keyboard | Windows / macOS call it |
 |---|---|---|---|---|
-| **Gen** (general) | Shortcuts: Gen+S saves, Gen+C copies | the ⊞ logo key, and Ctrl | ⌘ Command, and Control | Ctrl / Command |
+| **Gen** (general) | Shortcuts: Gen+S saves, Gen+C copies | Ctrl (the Hydatek key works too) | ⌘ Command, and Control | Ctrl / Command |
 | **Aux** (auxiliary) | Special characters, switching windows, moving by word | Alt | ⌥ Option | Alt / Option |
 
 ![Settings › Keyboard](screenshots/keyboard-settings.png)
@@ -19,10 +19,14 @@ and **Gen+/** shows all of them:
 |---|---|
 | ![A menu with shortcuts](screenshots/keyboard-menu.png) | ![Keyboard shortcuts](screenshots/keyboard-shortcuts.png) |
 
-Gen is the logo key: ⊞ on PC keyboards, or ⌘ Command on an Apple keyboard,
-where Command sits in the same place. **Ctrl works as Gen too**, so Windows
-habits carry over. In Settings › Keyboard you can switch that off, and Ctrl
-then belongs to the apps. The Terminal uses it as a Unix shell does:
+**Gen is the Ctrl key**: the key Windows calls Ctrl and a Mac calls ⌘ Command
+is HydatekOS's Gen key, and the keyboard tester shows it as Gen.
+
+Beside it is the **Hydatek key**, where Windows keyboards print ⊞: HydatekOS
+shows it with the Hydatek Systems wordmark, on the keyboard tester's picture and
+in Settings. It works as Gen too. In Settings › Keyboard you can switch off
+"Ctrl is the Gen key": then only the Hydatek key is Gen, and Ctrl belongs to
+the apps. The Terminal uses it as a Unix shell does:
 **Ctrl+C** cancels the line, **Ctrl+L** clears the screen and **Ctrl+U**
 clears what you've typed. Everywhere else, a Ctrl+letter that means nothing
 types nothing. The setting is kept for each account.
@@ -40,7 +44,7 @@ types nothing. The setting is kept for each account.
 | F11 | Maximise the front window, or put it back |
 | F12 | Lock the screen |
 
-Window switching needs the logo key or Aux: some firmware reports Ctrl+I as
+Window switching needs the Hydatek key or Aux: some firmware reports Ctrl+I as
 Tab, and Ctrl+Tab has to stay Gen+I (italic) there.
 
 ### In apps
@@ -152,6 +156,7 @@ arrive depends on its firmware. The tester shows which ones do.
 | Global shortcuts, window switching, the shortcuts sheet, menu hints | `kernel/src/shell/mod.rs`, `shell/keys.rs` |
 | Settings › Keyboard | `kernel/src/apps/settings.rs` |
 | ⊞ ⌘ ⌥ ↑ ↓ − in the font | `tools/fontgen.py` |
+| The Hydatek key's wordmark (shared with the boot screen) | `kernel/src/brand.rs`, `Ui::brand` |
 
 Apps receive `key(k, gen, sys)`: `gen` is true while Gen is held. `Key::Ctrl`
 (Ctrl while it isn't Gen) and `Key::Aux` (Aux with no character) exist so that
@@ -163,6 +168,6 @@ neither ever types a letter by accident.
 - key names, and that every key the tester can name is on its picture
   (`tests-host/src/keymap_tests.rs`);
 - the line editor (`lineedit_tests.rs`). The firmware's reports were checked in
-QEMU: the logo key, Ctrl, Alt and Shift each arrive as their own flag with the
-key. So were the shortcuts, the sheet, the menu hints, window switching, typing
+QEMU: Ctrl (Gen), the Hydatek key, Alt (Aux) and Shift each arrive as their own
+flag with the key. So were the shortcuts, the sheet, the menu hints, window switching, typing
 with Aux, and the Terminal's Ctrl keys with Ctrl not working as Gen.
