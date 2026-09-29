@@ -35,6 +35,7 @@ const HELP: &[&str] = &[
     "  theme dark|light  switch palette        clear           clear the screen",
     "  reboot            restart               shutdown        power off",
     "  lock              lock the screen       whoami          who is signed in",
+    "  volume up|down|mute                     brightness up|down (as their keys)",
     "  users             everyone's accounts",
 ];
 
@@ -270,6 +271,22 @@ impl Terminal {
                 }
             }
             "lock" => sys.reqs.push(Req::Lock),
+            // what the volume and brightness keys do, for keyboards without them
+            "volume" | "brightness" => {
+                use crate::ui::Media;
+                let m = match (cmd, args.first().copied().unwrap_or("")) {
+                    ("volume", "up") => Media::VolumeUp,
+                    ("volume", "down") => Media::VolumeDown,
+                    ("volume", "mute") => Media::Mute,
+                    ("brightness", "up") => Media::BrightnessUp,
+                    ("brightness", "down") => Media::BrightnessDown,
+                    _ => {
+                        let now = if cmd == "volume" { format!("{}%{}", sys.volume, if sys.muted { ", muted" } else { "" }) } else { format!("{}%", sys.brightness) };
+                        return self.print(&format!("{}: {} (use up, down{})", cmd, now, if cmd == "volume" { " or mute" } else { "" }));
+                    }
+                };
+                sys.reqs.push(Req::Media(m));
+            }
             "reboot" => sys.reqs.push(Req::Reboot),
             "shutdown" | "poweroff" => sys.reqs.push(Req::Shutdown),
             _ => self.print(&format!("hsh: {}: command not found", cmd)),

@@ -71,7 +71,10 @@ Windows, macOS or Linux.
   (the ⊞ or ⌘ key, and Ctrl): Gen+S saves, Gen+Space opens an app, Gen+/ shows
   every shortcut, and menus show each one. **Aux** (Alt, or ⌥ Option) types
   special characters (Aux+N ₦, Aux+E €, Aux+- –) and switches windows with
-  Aux+Tab. Details: [docs/KEYBOARD.md](docs/KEYBOARD.md).
+  Aux+Tab. The volume, brightness and sleep keys work, F11 maximises a window,
+  password boxes warn when Caps Lock is on, and every text box shares one line
+  editor (word moves, Gen+Backspace, paste). Settings › Keyboard has a **key
+  tester** that shows what each key sends. Details: [docs/KEYBOARD.md](docs/KEYBOARD.md).
 - **Boot logo and lock screen:** after the PC maker's logo the screen goes black
   and the **Hydatek Systems** wordmark fades in, in white, with a thin progress bar
   while drivers, files and the network come up, then a fade into the lock screen (clock,
@@ -200,7 +203,9 @@ covers putting HydatekOS on the internal disk next to another OS.
 | Save a note or document | **Gen+S** |
 | Bold / italic / underline in Hyda Scripts | **Gen+B** / **Gen+I** / **Gen+U** |
 | Rename / delete a file | **F2** / **Delete** (File menu has the same actions) |
-| Lock the screen | **F12**, the logo menu, or `lock` in Terminal |
+| Maximise a window | **F11**, or double-click its header |
+| Volume / brightness | Their keys, or `volume up` / `brightness down` in Terminal |
+| Lock the screen | **F12**, the Sleep key, the logo menu, or `lock` in Terminal |
 | Switch account / sign out | Lock the screen and choose another picture / profile menu › **Sign Out** |
 | Shell commands | Open Terminal and type `help` |
 | Restart / shut down | HydatekOS logo menu, or Settings › About |

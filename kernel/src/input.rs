@@ -8,7 +8,7 @@ use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTe
 use crate::ui::{Key, Media};
 use alloc::vec::Vec;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Modifiers held for the most recent key (only firmware with the extended
 /// text input protocol reports them).
@@ -44,9 +44,52 @@ pub fn scroll_lock() -> Option<bool> {
     toggle(efi::SCROLL_LOCK)
 }
 
-/// Ctrl was held for the most recent key.
-pub fn ctrl() -> bool {
-    held(M_CTRL)
+/// Every key stroke as the firmware reported it, for the keyboard tester:
+/// a ring of the last `RAW_LEN`, each packed as scan code (16 bits), UTF-16
+/// character (16), modifiers (8) and lock states (8).
+const RAW_LEN: usize = 32;
+static RAW: [AtomicU64; RAW_LEN] = [const { AtomicU64::new(0) }; RAW_LEN];
+static RAW_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// A key stroke as the firmware reported it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Raw {
+    pub scan: u16,
+    pub unicode: u16,
+    pub shift: bool,
+    pub ctrl: bool,
+    pub aux: bool,
+    pub logo: bool,
+    /// efi.rs TOGGLE_* bits (TOGGLE_STATE_VALID when the firmware said)
+    pub toggles: u8,
+}
+
+fn record(scan: u16, unicode: u16, mods: u32, toggles: u8) {
+    let v = scan as u64 | (unicode as u64) << 16 | ((mods & 0xff) as u64) << 32 | (toggles as u64) << 40;
+    let n = RAW_COUNT.load(Ordering::Relaxed);
+    RAW[n as usize % RAW_LEN].store(v, Ordering::Relaxed);
+    RAW_COUNT.store(n.wrapping_add(1), Ordering::Relaxed);
+}
+
+/// How many key strokes have arrived since HydatekOS started.
+pub fn raw_count() -> u32 {
+    RAW_COUNT.load(Ordering::Relaxed)
+}
+
+/// The key strokes after `since` (a `raw_count()`), oldest first; at most the
+/// last `RAW_LEN`.
+pub fn raw_since(since: u32) -> Vec<Raw> {
+    let n = raw_count();
+    let from = if n.wrapping_sub(since) as usize > RAW_LEN { n.wrapping_sub(RAW_LEN as u32) } else { since };
+    let mut out = Vec::new();
+    let mut i = from;
+    while i != n {
+        let v = RAW[i as usize % RAW_LEN].load(Ordering::Relaxed);
+        let m = (v >> 32) as u32 & 0xff;
+        out.push(Raw { scan: v as u16, unicode: (v >> 16) as u16, shift: m & M_SHIFT != 0, ctrl: m & M_CTRL != 0, aux: m & M_AUX != 0, logo: m & M_LOGO != 0, toggles: (v >> 40) as u8 });
+        i = i.wrapping_add(1);
+    }
+    out
 }
 
 fn held(m: u32) -> bool {
@@ -238,7 +281,7 @@ impl Input {
         }
         // keyboard
         for _ in 0..16 {
-            let (key, shift) = match self.kbd_ex {
+            let (key, shift, toggles) = match self.kbd_ex {
                 Some(k) => {
                     let mut d = efi::KeyData::default();
                     if unsafe { ((*k).read_key_stroke_ex)(k, &mut d) } != efi::SUCCESS {
@@ -247,14 +290,14 @@ impl Input {
                     if d.state.toggle_state & efi::TOGGLE_STATE_VALID != 0 {
                         TOGGLES.store(d.state.toggle_state as u32, Ordering::Relaxed);
                     }
-                    (d.key, d.state.shift_state)
+                    (d.key, d.state.shift_state, d.state.toggle_state)
                 }
                 None => {
                     let mut d = efi::InputKey::default();
                     if unsafe { ((*self.kbd).read_key_stroke)(self.kbd, &mut d) } != efi::SUCCESS {
                         break;
                     }
-                    (d, 0)
+                    (d, 0, 0)
                 }
             };
             let valid = shift & efi::SHIFT_STATE_VALID != 0;
@@ -265,6 +308,7 @@ impl Input {
                     mods |= m;
                 }
             }
+            record(key.scan_code, key.unicode_char, mods, toggles);
             // Ctrl+letter arrives as a control character even without the
             // extended protocol
             let Some((k, ctrl_char)) = map_key(key, mods & M_CTRL != 0) else { continue };

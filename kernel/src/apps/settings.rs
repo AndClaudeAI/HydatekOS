@@ -58,6 +58,79 @@ pub struct Settings {
     models: Vec<crate::web::claude::Model>,
     listing: Option<u32>,
     claude_msg: String,
+    /// Keyboard: the key tester, while it's open
+    tester: Option<Tester>,
+}
+
+/// The keyboard tester: every key stroke the firmware reports, as it
+/// reports it (input::raw_since), while shortcuts are paused.
+struct Tester {
+    /// input::raw_count() when last read
+    since: u32,
+    /// the latest strokes, newest last
+    log: Vec<crate::input::Raw>,
+    /// names of the keys pressed so far (keymap::key_name)
+    seen: Vec<String>,
+    /// modifiers seen: Shift, Ctrl, Aux, logo
+    mods: [bool; 4],
+    /// when Esc was first pressed (a second press soon after finishes)
+    esc: Option<u64>,
+}
+
+impl Tester {
+    fn new() -> Tester {
+        Tester { since: crate::input::raw_count(), log: Vec::new(), seen: Vec::new(), mods: [false; 4], esc: None }
+    }
+
+    /// Read new strokes; true when Esc was pressed twice.
+    fn read(&mut self, now: u64) -> bool {
+        let strokes = crate::input::raw_since(self.since);
+        self.since = crate::input::raw_count();
+        for r in strokes {
+            let name = crate::keymap::key_name(r.scan, r.unicode);
+            for (i, on) in [r.shift, r.ctrl, r.aux, r.logo].iter().enumerate() {
+                self.mods[i] |= *on;
+            }
+            if name == "Esc" {
+                if self.esc.map_or(false, |t| now < t + 200) {
+                    return true;
+                }
+                self.esc = Some(now);
+            } else if !name.is_empty() {
+                self.esc = None;
+            }
+            if !name.is_empty() && !self.seen.contains(&name) {
+                self.seen.push(name);
+            }
+            self.log.push(r);
+            if self.log.len() > 5 {
+                self.log.remove(0);
+            }
+        }
+        false
+    }
+}
+
+/// "Gen+Shift+S": a stroke with its modifiers.
+fn stroke_label(r: &crate::input::Raw) -> String {
+    let mut s = String::new();
+    for (on, name) in [(r.logo, "Gen"), (r.ctrl, "Ctrl"), (r.aux, "Aux"), (r.shift, "Shift")] {
+        if on {
+            s.push_str(name);
+            s.push('+');
+        }
+    }
+    let key = crate::keymap::key_name(r.scan, r.unicode);
+    if key.is_empty() {
+        // a modifier or lock key alone
+        s.pop();
+        if s.is_empty() {
+            s.push_str("A key without a code (a lock key?)");
+        }
+    } else {
+        s.push_str(&key);
+    }
+    s
 }
 
 impl Settings {
@@ -66,12 +139,15 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new() }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
     fn render_keyboard(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
         use crate::shell::keys::keycaps;
+        if self.tester.is_some() {
+            return self.render_tester(ui, m, sys, inst);
+        }
         let t = ui.t;
         // a paragraph, then "<key> is the <a> key, or <b> on an Apple keyboard"
         let intro = |ui: &mut Ui, y: i32, title: &str, about: &str, key: &str, pc: &str, apple: &str| -> i32 {
@@ -123,6 +199,99 @@ impl Settings {
         let mut x = m.x + 204;
         x += ui.text(x, y + 22, Face::Regular, 13, "or press", t.text3) + 8;
         keycaps(ui, x, y + 17, "Gen+/", 12);
+        ui.button(Rect::new(m.x, y + 40, 190, 30), "Test your keyboard", Action::App(inst, C_KEY_TEST), false);
+        ui.text(m.x + 204, y + 60, Face::Regular, 13, "See what every key sends", t.text3);
+    }
+
+    /// The keyboard tester: a picture of the keyboard lighting up, the lock
+    /// keys and the last strokes as the firmware reported them.
+    fn render_tester(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        let Some(ts) = self.tester.as_ref() else { return };
+        let t = ui.t;
+        ui.text(m.x, m.y + 18, Face::Semibold, 15, "Keyboard test", t.text);
+        let about = "Press keys to see what HydatekOS receives. Shortcuts are paused until you press Done, or Esc twice.";
+        let mut y = m.y + 40;
+        for line in ui.wrap(Face::Regular, 12, about, m.w - 110) {
+            ui.text(m.x, y, Face::Regular, 12, &line, t.text2);
+            y += 17;
+        }
+        ui.button(Rect::new(m.r() - 90, m.y + 4, 90, 32), "Done", Action::App(inst, C_KEY_TEST_DONE), true);
+
+        // the keyboard
+        let last = ts.log.last().map(|r| crate::keymap::key_name(r.scan, r.unicode)).unwrap_or_default();
+        let caps = crate::input::caps_lock();
+        let lit = |name: &str| -> bool {
+            match name {
+                "Shift" => ts.mods[0],
+                "Ctrl" => ts.mods[1],
+                "Aux" => ts.mods[2],
+                "Gen" => ts.mods[3] || (ts.mods[1] && sys.ctrl_gen),
+                "Caps Lock" => caps == Some(true),
+                n => ts.seen.iter().any(|s| s == n),
+            }
+        };
+        let q = m.w / 64;
+        let kh = 26;
+        let x0 = m.x + (m.w - q * 64) / 2;
+        y += 8;
+        for row in crate::keymap::LAYOUT {
+            let mut x = x0;
+            for (name, label, w) in row.iter() {
+                let r = Rect::new(x, y, *w as i32 * q - 3, kh);
+                let (bg, fg) = if !last.is_empty() && *name == last {
+                    (t.accent, t.on_accent)
+                } else if lit(name) {
+                    (t.accent.with_alpha(70), t.text)
+                } else {
+                    (t.chip, t.text2)
+                };
+                ui.rrect(r, 5, bg);
+                if !label.is_empty() {
+                    // smaller type for the long labels on narrow keys
+                    let size = if ui.tw(Face::Medium, 10, label) > r.w - 4 { 8 } else { 10 };
+                    let l = ui.fit(Face::Medium, size, label, r.w - 2);
+                    ui.text_in(r, Face::Medium, size, &l, fg, 1);
+                }
+                x += *w as i32 * q;
+            }
+            y += kh + 3;
+        }
+
+        // the lock keys
+        y += 10;
+        let mut x = m.x;
+        for (name, state) in [("Caps Lock", caps), ("Num Lock", crate::input::num_lock()), ("Scroll Lock", crate::input::scroll_lock())] {
+            let st = match state {
+                Some(true) => "on",
+                Some(false) => "off",
+                None => "not reported",
+            };
+            let label = format!("{} {}", name, st);
+            let w = ui.tw(Face::Medium, 12, &label) + 24;
+            ui.rrect(Rect::new(x, y, w, 26), 13, if state == Some(true) { t.accent.with_alpha(60) } else { t.chip });
+            ui.text_in(Rect::new(x, y, w, 26), Face::Medium, 12, &label, t.text, 1);
+            x += w + 8;
+        }
+        y += 40;
+
+        // the last strokes, newest first
+        let rh = 30;
+        card(ui, Rect::new(m.x, y, m.w, rh * 5 + 8));
+        if ts.log.is_empty() {
+            ui.text(m.x + 16, y + 26, Face::Regular, 13, "Nothing pressed yet", t.text3);
+        }
+        for (i, r) in ts.log.iter().rev().enumerate() {
+            let ry = y + 4 + i as i32 * rh;
+            let label = ui.fit(Face::Semibold, 13, &stroke_label(r), m.w - 230);
+            ui.text(m.x + 16, ry + 20, Face::Semibold, 13, &label, if i == 0 { t.text } else { t.text2 });
+            let code = format!("scan {:#06x}  char {:#06x}", r.scan, r.unicode);
+            let cw = ui.tw(Face::Mono, 11, &code);
+            ui.text(m.r() - 16 - cw, ry + 20, Face::Mono, 11, &code, t.text3);
+        }
+        y += rh * 5 + 22;
+        let note = if ts.esc.is_some() { "Press Esc again to finish." } else { "Keys HydatekOS doesn't know show their scan code, so they can be added." };
+        let note = ui.fit(Face::Regular, 12, note, m.w);
+        ui.text(m.x, y, Face::Regular, 12, &note, if ts.esc.is_some() { t.accent } else { t.text3 });
     }
 
     /// The Assistant section: Claude, its API key and model.
@@ -354,6 +523,8 @@ const C_CLAUDE_SAVE: u32 = 34;
 const C_CLAUDE_REMOVE: u32 = 35;
 const C_CLAUDE_MODELS: u32 = 36;
 const C_CLAUDE_OPEN: u32 = 37;
+const C_KEY_TEST: u32 = 38;
+const C_KEY_TEST_DONE: u32 = 39;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -570,7 +741,9 @@ impl App for Settings {
                 };
                 row(ui, inner, top + 108, "Fingerprint (phone)", &fp_st);
                 ui.switch(sw_x, top + 114, sys.lock_finger, Action::App(inst, C_FINGER));
-                let note = if self.pin_msg.is_empty() {
+                let note = if self.focus == C_PW_FIELD && crate::input::caps_lock() == Some(true) {
+                    "Caps Lock is on."
+                } else if self.pin_msg.is_empty() {
                     if sys.secured() { "Keeps people out of your session; it doesn't encrypt files." } else { "No PIN or password: any key or click unlocks." }
                 } else {
                     self.pin_msg.as_str()
@@ -639,6 +812,16 @@ impl App for Settings {
             self.acc_confirm = None;
         }
         match code {
+            C_KEY_TEST => {
+                self.tester = Some(Tester::new());
+                sys.key_test = true;
+                return;
+            }
+            C_KEY_TEST_DONE => {
+                self.tester = None;
+                sys.key_test = false;
+                return;
+            }
             C_CTRL_GEN => {
                 sys.ctrl_gen = !sys.ctrl_gen;
                 crate::input::set_ctrl_is_gen(sys.ctrl_gen);
@@ -886,6 +1069,10 @@ impl App for Settings {
     }
 
     fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
+        if self.tester.is_some() {
+            // the tester reads keys as the firmware sends them (tick)
+            return;
+        }
         if self.focus == C_CLAUDE_KEY {
             match k {
                 Key::Enter => self.action(C_CLAUDE_SAVE, false, sys),
@@ -938,10 +1125,23 @@ impl App for Settings {
     }
 
     fn animating(&self) -> bool {
-        self.focus != 0
+        self.focus != 0 || self.tester.is_some()
+    }
+
+    fn close(&mut self, sys: &mut Sys) {
+        if self.tester.take().is_some() {
+            sys.key_test = false;
+        }
     }
 
     fn tick(&mut self, sys: &mut Sys) {
+        if let Some(ts) = self.tester.as_mut() {
+            if ts.read(sys.ticks) || !sys.key_test {
+                // Esc twice, or the shell stopped the test (another window)
+                self.tester = None;
+                sys.key_test = false;
+            }
+        }
         if let Some(id) = self.listing {
             if let Some(res) = sys.web.take(id) {
                 self.listing = None;

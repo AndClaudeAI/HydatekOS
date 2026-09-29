@@ -668,7 +668,13 @@ impl Setup {
                     y -= u(6);
                     self.error_line(ui, body.x, y, body.w, u(13));
                 } else if self.error.is_empty() {
-                    let hint = if m == Method::Pin { "Digits only. Tab or Enter moves to the second box." } else { "Letters, numbers and symbols. Tab or Enter moves to the second box." };
+                    let hint = if m == Method::Pin {
+                        "Digits only. Tab or Enter moves to the second box."
+                    } else if crate::input::caps_lock() == Some(true) {
+                        "Caps Lock is on."
+                    } else {
+                        "Letters, numbers and symbols. Tab or Enter moves to the second box."
+                    };
                     let h = ui.fit(Face::Regular, u(12), hint, body.w);
                     ui.text(body.x, y, Face::Regular, u(12), &h, t.text3);
                 } else {

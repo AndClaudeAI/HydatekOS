@@ -64,22 +64,6 @@ pub enum Media {
     Eject,
 }
 
-impl Media {
-    pub fn name(self) -> &'static str {
-        match self {
-            Media::Mute => "Mute",
-            Media::VolumeUp => "Volume up",
-            Media::VolumeDown => "Volume down",
-            Media::BrightnessUp => "Brightness up",
-            Media::BrightnessDown => "Brightness down",
-            Media::Sleep => "Sleep",
-            Media::Hibernate => "Hibernate",
-            Media::Display => "Display",
-            Media::Recovery => "Recovery",
-            Media::Eject => "Eject",
-        }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {

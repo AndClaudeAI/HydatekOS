@@ -24,6 +24,7 @@ pub const SHEET: &[Group] = &[
             ("Gen+Q", "Quit the app"),
             ("Gen+,", "Settings"),
             ("Gen+/", "These shortcuts"),
+            ("F11", "Maximise the window"),
             ("F12", "Lock the screen"),
         ],
     },

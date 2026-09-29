@@ -18,7 +18,7 @@ use crate::icons::Icon;
 use crate::input::Ev;
 use crate::sys::{Req, Sys};
 use crate::theme::{theme, Theme};
-use crate::ui::{Action, Key, MobileAct, Ui, Zone};
+use crate::ui::{Action, Key, Media, MobileAct, Ui, Zone};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -170,6 +170,14 @@ pub struct Shell {
     signed_out: bool,
     /// the keyboard shortcuts sheet is showing
     sheet: bool,
+    /// the volume or brightness level showing after its key, until a tick
+    osd: Option<(Osd, u64)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Osd {
+    Volume,
+    Brightness,
 }
 
 impl Shell {
@@ -204,6 +212,7 @@ impl Shell {
             setup: None,
             signed_out: false,
             sheet: false,
+            osd: None,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -460,6 +469,10 @@ impl Shell {
         if before != self.toasts.len() {
             self.dirty = true;
         }
+        if self.osd.map_or(false, |o| ticks >= o.1) {
+            self.osd = None;
+            self.dirty = true;
+        }
         self.sys.web_tick();
         self.process_reqs();
         if anim && ticks >= self.last_anim + 10 {
@@ -467,6 +480,38 @@ impl Shell {
             self.dirty = true;
         }
         self.dirty
+    }
+
+    /// The volume, brightness and power keys. They work everywhere (the lock
+    /// screen and the setup assistant too), except in the keyboard tester.
+    fn media(&mut self, m: Media) {
+        use crate::sys::MIN_BRIGHTNESS;
+        self.dirty = true;
+        let until = self.sys.ticks + 150;
+        let s = &mut self.sys;
+        match m {
+            Media::Mute => s.muted = !s.muted,
+            Media::VolumeUp => {
+                s.muted = false;
+                s.volume = (s.volume + 10).min(100);
+            }
+            Media::VolumeDown => s.volume = s.volume.saturating_sub(10),
+            Media::BrightnessUp => s.brightness = (s.brightness + 10).min(100),
+            Media::BrightnessDown => s.brightness = s.brightness.saturating_sub(10).max(MIN_BRIGHTNESS),
+            Media::Sleep | Media::Hibernate => {
+                // no sleep states yet: lock, as closing a laptop's lid would
+                if !self.locked && self.setup.is_none() {
+                    self.lock_now();
+                }
+                return;
+            }
+            Media::Display => return self.toast("Displays", "HydatekOS shows one screen for now"),
+            Media::Eject => return self.toast("Eject", "There's no disc to eject"),
+            Media::Recovery => return,
+        }
+        let what = if matches!(m, Media::BrightnessUp | Media::BrightnessDown) { Osd::Brightness } else { Osd::Volume };
+        self.osd = Some((what, until));
+        self.sys.save_settings();
     }
 
     fn toast(&mut self, title: &str, body: &str) {
@@ -495,6 +540,7 @@ impl Shell {
                     self.sys.settings_page = Some(i);
                     self.open_app(AppKind::Settings);
                 }
+                Req::Media(m) => self.media(m),
                 Req::Shortcuts => {
                     self.sheet = true;
                     self.menu = None;
@@ -551,6 +597,11 @@ impl Shell {
         let (x, y) = (px / self.s, py / self.s);
         self.mouse = (x, y);
         self.last_input = self.sys.ticks;
+        if let Ev::Key(Key::Media(m), _) = ev {
+            if !self.sys.key_test {
+                return self.media(m);
+            }
+        }
         if self.locked {
             return self.lock_event(ev, x, y);
         }
@@ -887,6 +938,22 @@ impl Shell {
     }
 
     fn key(&mut self, k: Key, gen: bool) {
+        if self.sys.key_test {
+            // the keyboard tester (Settings) takes every key, shortcuts too
+            if let Some(inst) = self.focused_inst() {
+                let mut taken = false;
+                self.with_app(inst, |a, sys| {
+                    if a.kind() == AppKind::Settings {
+                        a.key(k, gen, sys);
+                        taken = true;
+                    }
+                });
+                if taken {
+                    return;
+                }
+            }
+            self.sys.key_test = false;
+        }
         if self.sheet {
             // any key closes the shortcuts
             self.sheet = false;
@@ -922,6 +989,13 @@ impl Shell {
         }
         if k == Key::F(12) {
             return self.lock_now();
+        }
+        if k == Key::F(11) && !self.mobile_mode() {
+            // maximise the front window, or put it back
+            if let Some(w) = self.wins.iter_mut().rev().find(|w| !w.min) {
+                w.max = !w.max;
+            }
+            return;
         }
         if !self.mobile_mode() {
             // window switching: the logo key or Aux (Ctrl+Tab stays with the
@@ -969,6 +1043,39 @@ impl Shell {
     // ---- rendering ----------------------------------------------------------
 
     pub fn render(&mut self, canvas: &mut Canvas, ticks: u64) {
+        self.render_frame(canvas, ticks);
+        if let Some((what, _)) = self.osd {
+            self.draw_osd(canvas, what, ticks);
+        }
+        if self.sys.brightness < 100 {
+            dim(canvas, self.sys.brightness);
+        }
+    }
+
+    /// The volume or brightness level, in a pill above the dock.
+    fn draw_osd(&mut self, canvas: &mut Canvas, what: Osd, ticks: u64) {
+        let t = self.theme();
+        let mut ui = Ui::new(canvas, self.s, t, None, ticks);
+        let (w, h) = (260, 52);
+        let r = Rect::new((self.w - w) / 2, self.h - 150, w, h);
+        ui.shadow(r, h / 2, 18, 6, 60);
+        ui.rrect(r, h / 2, t.surface.with_alpha(248));
+        let (icon, level) = match what {
+            Osd::Volume if self.sys.muted => (Icon::SpeakerOff, 0),
+            Osd::Volume => (Icon::Speaker, self.sys.volume as i32),
+            Osd::Brightness => (Icon::Sun, self.sys.brightness as i32),
+        };
+        ui.icon(icon, r.x + 18, r.y + 16, 20, t.text);
+        let bar = Rect::new(r.x + 52, r.y + 23, w - 52 - 62, 6);
+        ui.rrect(bar, 3, t.chip.mix(t.text, 30));
+        if level > 0 {
+            ui.rrect(Rect::new(bar.x, bar.y, (bar.w * level / 100).max(6), bar.h), 3, t.accent);
+        }
+        let label = if what == Osd::Volume && self.sys.muted { String::from("Muted") } else { alloc::format!("{}%", level) };
+        ui.text_in(Rect::new(bar.r() + 8, r.y, 50, h), Face::Semibold, 13, &label, t.text, 1);
+    }
+
+    fn render_frame(&mut self, canvas: &mut Canvas, ticks: u64) {
         let full = Rect::new(0, 0, self.w, self.h);
         if self.locked && self.unlocking.is_none() {
             let mut ui = Ui::new(canvas, self.s, self.theme(), self.hover, ticks);
@@ -1485,5 +1592,18 @@ impl Shell {
             ui.text(r.x + 64, r.y + 47, Face::Regular, 12, &bb, t.text2);
             ui.zone(r, Action::Toast(i as u32));
         }
+    }
+}
+
+/// Darken the whole frame to `percent` brightness (the brightness keys'
+/// software dimmer).
+fn dim(c: &mut Canvas, percent: u8) {
+    let k = percent as u32 * 256 / 100;
+    for p in c.px.iter_mut() {
+        let v = *p;
+        let r = ((v >> 16 & 255) * k) >> 8;
+        let g = ((v >> 8 & 255) * k) >> 8;
+        let b = ((v & 255) * k) >> 8;
+        *p = (v & 0xff00_0000) | r << 16 | g << 8 | b;
     }
 }

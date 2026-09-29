@@ -602,6 +602,12 @@ impl Lock {
         } else {
             String::from(prompt)
         };
+        // letters in a password: warn when Caps Lock is on
+        let msg = if self.mode == Mode::Password && crate::input::caps_lock() == Some(true) && !self.waiting(now) {
+            if self.error.is_empty() { String::from("Caps Lock is on") } else { format!("{} · Caps Lock is on", msg) }
+        } else {
+            msg
+        };
         let col = if self.error.is_empty() && !self.waiting(now) { t.text2 } else { t.danger };
         let mw = ui.tw(Face::Medium, size, &msg);
         ui.text(cx - mw / 2, y, Face::Medium, size, &msg, col);

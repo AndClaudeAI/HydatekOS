@@ -28,6 +28,8 @@ pub enum Req {
     Shortcuts,
     /// show the setup assistant again
     Setup,
+    /// as if a volume, brightness or power key was pressed
+    Media(crate::ui::Media),
 }
 
 #[derive(Clone)]
@@ -115,6 +117,14 @@ pub struct Sys {
     pub claude_key: String,
     /// the Claude model chosen (empty: the newest Opus the key can use)
     pub claude_model: String,
+    /// the keyboard tester is open: keys go to it, not to shortcuts
+    pub key_test: bool,
+    /// sound volume 0-100 (kept for when there's a sound driver) and mute
+    pub volume: u8,
+    pub muted: bool,
+    /// screen brightness 10-100 (a software dimmer until there are display
+    /// drivers)
+    pub brightness: u8,
 }
 
 /// A PIN or password: (salt, stretched hash).
@@ -154,6 +164,9 @@ impl Person {
 /// Size the profile picture is rendered at (it is shown up to 128 points
 /// wide at scale 2).
 pub const AVATAR_PX: i32 = 256;
+
+/// The dimmest the brightness keys go (percent).
+pub const MIN_BRIGHTNESS: u8 = 10;
 
 pub const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 pub const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -214,6 +227,10 @@ impl Sys {
             people: Vec::new(),
             claude_key: String::new(),
             claude_model: String::new(),
+            key_test: false,
+            volume: 50,
+            muted: false,
+            brightness: 100,
         };
         s.load_accounts();
         s.user = if s.accounts.last.is_empty() { String::from(crate::accounts::FIRST) } else { s.accounts.last.clone() };
@@ -288,6 +305,10 @@ impl Sys {
         self.settings_page = None;
         self.claude_key.clear();
         self.claude_model.clear();
+        self.key_test = false;
+        self.volume = 50;
+        self.muted = false;
+        self.brightness = 100;
     }
 
     // ---- the assistant (Claude) ----------------------------------------------------
@@ -472,6 +493,9 @@ impl Sys {
                 "lockidle" => self.lock_idle = v.parse().unwrap_or(10),
                 "engine" => self.search_engine = crate::web::engines::by_id(v).id.to_string(),
                 "ctrlgen" => self.ctrl_gen = b,
+                "volume" => self.volume = v.parse::<u8>().unwrap_or(50).min(100),
+                "muted" => self.muted = b,
+                "brightness" => self.brightness = v.parse::<u8>().unwrap_or(100).clamp(MIN_BRIGHTNESS, 100),
                 _ => {}
             }
         }
@@ -480,7 +504,7 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nctrlgen={}\n",
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nctrlgen={}\nvolume={}\nmuted={}\nbrightness={}\n",
             self.dark as u8,
             self.accent,
             self.wifi as u8,
@@ -492,7 +516,10 @@ impl Sys {
             self.lock_on_boot as u8,
             self.lock_idle,
             self.search_engine,
-            self.ctrl_gen as u8
+            self.ctrl_gen as u8,
+            self.volume,
+            self.muted as u8,
+            self.brightness
         );
         let f = self.sys_file("settings.txt");
         self.fs.write_raw(&f, s.as_bytes());
