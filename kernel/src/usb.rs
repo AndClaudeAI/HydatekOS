@@ -23,10 +23,10 @@
 //! already reads through the text input protocol.
 
 use crate::efi::{self, Guid, Handle, Status};
-use crate::gamepad::{self, Motor, Nav, Navigator, Rumble};
+use crate::gamepad::{self, Motor, Rumble};
 use crate::haptics::{Haptic, Pulse};
-use crate::hid::{self, Consumer, Descriptor, HapticController, Mouse, Touchpad};
-use crate::touchpad::{Gesture, Gestures};
+use crate::hid;
+use crate::hidin::HidInput;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -180,44 +180,17 @@ struct Dev {
     handle: Handle,
     io: *mut UsbIo,
     iface: u16,
-    desc: Descriptor,
-    mouse: Option<Mouse>,
-    pad: Option<(Touchpad, Gestures)>,
-    consumer: Option<(Consumer, Vec<u16>)>,
-    haptic: Option<HapticController>,
-    /// a game controller: how its reports read, and what it means
-    pad_kind: Option<PadKind>,
-    nav: Navigator,
+    /// what its reports mean
+    hid: HidInput,
     /// its rumble motors, and the OUT endpoint that reaches them
     rumble: Option<Rumble>,
     motor: Motor,
     out_ep: Option<u8>,
     seq: u8,
     pipe: &'static Pipe,
-    buttons: u32,
 }
 
-enum PadKind {
-    Hid(hid::Gamepad, bool),
-    Xbox360,
-    XboxOne,
-}
-
-/// What the input loop gets from USB devices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// movement (device counts)
-    Move(i32, i32),
-    /// a position, 0..=32767 on each axis (tablets, virtual machines)
-    Place(i32, i32),
-    /// buttons held: bit 0 left, 1 right, 2 middle
-    Buttons(u32),
-    Scroll(i32),
-    /// a consumer (media) key pressed: its usage
-    Media(u16),
-    /// a game controller's D-pad, stick or button
-    Nav(Nav),
-}
+pub use crate::hidin::Event;
 
 pub struct UsbHid {
     devs: Vec<Dev>,
@@ -355,7 +328,7 @@ impl UsbHid {
             let maker = string(io, dd.i_maker);
             let ours = self.devs.iter().find(|d| d.handle == h);
             let kind = match ours {
-                Some(d) => String::from(hid::describe(&d.desc)),
+                Some(d) => String::from(d.hid.what()),
                 None => String::from(class_name(id.class, id.subclass, id.protocol)),
             };
             let driver = if ours.is_some() {
@@ -393,8 +366,8 @@ impl UsbHid {
         let iface = id.number as u16;
         // Xbox controllers: vendor class, Microsoft's protocols
         let xbox = match (id.class, id.subclass, id.protocol) {
-            (0xFF, 0x5D, 0x01) => Some(PadKind::Xbox360),
-            (0xFF, 0x47, 0xD0) => Some(PadKind::XboxOne),
+            (0xFF, 0x5D, 0x01) => Some(false),
+            (0xFF, 0x47, 0xD0) => Some(true),
             _ => None,
         };
         if id.class != 3 && xbox.is_none() {
@@ -424,29 +397,10 @@ impl UsbHid {
             }
         }
         let ep = ep_in?;
-        let mut dev = Dev {
-            handle: h,
-            io,
-            iface,
-            desc: Descriptor::parse(&[]),
-            mouse: None,
-            pad: None,
-            consumer: None,
-            haptic: None,
-            pad_kind: None,
-            nav: Navigator::new(),
-            rumble: None,
-            motor: Motor::default(),
-            out_ep: ep_out,
-            seq: 0,
-            pipe: Box::leak(Box::new(Pipe { buf: UnsafeCell::new([[0; REPORT]; SLOTS]), len: UnsafeCell::new([0; SLOTS]), head: AtomicUsize::new(0), tail: AtomicUsize::new(0) })),
-            buttons: 0,
-        };
-        let what: &str;
-        if let Some(k) = xbox {
-            dev.rumble = Some(if matches!(k, PadKind::Xbox360) { Rumble::Xbox360 } else { Rumble::XboxOne });
-            dev.pad_kind = Some(k);
-            what = if dev.rumble == Some(Rumble::Xbox360) { "Xbox 360 controller" } else { "Xbox controller" };
+        let mut rumble = None;
+        let hid = if let Some(one) = xbox {
+            rumble = Some(if one { Rumble::XboxOne } else { Rumble::Xbox360 });
+            HidInput::xbox(one)
         } else {
             let len = match report_descriptor_len(io, id.number) {
                 0 => 512,
@@ -456,22 +410,17 @@ impl UsbHid {
             if !control(io, 0x81, 6, 0x2200, iface, DATA_IN, &mut rd) {
                 return None;
             }
-            let desc = Descriptor::parse(&rd);
-            dev.mouse = Mouse::find(&desc);
-            dev.pad = Touchpad::find(&desc).map(|t| (t, Gestures::new()));
-            dev.consumer = Consumer::find(&desc).map(|c| (c, Vec::new()));
-            dev.haptic = HapticController::find(&desc);
             let sony = vendor == 0x054C;
-            dev.pad_kind = hid::Gamepad::find(&desc).map(|g| PadKind::Hid(g, sony));
+            let mut hid = HidInput::new(&rd, sony);
             if sony {
-                dev.rumble = match product {
+                rumble = match product {
                     0x05C4 | 0x09CC | 0x0BA0 => Some(Rumble::DualShock4),
                     0x0CE6 | 0x0DF2 => Some(Rumble::DualSense),
                     _ => None,
                 };
             }
-            if dev.mouse.is_none() && dev.pad.is_none() && dev.consumer.is_none() && dev.haptic.is_none() && dev.pad_kind.is_none() {
-                log!("usb: HID interface {} ({}) not used", iface, hid::describe(&desc));
+            if !hid.useful() {
+                log!("usb: HID interface {} ({}) not used", iface, hid.what());
                 return None;
             }
             // report protocol (not the boot protocol), and no idle repeats
@@ -479,29 +428,30 @@ impl UsbHid {
                 control(io, 0x21, 0x0B, 1, iface, NO_DATA, &mut []);
             }
             control(io, 0x21, 0x0A, 0, iface, NO_DATA, &mut []);
-            // a touchpad starts reporting fingers when told to (input mode 3)
-            if dev.pad.is_some() {
-                if let Some(f) = desc.fields.iter().find(|f| f.kind == hid::Kind::Feature && f.usage == hid::usage(hid::DIGITIZER, 0x52)) {
-                    let mut r = alloc::vec![0u8; desc.report_len(hid::Kind::Feature, f.report_id)];
-                    if desc.ids {
-                        r[0] = f.report_id;
-                    }
-                    hid::put(f, &mut r, desc.ids, 3);
-                    control(io, 0x21, 0x09, 0x0300 | f.report_id as u16, iface, DATA_OUT, &mut r);
-                }
+            // touchpads report fingers, sensors report, when told to
+            for (rid, mut r) in hid.start_reports() {
+                control(io, 0x21, 0x09, 0x0300 | rid as u16, iface, DATA_OUT, &mut r);
             }
             // a haptic touchpad's waveforms
-            if let Some(hc) = dev.haptic.as_mut() {
-                if let Some(rid) = hc.list_report() {
-                    let mut r = alloc::vec![0u8; desc.report_len(hid::Kind::Feature, rid)];
-                    if control(io, 0xA1, 0x01, 0x0300 | rid as u16, iface, DATA_IN, &mut r) {
-                        hc.read_list(&r, desc.ids);
-                    }
+            if let Some((rid, len)) = hid.waveform_request() {
+                let mut r = alloc::vec![0u8; len];
+                if control(io, 0xA1, 0x01, 0x0300 | rid as u16, iface, DATA_IN, &mut r) {
+                    hid.set_waveforms(&r);
                 }
             }
-            what = hid::describe(&desc);
-            dev.desc = desc;
-        }
+            hid
+        };
+        let mut dev = Dev {
+            handle: h,
+            io,
+            iface,
+            hid,
+            rumble,
+            motor: Motor::default(),
+            out_ep: ep_out,
+            seq: 0,
+            pipe: Box::leak(Box::new(Pipe { buf: UnsafeCell::new([[0; REPORT]; SLOTS]), len: UnsafeCell::new([0; SLOTS]), head: AtomicUsize::new(0), tail: AtomicUsize::new(0) })),
+        };
         let size = (ep.max_packet & 0x7FF).clamp(1, REPORT as u16) as usize;
         let st = unsafe { ((*io).async_interrupt)(io, ep.address, true, ep.interval.clamp(1, 32) as usize, size, Some(on_report), dev.pipe as *const Pipe as *mut c_void) };
         if st != efi::SUCCESS {
@@ -514,14 +464,14 @@ impl UsbHid {
             dev.seq = 1;
             dev.send(&mut m);
         }
-        let extra = if dev.haptic.as_ref().map_or(false, |h| !h.waveforms.is_empty()) {
+        let extra = if dev.hid.has_haptics() {
             " with haptics"
         } else if dev.rumble.is_some() {
             " with rumble motors"
         } else {
             ""
         };
-        log!("usb: driving {:04x}:{:04x} interface {} as {}{}", vendor, product, iface, what, extra);
+        log!("usb: driving {:04x}:{:04x} interface {} as {}{}", vendor, product, iface, dev.hid.what(), extra);
         Some(dev)
     }
 
@@ -534,7 +484,7 @@ impl UsbHid {
         }
         for d in self.devs.iter_mut() {
             while let Some(r) = d.pipe.take() {
-                d.report(&r, now, out);
+                d.hid.report(&r, now, out);
             }
             if let Some(a) = d.motor.due(now) {
                 d.set_motors(a);
@@ -549,7 +499,7 @@ impl UsbHid {
 
     /// Haptic touchpads HydatekOS can play waveforms on.
     pub fn haptic_pads(&self) -> usize {
-        self.devs.iter().filter(|d| d.haptic.as_ref().map_or(false, |h| !h.waveforms.is_empty())).count()
+        self.devs.iter().filter(|d| d.hid.has_haptics()).count()
     }
 
     /// Controllers with rumble motors.
@@ -562,9 +512,8 @@ impl UsbHid {
     pub fn feel(&mut self, h: Haptic, pulses: &[Pulse], strength: u32, now: u64) {
         let (wave, repeat, period) = crate::haptics::waveform(h);
         for d in self.devs.iter_mut() {
-            let r = d.haptic.as_ref().and_then(|hc| hc.play(&d.desc, wave, strength, repeat, period));
-            if let Some(mut r) = r {
-                let rid = hid::report_id(&r, d.desc.ids) as u16;
+            if let Some(mut r) = d.hid.haptic_report(wave, strength, repeat, period) {
+                let rid = hid::report_id(&r, d.hid.desc.ids) as u16;
                 control(d.io, 0x21, 0x09, 0x0200 | rid, d.iface, DATA_OUT, &mut r);
             }
             if d.rumble.is_some() {
@@ -596,95 +545,5 @@ impl Dev {
         let mut p = gamepad::rumble(kind, strong, weak, self.seq);
         self.seq = self.seq.wrapping_add(1);
         self.send(&mut p);
-    }
-
-    fn report(&mut self, r: &[u8], now: u64, out: &mut Vec<Event>) {
-        let ids = self.desc.ids;
-        // game controllers
-        let pad = match &self.pad_kind {
-            Some(PadKind::Xbox360) => gamepad::xbox360(r),
-            Some(PadKind::XboxOne) => {
-                if let Some(g) = gamepad::xbox_one_guide(r) {
-                    let b = if g { self.buttons | gamepad::GUIDE } else { self.buttons & !gamepad::GUIDE };
-                    Some(gamepad::Pad { buttons: b, ..Default::default() })
-                } else {
-                    gamepad::xbox_one(r)
-                }
-            }
-            Some(PadKind::Hid(g, sony)) => g.read(r, ids).map(|p| gamepad::from_hid(&p, *sony)),
-            None => None,
-        };
-        if let Some(p) = pad {
-            self.buttons = p.buttons;
-            for n in self.nav.feed(&p, now) {
-                out.push(Event::Nav(n));
-            }
-            return;
-        }
-        if let Some((rep, abs)) = self.mouse.as_ref().and_then(|m| m.read(r, ids).map(|x| (x, m.absolute))) {
-            if abs {
-                out.push(Event::Place(rep.x, rep.y));
-            } else if rep.x != 0 || rep.y != 0 {
-                out.push(Event::Move(rep.x, rep.y));
-            }
-            if rep.buttons != self.buttons {
-                self.buttons = rep.buttons;
-                out.push(Event::Buttons(rep.buttons));
-            }
-            if rep.wheel != 0 {
-                // wheel up is positive in HID, "scroll up" to HydatekOS is negative
-                out.push(Event::Scroll(-rep.wheel));
-            }
-            return;
-        }
-        if let Some((t, g)) = self.pad.as_mut() {
-            if let Some(rep) = t.read(r, ids) {
-                if t.app == hid::APP_TOUCHSCREEN {
-                    // a touch screen points where it's touched
-                    let first = rep.contacts.iter().find(|c| c.tip);
-                    if let Some(c) = first {
-                        let sx = (c.x as i64 * 32767 / t.max_x.max(1) as i64) as i32;
-                        let sy = (c.y as i64 * 32767 / t.max_y.max(1) as i64) as i32;
-                        out.push(Event::Place(sx, sy));
-                    }
-                    let b = first.is_some() as u32;
-                    if b != self.buttons {
-                        self.buttons = b;
-                        out.push(Event::Buttons(b));
-                    }
-                    return;
-                }
-                for gst in g.feed(&rep, t.max_x, now) {
-                    match gst {
-                        Gesture::Move(x, y) => out.push(Event::Move(x, y)),
-                        Gesture::Scroll(n) => out.push(Event::Scroll(n)),
-                        Gesture::ScrollX(_) => {}
-                        Gesture::Press(b) => {
-                            self.buttons |= 1 << b;
-                            out.push(Event::Buttons(self.buttons));
-                        }
-                        Gesture::Release(b) => {
-                            self.buttons &= !(1 << b);
-                            out.push(Event::Buttons(self.buttons));
-                        }
-                        Gesture::Click(b) => {
-                            out.push(Event::Buttons(self.buttons | 1 << b));
-                            out.push(Event::Buttons(self.buttons));
-                        }
-                    }
-                }
-                return;
-            }
-        }
-        if let Some((c, held)) = self.consumer.as_mut() {
-            if let Some(now_held) = c.read(r, ids) {
-                for k in &now_held {
-                    if !held.contains(k) {
-                        out.push(Event::Media(*k));
-                    }
-                }
-                *held = now_held;
-            }
-        }
     }
 }

@@ -88,17 +88,3 @@ fn pci_classes_and_drivers() {
     assert_eq!(pci_driver(0x0C, 0x03), "Firmware host + HydatekOS USB HID");
     assert_eq!(pci_driver(0x04, 0x03), "No driver yet");
 }
-
-#[test]
-fn acpi_i2c_devices() {
-    use crate::hw::{i2c_devices, I2cFinds};
-    // AML fragments: a touchpad by string _HID, a touch screen by EISA id
-    // (DWordPrefix 0x0C, "PNP" 0x41D0, 0x0C50), two DesignWare controllers
-    let mut aml = Vec::new();
-    aml.extend_from_slice(b"\x08_HID\x0dPNP0C50\x00");
-    aml.extend_from_slice(&[0x08, b'_', b'C', b'I', b'D', 0x0C, 0x41, 0xD0, 0x0C, 0x50]);
-    aml.extend_from_slice(b"\x08_HID\x0dINT3433\x00\x08_HID\x0dAMDI0010\x00");
-    aml.extend_from_slice(b"\x08_HID\x0dQCOM0220\x00");
-    assert_eq!(i2c_devices(&aml), I2cFinds { hid: 2, designware: 2, other: 1 });
-    assert_eq!(i2c_devices(b"nothing here"), I2cFinds::default());
-}

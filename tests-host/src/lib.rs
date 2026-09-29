@@ -38,6 +38,14 @@ pub mod touchpad;
 pub mod gamepad;
 #[path = "../../kernel/src/i2c.rs"]
 pub mod i2c;
+#[path = "../../kernel/src/hidin.rs"]
+pub mod hidin;
+#[path = "../../kernel/src/ambient.rs"]
+pub mod ambient;
+#[path = "../../kernel/src/aml.rs"]
+pub mod aml;
+#[path = "../../kernel/src/acpi.rs"]
+pub mod acpi;
 /// The kernel's rectangle, for anim.rs.
 pub mod gfx {
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -110,6 +118,8 @@ mod hid_tests;
 mod i2c_tests;
 #[cfg(test)]
 mod gamepad_tests;
+#[cfg(test)]
+mod acpi_tests;
 #[cfg(test)]
 mod tls_tests;
 #[cfg(test)]

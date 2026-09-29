@@ -145,6 +145,48 @@ pub unsafe fn outb(port: u16, v: u8) {
     let _ = (port, v);
 }
 
+pub unsafe fn inw(port: u16) -> u16 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let v: u16;
+        core::arch::asm!("in ax, dx", out("ax") v, in("dx") port, options(nomem, nostack, preserves_flags));
+        v
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = port;
+        0xFFFF
+    }
+}
+
+pub unsafe fn inl(port: u16) -> u32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let v: u32;
+        core::arch::asm!("in eax, dx", out("eax") v, in("dx") port, options(nomem, nostack, preserves_flags));
+        v
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = port;
+        0xFFFF_FFFF
+    }
+}
+
+pub unsafe fn outw(port: u16, v: u16) {
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") v, options(nomem, nostack, preserves_flags));
+    #[cfg(target_arch = "aarch64")]
+    let _ = (port, v);
+}
+
+pub unsafe fn outl(port: u16, v: u32) {
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") v, options(nomem, nostack, preserves_flags));
+    #[cfg(target_arch = "aarch64")]
+    let _ = (port, v);
+}
+
 /// What the processor says about itself.
 pub struct CpuId {
     /// "GenuineIntel", "AuthenticAMD"; on ARM the implementer's name

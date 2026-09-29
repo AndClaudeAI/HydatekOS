@@ -129,6 +129,15 @@ pub struct Sys {
     /// haptic touchpads and controllers with rumble motors HydatekOS drives
     pub haptic_pads: usize,
     pub motors: usize,
+    /// what ACPI describes and who drives it: (name, kind, driver)
+    pub acpi_devices: Vec<(String, String, String)>,
+    /// the battery: percent, charging (None: no battery, a desktop)
+    pub battery: Option<(u32, bool)>,
+    /// ambient light (lux) from a light sensor, and whether brightness follows it
+    pub lux: Option<u32>,
+    pub auto_brightness: bool,
+    /// how far the person moved brightness away from what the light suggests
+    pub bright_bias: i32,
     /// sound volume 0-100 (kept for when there's a sound driver) and mute
     pub volume: u8,
     pub muted: bool,
@@ -244,6 +253,11 @@ impl Sys {
             usb_gen: 0,
             haptic_pads: 0,
             motors: 0,
+            acpi_devices: Vec::new(),
+            battery: None,
+            lux: None,
+            auto_brightness: true,
+            bright_bias: 0,
             volume: 50,
             muted: false,
             brightness: 100,
@@ -525,6 +539,7 @@ impl Sys {
                 "haptics" => self.haptics.on = b,
                 "hstrength" => self.haptics.strength = crate::haptics::Strength::from_id(v),
                 "hphone" => self.haptics.phone = b,
+                "autobright" => self.auto_brightness = b,
                 "brightness" => self.brightness = v.parse::<u8>().unwrap_or(100).clamp(MIN_BRIGHTNESS, 100),
                 _ => {}
             }
@@ -533,7 +548,7 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nvolume={}\nmuted={}\nbrightness={}\nmotion={}\nhaptics={}\nhstrength={}\nhphone={}\n",
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nvolume={}\nmuted={}\nbrightness={}\nmotion={}\nhaptics={}\nhstrength={}\nhphone={}\nautobright={}\n",
             self.dark as u8,
             self.accent,
             self.wifi as u8,
@@ -551,7 +566,8 @@ impl Sys {
             if self.reduce_motion { "reduced" } else { "full" },
             self.haptics.on as u8,
             self.haptics.strength.id(),
-            self.haptics.phone as u8
+            self.haptics.phone as u8,
+            self.auto_brightness as u8
         );
         let f = self.sys_file("settings.txt");
         self.fs.write_raw(&f, s.as_bytes());

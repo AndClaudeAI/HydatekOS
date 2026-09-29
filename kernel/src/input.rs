@@ -93,6 +93,20 @@ pub fn raw_since(since: u32) -> Vec<Raw> {
     out
 }
 
+/// The pen, as last reported: pressure (0..=1000), eraser, when (ms).
+static PEN: AtomicU32 = AtomicU32::new(0);
+static PEN_AT: AtomicU64 = AtomicU64::new(0);
+
+/// A pen in range right now: (pressure 0..=1000, eraser end).
+pub fn pen() -> Option<(i32, bool)> {
+    let at = PEN_AT.load(Ordering::Relaxed);
+    if at == 0 || crate::arch::ms().saturating_sub(at) > 250 {
+        return None;
+    }
+    let v = PEN.load(Ordering::Relaxed);
+    Some(((v & 0xFFFF) as i32, v & 0x10000 != 0))
+}
+
 fn held(m: u32) -> bool {
     MODS.load(Ordering::Relaxed) & m != 0
 }
@@ -119,6 +133,8 @@ pub enum Ev {
     Hydatek(Key),
     /// the Hydatek key pressed and let go on its own: the start menu
     HydatekTap,
+    /// ambient light from a sensor, lux
+    Light(u32),
 }
 
 enum Ptr {
@@ -149,6 +165,8 @@ pub struct Input {
     lone: Option<u64>,
     /// HydatekOS's own USB HID driver
     pub usb: crate::usb::UsbHid,
+    /// I2C touchpads, touch screens, pens and sensors (i2cdev.rs)
+    pub i2c: Option<crate::i2cdev::I2cInput>,
     usb_evs: Vec<crate::usb::Event>,
 }
 
@@ -200,11 +218,11 @@ impl Input {
             let st = unsafe { ((*k).set_state)(k, &mut t) };
             log!("input: partial keys {}", if st == efi::SUCCESS { "reported" } else { "not supported" });
         }
-        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None, usb, usb_evs: Vec::new() }
+        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None, usb, i2c: None, usb_evs: Vec::new() }
     }
 
     pub fn pointer_count(&self) -> usize {
-        self.ptrs.len() + self.usb.driven()
+        self.ptrs.len() + self.usb.driven() + self.i2c.as_ref().map_or(0, |i| i.driven())
     }
 
     pub fn poll(&mut self, speed: i32, out: &mut Vec<Ev>) {
@@ -278,6 +296,9 @@ impl Input {
         // HydatekOS's own USB devices
         let mut evs = core::mem::take(&mut self.usb_evs);
         self.usb.poll(crate::arch::ms(), &mut evs);
+        if let Some(i) = self.i2c.as_mut() {
+            i.poll(crate::arch::ms(), &mut evs);
+        }
         let mut media = Vec::new();
         let mut keys = Vec::new();
         for e in evs.drain(..) {
@@ -328,6 +349,12 @@ impl Input {
                     }
                 }
                 U::Scroll(n) => self.scroll_acc += n,
+                // its position and tip come as Place and Buttons too
+                U::Pen { pressure, eraser, .. } => {
+                    PEN.store(pressure.clamp(0, 1000) as u32 | (eraser as u32) << 16, Ordering::Relaxed);
+                    PEN_AT.store(crate::arch::ms().max(1), Ordering::Relaxed);
+                }
+                U::Light(lux) => keys.push(Ev::Light(lux)),
                 U::Nav(n) => {
                     use crate::gamepad::Nav as N;
                     keys.push(match n {

@@ -175,3 +175,89 @@ fn malformed_descriptors_dont_panic() {
     let _ = Descriptor::parse(&[0xFE, 0xFF, 0x00]);
     let _ = Descriptor::parse(&[0x27, 0xFF]);
 }
+
+/// A Windows-style pen: tip, barrel, invert, eraser, in range; X 0..32767,
+/// Y 0..16383; pressure 0..4095; tilt ±60°.
+const PEN: &[u8] = &[
+    0x05, 0x0D, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x02, 0x09, 0x20, 0xA1, 0x00, 0x09, 0x42, 0x09, 0x44, 0x09, 0x3C, 0x09, 0x45, 0x09, 0x32, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x05, 0x81, 0x02, 0x95,
+    0x03, 0x81, 0x03, 0x05, 0x01, 0x09, 0x30, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02, 0x09, 0x31, 0x26, 0xFF, 0x3F, 0x81, 0x02, 0x05, 0x0D, 0x09, 0x30, 0x26, 0xFF, 0x0F, 0x81, 0x02, 0x09,
+    0x3D, 0x09, 0x3E, 0x15, 0xC4, 0x25, 0x3C, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, 0xC0, 0xC0,
+];
+
+/// A HID ambient light sensor: reporting and power state (features), and
+/// illuminance in hundredths of a lux (unit exponent -2).
+const LIGHT: &[u8] = &[
+    0x05, 0x20, 0x09, 0x41, 0xA1, 0x01, 0x85, 0x03, 0x05, 0x20, 0x0A, 0x16, 0x03, 0x15, 0x00, 0x25, 0x05, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02, 0x0A, 0x19, 0x03, 0xB1, 0x02, 0x0A, 0xD1, 0x04, 0x15, 0x00,
+    0x27, 0xFF, 0xFF, 0xFF, 0x7F, 0x55, 0x0E, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xC0,
+];
+
+#[test]
+fn pen() {
+    let d = Descriptor::parse(PEN);
+    assert_eq!(describe(&d), "Pen");
+    let p = Pen::find(&d).expect("a pen");
+    // tip + in range, X half way, Y a quarter, pressure 2048, tilt -30 / +15
+    let mut r = vec![2, 0b1_0001, 0, 0];
+    r[2..4].copy_from_slice(&16384u16.to_le_bytes());
+    r.extend_from_slice(&4096u16.to_le_bytes());
+    r.extend_from_slice(&2048u16.to_le_bytes());
+    r.extend_from_slice(&[(-30i8) as u8, 15]);
+    let rep = p.read(&r, d.ids).unwrap();
+    assert!(rep.tip && rep.in_range && !rep.barrel && !rep.eraser);
+    assert_eq!((rep.x, rep.y / 100), (16384, 81));
+    assert_eq!(rep.pressure, 500);
+    assert_eq!((rep.tilt_x, rep.tilt_y), (-30, 15));
+    // turned round: the eraser
+    r[1] = 0b1_0100;
+    assert!(p.read(&r, d.ids).unwrap().eraser);
+
+    // through hidin: a pointer position, pressure, and the tip as a click
+    let mut h = crate::hidin::HidInput::new(PEN, false);
+    let mut out = vec![];
+    r[1] = 0b1_0001;
+    h.report(&r, 0, &mut out);
+    use crate::hidin::Event;
+    assert!(matches!(out[0], Event::Pen { pressure: 500, tip: true, eraser: false, .. }));
+    assert_eq!(out[1], Event::Place(16384, 8192));
+    assert_eq!(out[2], Event::Buttons(1));
+    // hovering, tip up: the button lets go
+    out.clear();
+    r[1] = 0b1_0000;
+    h.report(&r, 10, &mut out);
+    assert_eq!(out.last(), Some(&Event::Buttons(0)));
+}
+
+#[test]
+fn light_sensor() {
+    let d = Descriptor::parse(LIGHT);
+    assert_eq!(describe(&d), "Light sensor");
+    let l = LightSensor::find(&d).expect("a light sensor");
+    // started: reporting all events, full power
+    assert_eq!(l.start(&d), Some(vec![3, 1, 1]));
+    let mut r = vec![3];
+    r.extend_from_slice(&32050u32.to_le_bytes());
+    assert_eq!(l.read(&r, d.ids), Some((320, None)));
+    let mut h = crate::hidin::HidInput::new(LIGHT, false);
+    assert_eq!(h.start_reports(), vec![(3, vec![3, 1, 1])]);
+    let mut out = vec![];
+    h.report(&r, 0, &mut out);
+    assert_eq!(out, vec![crate::hidin::Event::Light(320)]);
+}
+
+#[test]
+fn ambient_brightness() {
+    use crate::ambient::*;
+    assert_eq!(target(0, 0), 35);
+    assert_eq!(target(10, 0), 60);
+    assert_eq!(target(400, 0), 93);
+    assert_eq!(target(50_000, 0), 100);
+    // the person likes it dimmer: the curve moves
+    assert_eq!(target(10, -20), 40);
+    assert_eq!(target(0, -40), 10);
+    // slow steps, no flicker for small changes
+    assert_eq!(approach(50, 80), 51);
+    assert_eq!(approach(50, 20), 49);
+    assert_eq!(approach(50, 52), 50);
+    assert_eq!(smooth(None, 100), 100);
+    assert_eq!(smooth(Some(100), 500), 200);
+}

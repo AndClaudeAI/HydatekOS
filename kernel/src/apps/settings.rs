@@ -60,6 +60,14 @@ pub struct Settings {
     claude_msg: String,
     /// Keyboard: the key tester, while it's open
     tester: Option<Tester>,
+    /// Devices: strokes drawn on the pen pad (x, y relative to it, width),
+    /// where it is, the pointer, and whether a stroke is being drawn
+    ink: Vec<Vec<(i32, i32, u8)>>,
+    pad: Rect,
+    at: (i32, i32),
+    inking: bool,
+    /// Devices: the first row shown (scrolling)
+    dev_top: usize,
 }
 
 /// The keyboard tester: every key stroke the firmware reports, as it
@@ -146,7 +154,7 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0 }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
@@ -308,8 +316,17 @@ impl Settings {
 
     /// Sound & haptics: the volume, and haptic feedback with a picture of
     /// each pattern as it plays.
+    /// A stroke's width now: from a pen's pressure (1-9), or 3 for a mouse or
+    /// finger. And whether it's the eraser end.
+    fn ink_width() -> (u8, bool) {
+        match crate::input::pen() {
+            Some((p, e)) => ((1 + p * 8 / 1000) as u8, e),
+            None => (3, false),
+        }
+    }
+
     /// Settings › Devices: everything HydatekOS found, and who drives it.
-    fn render_devices(&mut self, ui: &mut Ui, m: Rect, sys: &Sys) {
+    fn render_devices(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
         let t = ui.t;
         let mut list: Vec<(String, String, &str)> = Vec::new();
         let mut heads: Vec<(usize, &str)> = Vec::new();
@@ -327,25 +344,66 @@ impl Settings {
         if sys.hw.pci.is_empty() {
             list.push((String::from("No PCI bus"), String::from("The processor's devices are built into the chip"), ""));
         }
-        let i2c = &sys.hw.i2c;
-        if i2c.hid + i2c.designware + i2c.other > 0 {
-            heads.push((list.len(), "I2C (from ACPI)"));
-            if i2c.hid > 0 {
-                list.push((format!("{} HID over I2C device{}", i2c.hid, if i2c.hid > 1 { "s" } else { "" }), String::from("Touchpads, touch screens, pens"), "Waits for ACPI"));
-            }
-            if i2c.designware > 0 {
-                list.push((format!("{} DesignWare I2C controller{}", i2c.designware, if i2c.designware > 1 { "s" } else { "" }), String::from("Intel, AMD and ARM laptops"), "HydatekOS I2C"));
-            }
-            if i2c.other > 0 {
-                list.push((format!("{} Qualcomm I2C controller{}", i2c.other, if i2c.other > 1 { "s" } else { "" }), String::from("Snapdragon serial engines"), "No driver yet"));
+        if !sys.acpi_devices.is_empty() {
+            heads.push((list.len(), "ACPI"));
+            for (name, kind, driver) in &sys.acpi_devices {
+                let drv: &'static str = match driver.as_str() {
+                    "HydatekOS ACPI" => "HydatekOS ACPI",
+                    "HydatekOS I2C" => "HydatekOS I2C",
+                    "HydatekOS I2C HID" => "HydatekOS I2C HID",
+                    "Firmware (ACPI)" => "Firmware (ACPI)",
+                    "Controller not responding" => "Controller not responding",
+                    "Controller not found" => "Controller not found",
+                    "Device not answering" => "Device not answering",
+                    "No driver for its I2C controller" => "No driver yet",
+                    _ => "No driver yet",
+                };
+                list.push((name.clone(), kind.clone(), drv));
             }
         }
+        // the pen pad at the bottom
+        const PAD: i32 = 124;
+        let pad = Rect::new(m.x, m.b() - PAD, m.w, PAD);
+        card(ui, pad);
+        self.pad = Rect::new(pad.x + 8, pad.y + 26, pad.w - 16, pad.h - 34);
+        ui.text(pad.x + 14, pad.y + 18, Face::Semibold, 12, "Try your pen, finger or mouse", t.text2);
+        let hint = match crate::input::pen() {
+            Some((p, true)) => format!("Eraser · {}%", p / 10),
+            Some((p, false)) => format!("Pen pressure {}%", p / 10),
+            None => String::from("Clear"),
+        };
+        let hw_ = ui.tw(Face::Medium, 11, &hint) + 18;
+        ui.button(Rect::new(pad.r() - 12 - hw_, pad.y + 5, hw_, 20), &hint, Action::App(inst, C_INK_CLEAR), false);
+        ui.rrect(self.pad, 8, t.surface);
+        for stroke in &self.ink {
+            for w in stroke.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let r = (b.2 as i32).max(1);
+                // a line of dots, as wide as the pressure
+                let n = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) / 1).max(1);
+                for k in 0..=n {
+                    let px = self.pad.x + a.0 + (b.0 - a.0) * k / n;
+                    let py = self.pad.y + a.1 + (b.1 - a.1) * k / n;
+                    ui.circle(px, py, r, t.accent);
+                }
+            }
+            if stroke.len() == 1 {
+                let p = stroke[0];
+                ui.circle(self.pad.x + p.0, self.pad.y + p.1, p.2 as i32, t.accent);
+            }
+        }
+        ui.zone(self.pad, Action::App(inst, C_INK));
+        let m = Rect::new(m.x, m.y, m.w, m.h - PAD - 8);
         const ROW: i32 = 40;
         const HEAD: i32 = 30;
         let mut y = m.y;
         let mut shown = 0;
-        for (i, (name, sub, driver)) in list.iter().enumerate() {
-            if let Some((_, h)) = heads.iter().find(|(at, _)| *at == i) {
+        self.dev_top = self.dev_top.min(list.len().saturating_sub(1));
+        let top = self.dev_top;
+        for (i, (name, sub, driver)) in list.iter().enumerate().skip(top) {
+            // a section's heading, or the one it's in when scrolled into it
+            let head = heads.iter().find(|(at, _)| *at == i).or_else(|| if i == top { heads.iter().rev().find(|(at, _)| *at <= i) } else { None });
+            if let Some((_, h)) = head {
                 if y + HEAD + ROW > m.b() {
                     break;
                 }
@@ -381,8 +439,8 @@ impl Settings {
             shown += 1;
         }
         let rows = list.iter().filter(|l| !l.2.is_empty()).count();
-        if shown < list.len() {
-            ui.text(m.x + 4, m.b() - 4, Face::Regular, 12, &format!("…and {} more", list.len() - shown), t.text2);
+        if top + shown < list.len() {
+            ui.text(m.x + 4, m.b() - 4, Face::Regular, 12, &format!("…and {} more (scroll)", list.len() - top - shown), t.text2);
         } else if rows > 0 {
             let ours = list.iter().filter(|l| l.2.contains("HydatekOS")).count();
             ui.text(m.x + 4, (y + 18).min(m.b() - 4), Face::Regular, 12, &format!("{} devices · {} with HydatekOS drivers", rows, ours), t.text2);
@@ -727,6 +785,9 @@ const C_HSTRENGTH: u32 = 50;
 /// + Haptic::ALL index
 const C_HAPTIC: u32 = 60;
 const C_KEY_TEST_DONE: u32 = 39;
+const C_INK: u32 = 46;
+const C_INK_CLEAR: u32 = 47;
+const C_AUTOBRIGHT: u32 = 48;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -804,7 +865,7 @@ impl App for Settings {
             3 => self.render_keyboard(ui, m, sys, inst),
             10 => self.render_assistant(ui, m, sys, inst),
             11 => self.render_sound(ui, m, sys, inst),
-            12 => self.render_devices(ui, m, sys),
+            12 => self.render_devices(ui, m, sys, inst),
             2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
@@ -1025,6 +1086,16 @@ impl App for Settings {
                 let note = "The firmware's driver draws the screen; the mode is chosen at start-up.";
                 let note = ui.fit(Face::Regular, 12, note, m.w);
                 ui.text(m.x, y + 48, Face::Regular, 12, &note, t.text3);
+                // brightness and the room's light
+                let top = y + 62;
+                card(ui, Rect::new(m.x, top, m.w, 56));
+                let sub = match sys.lux {
+                    Some(l) if sys.auto_brightness => format!("{}% · {} lux in the room", sys.brightness, l),
+                    Some(l) => format!("{}% · the light sensor reads {} lux", sys.brightness, l),
+                    None => format!("{}% · no light sensor found", sys.brightness),
+                };
+                row(ui, Rect::new(m.x + 16, top, m.w - 32, 56), top + 2, "Follow the room's light", &sub);
+                ui.switch(m.r() - 54, top + 14, sys.auto_brightness, Action::App(inst, C_AUTOBRIGHT));
             }
             _ => {
                 let hw = &sys.hw;
@@ -1071,6 +1142,29 @@ impl App for Settings {
         }
     }
 
+    fn mouse(&mut self, x: i32, y: i32) {
+        self.at = (x, y);
+    }
+
+    fn scroll(&mut self, dy: i32) {
+        if self.sec == 12 {
+            self.dev_top = if dy > 0 { self.dev_top + 1 } else { self.dev_top.saturating_sub(1) };
+        }
+    }
+
+    fn drag(&mut self, x: i32, y: i32) {
+        self.at = (x, y);
+        if self.inking {
+            let (w, _) = Self::ink_width();
+            let p = ((x - self.pad.x).clamp(0, self.pad.w), (y - self.pad.y).clamp(0, self.pad.h), w);
+            if let Some(s) = self.ink.last_mut() {
+                if s.len() < 2000 && s.last() != Some(&p) {
+                    s.push(p);
+                }
+            }
+        }
+    }
+
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
         let was = self.focus;
         self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN, C_CLAUDE_KEY].contains(&code) { code } else { 0 };
@@ -1081,7 +1175,10 @@ impl App for Settings {
             self.acc_confirm = None;
         }
         // switches click
-        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN].contains(&code) {
+        if code != C_INK {
+            self.inking = false;
+        }
+        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT].contains(&code) {
             sys.feel(crate::haptics::Haptic::Click);
         }
         match code {
@@ -1097,6 +1194,25 @@ impl App for Settings {
             C_HAPTICS => {
                 sys.haptics.on = !sys.haptics.on;
                 sys.feel(crate::haptics::Haptic::Click);
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_INK => {
+                self.inking = true;
+                let (w, _) = Self::ink_width();
+                self.ink.push(alloc::vec![(self.at.0 - self.pad.x, self.at.1 - self.pad.y, w)]);
+                if self.ink.len() > 60 {
+                    self.ink.remove(0);
+                }
+                return;
+            }
+            C_INK_CLEAR => {
+                self.ink.clear();
+                return;
+            }
+            C_AUTOBRIGHT => {
+                sys.auto_brightness = !sys.auto_brightness;
+                sys.bright_bias = 0;
                 sys.reqs.push(Req::SaveSettings);
                 return;
             }

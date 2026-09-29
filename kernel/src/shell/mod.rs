@@ -630,6 +630,16 @@ impl Shell {
         if self.moving() {
             self.dirty = true;
         }
+        // brightness follows the room's light
+        if ticks % 10 == 0 && self.sys.auto_brightness {
+            if let Some(l) = self.sys.lux {
+                let b = crate::ambient::approach(self.sys.brightness, crate::ambient::target(l, self.sys.bright_bias));
+                if b != self.sys.brightness {
+                    self.sys.brightness = b;
+                    self.dirty = true;
+                }
+            }
+        }
         // haptic patterns go to the paired phone when asked; main.rs plays
         // them on haptic touchpads and controllers' motors (usb.rs)
         for pat in core::mem::take(&mut self.sys.haptics.pending) {
@@ -665,8 +675,13 @@ impl Shell {
                 s.volume = (s.volume + 10).min(100);
             }
             Media::VolumeDown => s.volume = s.volume.saturating_sub(10),
-            Media::BrightnessUp => s.brightness = (s.brightness + 10).min(100),
-            Media::BrightnessDown => s.brightness = s.brightness.saturating_sub(10).max(MIN_BRIGHTNESS),
+            Media::BrightnessUp | Media::BrightnessDown => {
+                s.brightness = if m == Media::BrightnessUp { (s.brightness + 10).min(100) } else { s.brightness.saturating_sub(10).max(MIN_BRIGHTNESS) };
+                // following the light: this moves the curve, it doesn't stop it
+                if let (true, Some(l)) = (s.auto_brightness, s.lux) {
+                    s.bright_bias = s.brightness as i32 - crate::ambient::target(l, 0) as i32;
+                }
+            }
             Media::Sleep | Media::Hibernate => {
                 // no sleep states yet: lock, as closing a laptop's lid would
                 if !self.locked && self.setup.is_none() {
@@ -763,6 +778,14 @@ impl Shell {
 
 
     pub fn event(&mut self, ev: Ev, px: i32, py: i32) {
+        match ev {
+            // the room's light: not something the person did
+            Ev::Light(lux) => {
+                self.sys.lux = Some(crate::ambient::smooth(self.sys.lux, lux));
+                return;
+            }
+            _ => {}
+        }
         let (x, y) = (px / self.s, py / self.s);
         self.mouse = (x, y);
         self.last_input = self.sys.ticks;
@@ -778,6 +801,7 @@ impl Shell {
             return self.setup_event(ev, x, y);
         }
         match ev {
+            Ev::Light(_) => {}
             Ev::Move => {
                 if let Some(d) = self.drag {
                     self.drag_to(d, x, y);
@@ -1655,8 +1679,15 @@ impl Shell {
         let cw = ui.tw(Face::Medium, 13, &clock);
         let mut rx = self.w - 14 - cw;
         ui.text(rx, 19, Face::Medium, 13, &clock, t.text);
-        rx -= 30;
-        ui.icon(Icon::Battery, rx, 6, 16, t.text);
+        // the battery, when there is one (ACPI's _BST)
+        if let Some((pct, charging)) = self.sys.battery {
+            rx -= 30;
+            ui.icon(Icon::Battery, rx, 6, 16, t.text);
+            let label = alloc::format!("{}%{}", pct, if charging { "+" } else { "" });
+            let lw = ui.tw(Face::Medium, 12, &label);
+            rx -= lw + 4;
+            ui.text(rx, 19, Face::Medium, 12, &label, if pct <= 10 && !charging { t.danger } else { t.text });
+        }
         rx -= 26;
         let wifi_col = if self.sys.wifi { t.text } else { t.text3 };
         ui.icon(Icon::Wifi, rx, 6, 16, wifi_col);

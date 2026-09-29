@@ -11,6 +11,9 @@ extern crate alloc;
 
 #[macro_use]
 mod serial;
+mod acpi;
+mod aml;
+mod ambient;
 mod anim;
 mod apps;
 mod arch;
@@ -25,9 +28,11 @@ mod grid;
 mod gridio;
 mod haptics;
 mod hid;
+mod hidin;
 mod heap;
 mod hlp;
 mod i2c;
+mod i2cdev;
 mod icons;
 mod image;
 mod input;
@@ -242,6 +247,27 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     }
     sys.firmware = efi::firmware_vendor();
     sys.hw = hw::detect();
+    // the firmware's ACPI namespace: devices off PCI and USB (I2C touchpads,
+    // the battery, light sensors…)
+    disp.present(splash.step(80, "Finding devices"), full);
+    let mut acpi = acpi::load();
+    for (path, id, kind) in acpi::inventory(&mut acpi) {
+        let name = alloc::format!("{} ({})", aml::leaf(&path), id);
+        let driver = match kind {
+            "Battery" | "Ambient light sensor" | "Embedded controller" => "HydatekOS ACPI",
+            "HID over I2C device" | "I2C controller (DesignWare)" => "HydatekOS I2C",
+            _ => "Firmware (ACPI)",
+        };
+        sys.acpi_devices.push((name, alloc::string::String::from(kind), alloc::string::String::from(driver)));
+    }
+    let batteries = acpi::devices_with(&mut acpi, "PNP0C0A");
+    let lights = acpi::devices_with(&mut acpi, "ACPI0008");
+    sys.battery = batteries.first().and_then(|b| acpi::battery(&mut acpi, b));
+    let i2c = i2cdev::I2cInput::start(&mut acpi);
+    for f in &i2c.found {
+        sys.acpi_devices.retain(|d| !(d.1 == "HID over I2C device" && f.name.starts_with(d.0.split(' ').next().unwrap_or(""))));
+        sys.acpi_devices.push((f.name.clone(), f.kind.clone(), alloc::string::String::from(f.status)));
+    }
     sys.mem_total = efi::total_memory();
     disp.present(splash.step(85, "Preparing your desktop"), full);
     let (lw, lh) = (disp.w / scale, disp.h / scale);
@@ -250,6 +276,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
     let mut input = input::Input::new(disp.w, disp.h);
+    input.i2c = Some(i2c);
     log!("input: {} pointer device(s)", input.pointer_count());
 
     // 100 Hz periodic timer to pace the loop.
@@ -294,11 +321,26 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         // controllers' rumble motors
         for (h, pulses) in core::mem::take(&mut sh.sys.haptics.device) {
             input.usb.feel(h, &pulses, sh.sys.haptics.strength.percent(), arch::ms());
+            if let Some(i) = input.i2c.as_mut() {
+                let (w, n, p) = haptics::waveform(h);
+                i.play(w, sh.sys.haptics.strength.percent(), n, p);
+            }
+        }
+        // the battery every 30 s, an ACPI light sensor every second
+        if ticks % 3000 == 1 {
+            if let Some(b) = batteries.first() {
+                sh.sys.battery = acpi::battery(&mut acpi, b);
+            }
+        }
+        if ticks % 100 == 7 {
+            if let Some(l) = lights.first().and_then(|l| acpi::light(&mut acpi, l)) {
+                sh.sys.lux = Some(ambient::smooth(sh.sys.lux, l));
+            }
         }
         if sh.sys.usb_gen != input.usb.generation {
             sh.sys.usb_gen = input.usb.generation;
             sh.sys.usb = input.usb.info.clone();
-            sh.sys.haptic_pads = input.usb.haptic_pads();
+            sh.sys.haptic_pads = input.usb.haptic_pads() + input.i2c.as_ref().map_or(0, |i| i.haptic_pads());
             sh.sys.motors = input.usb.motors();
             sh.dirty = true;
         }

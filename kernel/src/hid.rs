@@ -45,6 +45,20 @@ pub const X: Usage = usage(GENERIC_DESKTOP, 0x30);
 pub const Y: Usage = usage(GENERIC_DESKTOP, 0x31);
 pub const WHEEL: Usage = usage(GENERIC_DESKTOP, 0x38);
 pub const HAT: Usage = usage(GENERIC_DESKTOP, 0x39);
+pub const SENSORS: u16 = 0x20;
+pub const APP_SENSOR_HUB: Usage = usage(SENSORS, 0x01);
+pub const APP_LIGHT: Usage = usage(SENSORS, 0x41);
+pub const ILLUMINANCE: Usage = usage(SENSORS, 0x04D1);
+pub const COLOR_TEMPERATURE: Usage = usage(SENSORS, 0x04D2);
+pub const REPORTING_STATE: Usage = usage(SENSORS, 0x0316);
+pub const POWER_STATE: Usage = usage(SENSORS, 0x0319);
+pub const IN_RANGE: Usage = usage(DIGITIZER, 0x32);
+pub const TIP_PRESSURE: Usage = usage(DIGITIZER, 0x30);
+pub const BARREL: Usage = usage(DIGITIZER, 0x44);
+pub const ERASER: Usage = usage(DIGITIZER, 0x45);
+pub const INVERT: Usage = usage(DIGITIZER, 0x3C);
+pub const X_TILT: Usage = usage(DIGITIZER, 0x3D);
+pub const Y_TILT: Usage = usage(DIGITIZER, 0x3E);
 pub const AC_PAN: Usage = usage(CONSUMER, 0x238);
 pub const TIP: Usage = usage(DIGITIZER, 0x42);
 pub const CONFIDENCE: Usage = usage(DIGITIZER, 0x47);
@@ -94,6 +108,8 @@ pub struct Field {
     pub coll: u16,
     /// that collection's usage (FINGER, WAVEFORM_LIST…)
     pub coll_usage: Usage,
+    /// unit exponent: the value is value × 10^exp (sensors)
+    pub exp: i8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -113,6 +129,7 @@ struct Globals {
     size: u32,
     count: u32,
     id: u8,
+    exp: i8,
 }
 
 fn sext(v: u32, bytes: usize) -> i32 {
@@ -160,6 +177,7 @@ impl Descriptor {
                 (1, 0) => g.page = v as u16,
                 (1, 1) => g.min = sext(v, n),
                 (1, 2) => g.max = if g.min < 0 { sext(v, n) } else { v as i32 },
+                (1, 5) => g.exp = if n == 1 && v < 16 { ((v as i8) << 4) >> 4 } else { sext(v, n) as i8 },
                 (1, 7) => g.size = v.min(32),
                 (1, 8) => {
                     g.id = v as u8;
@@ -204,7 +222,7 @@ impl Descriptor {
                             pos.len() - 1
                         }
                     };
-                    let base = Field { kind, report_id: g.id, bit: 0, size: g.size as u8, usage: 0, usage_max: 0, min: g.min, max: g.max, constant, variable, relative, app, coll, coll_usage };
+                    let base = Field { kind, report_id: g.id, bit: 0, size: g.size as u8, usage: 0, usage_max: 0, min: g.min, max: g.max, constant, variable, relative, app, coll, coll_usage, exp: g.exp };
                     if !constant && !variable {
                         // an array: `count` slots, each holding a usage
                         let lo = umin.or(usages.first().copied()).unwrap_or(0);
@@ -318,6 +336,8 @@ pub fn describe(d: &Descriptor) -> &'static str {
             APP_GAMEPAD => "Gamepad",
             APP_JOYSTICK => "Joystick",
             APP_HAPTIC => "Haptic controller",
+            APP_LIGHT => "Light sensor",
+            APP_SENSOR_HUB => "Sensor hub",
             _ => continue,
         };
         return name;
@@ -405,6 +425,131 @@ impl Mouse {
             pan: self.pan.as_ref().map_or(0, |f| get(f, r, ids)),
             buttons,
         })
+    }
+}
+
+// ---- pens -------------------------------------------------------------------------
+
+/// A pen (stylus) on a pen tablet or a pen-enabled touch screen.
+#[derive(Clone, Debug)]
+pub struct Pen {
+    x: Field,
+    y: Field,
+    tip: Option<Field>,
+    in_range: Option<Field>,
+    barrel: Option<Field>,
+    eraser: Option<Field>,
+    invert: Option<Field>,
+    pressure: Option<Field>,
+    tilt: (Option<Field>, Option<Field>),
+}
+
+/// One pen report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PenReport {
+    /// position, 0..=32767 on each axis
+    pub x: i32,
+    pub y: i32,
+    /// 0..=1000 (1000 when the pen reports no pressure but touches)
+    pub pressure: i32,
+    pub tip: bool,
+    /// hovering over the screen
+    pub in_range: bool,
+    /// the side button
+    pub barrel: bool,
+    /// the eraser end (or the pen turned round)
+    pub eraser: bool,
+    /// degrees, -90..=90
+    pub tilt_x: i32,
+    pub tilt_y: i32,
+}
+
+impl Pen {
+    pub fn find(d: &Descriptor) -> Option<Pen> {
+        let ins = |u: Usage| d.fields.iter().find(|f| f.kind == Kind::Input && f.app == APP_PEN && f.usage == u).copied();
+        let (x, y) = (ins(X)?, ins(Y)?);
+        Some(Pen { x, y, tip: ins(TIP), in_range: ins(IN_RANGE), barrel: ins(BARREL), eraser: ins(ERASER), invert: ins(INVERT), pressure: ins(TIP_PRESSURE), tilt: (ins(X_TILT), ins(Y_TILT)) })
+    }
+
+    pub fn read(&self, r: &[u8], ids: bool) -> Option<PenReport> {
+        if report_id(r, ids) != self.x.report_id {
+            return None;
+        }
+        let scale = |f: &Field, top: i64| {
+            let span = (f.max - f.min).max(1) as i64;
+            ((get(f, r, ids) - f.min).clamp(0, span as i32) as i64 * top / span) as i32
+        };
+        let on = |f: &Option<Field>| f.as_ref().map_or(false, |f| get(f, r, ids) != 0);
+        let tip = on(&self.tip);
+        let pressure = match &self.pressure {
+            Some(f) => scale(f, 1000),
+            None => if tip { 1000 } else { 0 },
+        };
+        let tilt = |f: &Option<Field>| f.as_ref().map_or(0, |f| (get(f, r, ids)).clamp(-90, 90));
+        Some(PenReport {
+            x: scale(&self.x, 32767),
+            y: scale(&self.y, 32767),
+            pressure,
+            tip,
+            in_range: self.in_range.as_ref().map_or(true, |f| get(f, r, ids) != 0),
+            barrel: on(&self.barrel),
+            eraser: on(&self.eraser) || on(&self.invert),
+            tilt_x: tilt(&self.tilt.0),
+            tilt_y: tilt(&self.tilt.1),
+        })
+    }
+}
+
+// ---- light sensors ----------------------------------------------------------------
+
+/// An ambient light sensor (a HID sensor, on its own or in a sensor hub).
+#[derive(Clone, Debug)]
+pub struct LightSensor {
+    lux: Field,
+    color: Option<Field>,
+    reporting: Option<Field>,
+    power: Option<Field>,
+}
+
+impl LightSensor {
+    pub fn find(d: &Descriptor) -> Option<LightSensor> {
+        let lux = *d.fields.iter().find(|f| f.kind == Kind::Input && f.usage == ILLUMINANCE)?;
+        let feat = |u: Usage| d.fields.iter().find(|f| f.kind == Kind::Feature && f.usage == u && f.report_id == lux.report_id).copied();
+        Some(LightSensor { lux, color: d.fields.iter().find(|f| f.kind == Kind::Input && f.usage == COLOR_TEMPERATURE && f.report_id == lux.report_id).copied(), reporting: feat(REPORTING_STATE), power: feat(POWER_STATE) })
+    }
+
+    /// The feature report that starts it: all events reported, full power.
+    pub fn start(&self, d: &Descriptor) -> Option<Vec<u8>> {
+        let f = self.reporting.or(self.power)?;
+        let mut r = alloc::vec![0u8; d.report_len(Kind::Feature, f.report_id)];
+        if d.ids {
+            r[0] = f.report_id;
+        }
+        // the selectors are listed in order: "no events", "all events"…;
+        // "D0" (full power) is the second power state
+        if let Some(f) = &self.reporting {
+            put(f, &mut r, d.ids, f.min + 1);
+        }
+        if let Some(f) = &self.power {
+            put(f, &mut r, d.ids, f.min + 1);
+        }
+        Some(r)
+    }
+
+    /// Lux (and colour temperature in kelvin, if it says).
+    pub fn read(&self, r: &[u8], ids: bool) -> Option<(u32, Option<u32>)> {
+        if report_id(r, ids) != self.lux.report_id {
+            return None;
+        }
+        let val = |f: &Field| {
+            let v = get(f, r, ids).max(0) as i64;
+            let v = match f.exp {
+                e if e < 0 => v / 10i64.pow((-e) as u32),
+                e => v * 10i64.pow(e as u32),
+            };
+            v.clamp(0, u32::MAX as i64) as u32
+        };
+        Some((val(&self.lux), self.color.as_ref().map(val)))
     }
 }
 

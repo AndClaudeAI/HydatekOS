@@ -8,14 +8,9 @@
 //!   power, get/set report) and output reports. Its reports go through the
 //!   same HID code as USB devices (hid.rs, touchpad.rs).
 //!
-//! What's not here yet: finding the devices. Their controller's address,
-//! the device's I2C address and its HID descriptor register come from ACPI
-//! (a PNP0C50 device's _CRS and _DSM), which needs an AML interpreter; hw.rs
-//! only counts them for Settings for now. Host-tested against a simulated
-//! controller and touchpad.
-
-// not called yet on real machines: see "What's not here yet" above
-#![allow(dead_code)]
+//! The devices are found through ACPI (acpi.rs: a PNP0C50 device's _CRS
+//! and _DSM, its controller's registers and timing) and started by
+//! i2cdev.rs. Host-tested against a simulated controller and touchpad.
 
 use alloc::vec::Vec;
 
@@ -35,7 +30,6 @@ pub trait Regs {
 }
 
 /// Registers at a physical address (the firmware maps memory 1:1).
-#[allow(dead_code)]
 pub struct Mmio(pub usize);
 
 impl Regs for Mmio {
@@ -52,6 +46,7 @@ pub const IC_TAR: usize = 0x04;
 pub const IC_DATA_CMD: usize = 0x10;
 pub const IC_FS_SCL_HCNT: usize = 0x1C;
 pub const IC_FS_SCL_LCNT: usize = 0x20;
+pub const IC_SDA_HOLD: usize = 0x7C;
 pub const IC_INTR_MASK: usize = 0x30;
 pub const IC_RAW_INTR_STAT: usize = 0x34;
 pub const IC_CLR_TX_ABRT: usize = 0x54;
@@ -93,6 +88,16 @@ impl<R: Regs> DesignWare<R> {
         regs.wr(IC_FS_SCL_LCNT, clock_mhz * 13 / 10);
         regs.wr(IC_INTR_MASK, 0);
         Some(DesignWare { regs, patience: 200_000 })
+    }
+
+    /// Timing from the firmware (ACPI's FMCN: high and low counts, SDA hold).
+    pub fn set_counts(&mut self, high: u32, low: u32, hold: u32) {
+        self.regs.wr(IC_ENABLE, 0);
+        self.regs.wr(IC_FS_SCL_HCNT, high);
+        self.regs.wr(IC_FS_SCL_LCNT, low);
+        if hold != 0 {
+            self.regs.wr(IC_SDA_HOLD, hold);
+        }
     }
 
     fn target(&mut self, addr: u16) {
@@ -209,7 +214,9 @@ const OP_SET_REPORT: u8 = 3;
 const OP_SET_POWER: u8 = 8;
 
 /// Report types in commands.
+#[allow(dead_code)]
 pub const INPUT: u8 = 1;
+#[allow(dead_code)]
 pub const OUTPUT: u8 = 2;
 pub const FEATURE: u8 = 3;
 
