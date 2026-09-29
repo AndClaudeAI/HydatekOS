@@ -145,6 +145,8 @@ pub struct Xhci {
     /// a scratch page for control transfers
     scratch: usize,
     pub name: String,
+    /// the controller's vendor:device
+    pub ids: String,
     pub info: Vec<DeviceInfo>,
     pub generation: u32,
 }
@@ -160,19 +162,7 @@ fn wr64(a: usize, v: u64) {
     wr(a + 4, (v >> 32) as u32);
 }
 
-/// Wait up to `ms` for `f`.
-fn wait(ms: u64, mut f: impl FnMut() -> bool) -> bool {
-    let end = crate::arch::ms() + ms;
-    loop {
-        if f() {
-            return true;
-        }
-        if crate::arch::ms() > end {
-            return false;
-        }
-        core::hint::spin_loop();
-    }
-}
+use crate::efi::wait_until as wait;
 
 impl Xhci {
     /// Take a controller and bring it up; the devices on its ports are started.
@@ -268,6 +258,7 @@ impl Xhci {
             changed: Vec::new(),
             scratch: crate::efi::dma(1).ok_or("no memory")?,
             name: format!("xHCI {:02x}:{:02x}.{}", b, dv, f),
+            ids: format!("{:04x}:{:04x}", d.vendor, d.device),
             info: Vec::new(),
             generation: 1,
         };

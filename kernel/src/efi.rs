@@ -343,6 +343,20 @@ pub fn image() -> Handle {
     unsafe { IMAGE }
 }
 
+/// Poll `f` for up to `ms` milliseconds (hardware getting ready).
+pub fn wait_until(ms: u64, mut f: impl FnMut() -> bool) -> bool {
+    let end = crate::arch::ms() + ms;
+    loop {
+        if f() {
+            return true;
+        }
+        if crate::arch::ms() > end {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// Wait `ms` milliseconds.
 pub fn stall_ms(ms: u64) {
     (bs().stall)(ms as usize * 1000);

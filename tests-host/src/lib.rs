@@ -42,6 +42,8 @@ pub mod i2c;
 pub mod hidin;
 #[path = "../../kernel/src/ambient.rs"]
 pub mod ambient;
+#[path = "../../kernel/src/storage.rs"]
+pub mod storage;
 #[path = "../../kernel/src/aml.rs"]
 pub mod aml;
 #[path = "../../kernel/src/acpi.rs"]
@@ -120,6 +122,8 @@ mod i2c_tests;
 mod gamepad_tests;
 #[cfg(test)]
 mod acpi_tests;
+#[cfg(test)]
+mod storage_tests;
 #[cfg(test)]
 mod tls_tests;
 #[cfg(test)]

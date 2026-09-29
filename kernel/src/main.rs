@@ -37,6 +37,10 @@ mod icons;
 mod image;
 mod input;
 mod crypto;
+mod disks;
+mod ahci;
+mod nvme;
+mod storage;
 mod doc;
 mod deck;
 mod deckio;
@@ -277,9 +281,22 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
+    // disks HydatekOS drives itself (not the boot disk)
+    let disks = disks::start_all();
+    sh.sys.disks = disks.info.clone();
     // USB controllers HydatekOS drives itself (before the firmware's USB
     // devices are listed: taking a controller removes them)
     let xhcis = xhci::start_all();
+    // the PCI list says who drives what now
+    for p in sh.sys.hw.pci.iter_mut() {
+        let k = p.kind;
+        if (k.starts_with("NVMe") || k.starts_with("SATA")) && disks.taken.iter().any(|t| *t == p.ids) {
+            p.driver = if k.starts_with("NVMe") { "HydatekOS NVMe" } else { "HydatekOS AHCI" };
+        }
+        if k.starts_with("USB 3") && xhcis.iter().any(|x| x.ids == p.ids) {
+            p.driver = "HydatekOS xHCI";
+        }
+    }
     let mut input = input::Input::new(disp.w, disp.h);
     input.i2c = Some(i2c);
     input.xhci = xhcis;

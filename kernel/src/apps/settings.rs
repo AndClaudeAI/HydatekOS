@@ -337,6 +337,12 @@ impl Settings {
         if sys.usb.is_empty() {
             list.push((String::from("No USB devices"), String::new(), ""));
         }
+        if !sys.disks.is_empty() {
+            heads.push((list.len(), "Storage"));
+            for d in &sys.disks {
+                list.push((format!("{} · {}", d.name, crate::storage::size_text(d.bytes)), format!("{} · {}", d.kind, crate::storage::summary(&d.partitions)), d.driver));
+            }
+        }
         heads.push((list.len(), "PCI"));
         for d in &sys.hw.pci {
             list.push((d.name.clone(), format!("{} · {}", d.kind, d.ids), d.driver));

@@ -131,6 +131,8 @@ pub struct Sys {
     pub motors: usize,
     /// what ACPI describes and who drives it: (name, kind, driver)
     pub acpi_devices: Vec<(String, String, String)>,
+    /// disks HydatekOS drives (NVMe, SATA)
+    pub disks: Vec<crate::storage::DiskInfo>,
     /// the battery: percent, charging (None: no battery, a desktop)
     pub battery: Option<(u32, bool)>,
     /// ambient light (lux) from a light sensor, and whether brightness follows it
@@ -254,6 +256,7 @@ impl Sys {
             haptic_pads: 0,
             motors: 0,
             acpi_devices: Vec::new(),
+            disks: Vec::new(),
             battery: None,
             lux: None,
             auto_brightness: true,
