@@ -12,7 +12,9 @@ extern crate alloc;
 #[macro_use]
 mod serial;
 mod apps;
+mod arch;
 mod brand;
+mod hw;
 mod efi;
 mod font;
 mod fs;
@@ -231,6 +233,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         sys.link.desktop_name = n.hostname.clone();
     }
     sys.firmware = efi::firmware_vendor();
+    sys.hw = hw::detect();
     sys.mem_total = efi::total_memory();
     disp.present(splash.step(85, "Preparing your desktop"), full);
     let (lw, lh) = (disp.w / scale, disp.h / scale);

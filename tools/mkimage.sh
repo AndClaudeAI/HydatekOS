@@ -17,6 +17,18 @@ command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 
 (cd "$ROOT/kernel" && cargo build --release)
 EFI="$ROOT/kernel/target/x86_64-unknown-uefi/release/hydatek.efi"
+# ARM64 (Qualcomm Snapdragon and other ARM laptops): the same stick boots
+# both. Skipped when the target isn't installed (rustup target add
+# aarch64-unknown-uefi), unless ARM64=1 insists.
+EFI_ARM=""
+if [ "${ARM64:-auto}" != 0 ] && rustup target list --installed 2>/dev/null | grep -q aarch64-unknown-uefi; then
+  (cd "$ROOT/kernel" && cargo build --release --target aarch64-unknown-uefi)
+  EFI_ARM="$ROOT/kernel/target/aarch64-unknown-uefi/release/hydatek.efi"
+elif [ "${ARM64:-auto}" = 1 ]; then
+  echo "ARM64=1 needs: rustup target add aarch64-unknown-uefi"; exit 1
+else
+  echo "note: rustup target add aarch64-unknown-uefi to include ARM64 (Snapdragon)"
+fi
 
 mkdir -p "$OUT"
 rm -f "$IMG"
@@ -27,6 +39,7 @@ PART="$IMG@@1M"
 mformat -i "$PART" -T $(( (SIZE_MB - 2) * 2048 )) -F -v HYDATEKOS ::
 mmd -i "$PART" ::/EFI ::/EFI/BOOT ::/HYDATEK
 mcopy -i "$PART" "$EFI" ::/EFI/BOOT/BOOTX64.EFI
+[ -n "$EFI_ARM" ] && mcopy -i "$PART" "$EFI_ARM" ::/EFI/BOOT/BOOTAA64.EFI
 # Phone Link's Android app, served to phones at http://<pc>:7743/app.apk
 APK="$ROOT/companion/android/build/hydatek-link.apk"
 if [ -f "$APK" ]; then

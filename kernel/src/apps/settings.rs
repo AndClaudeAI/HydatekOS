@@ -790,25 +790,88 @@ impl App for Settings {
                 }
             }
             9 => {
+                let hw = &sys.hw;
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
                 kv(ui, m.x + 16, m.y + 56, m.w - 32, "Scale", &format!("{}×", s));
                 kv(ui, m.x + 16, m.y + 82, m.w - 32, "Layout", &format!("{} × {} points", w / s, h / s));
                 kv(ui, m.x + 16, m.y + 108, m.w - 32, "Renderer", "HydatekOS software compositor");
+                // the graphics hardware
+                let top = m.y + 144;
+                let n = hw.gpus.len().max(1) as i32;
+                card(ui, Rect::new(m.x, top, m.w, 44 + n * 24));
+                ui.text(m.x + 16, top + 26, Face::Semibold, 14, "Graphics", t.text);
+                for (i, g) in hw.gpus.iter().enumerate() {
+                    let y = top + 50 + i as i32 * 24;
+                    let name = ui.fit(Face::Regular, 13, &g.name, m.w - 150);
+                    ui.text(m.x + 16, y, Face::Regular, 13, &name, t.text2);
+                    let ids = if g.ids.is_empty() { "built in" } else { g.ids.as_str() };
+                    let iw = ui.tw(Face::Mono, 12, ids);
+                    ui.text(m.r() - 16 - iw, y, Face::Mono, 12, ids, t.text3);
+                }
+                // the firmware's screen modes
+                let top = top + 58 + n * 24;
+                ui.text(m.x, top + 14, Face::Semibold, 14, "Screen modes", t.text);
+                let mut x = m.x;
+                let mut y = top + 26;
+                for &(mw, mh) in hw.modes.iter().take(12) {
+                    let label = format!("{} × {}", mw, mh);
+                    let cw = ui.tw(Face::Medium, 12, &label) + 22;
+                    if x + cw > m.r() {
+                        x = m.x;
+                        y += 32;
+                    }
+                    let on = (mw, mh) == hw.mode;
+                    ui.rrect(Rect::new(x, y, cw, 26), 13, if on { t.accent } else { t.chip });
+                    ui.text_in(Rect::new(x, y, cw, 26), Face::Medium, 12, &label, if on { t.on_accent } else { t.text }, 1);
+                    x += cw + 6;
+                }
+                let note = "The firmware's driver draws the screen; the mode is chosen at start-up.";
+                let note = ui.fit(Face::Regular, 12, note, m.w);
+                ui.text(m.x, y + 48, Face::Regular, 12, &note, t.text3);
             }
             _ => {
-                card(ui, Rect::new(m.x, m.y, m.w, 214));
+                let hw = &sys.hw;
+                let (used, total) = crate::heap::HEAP.stats();
+                let cores = match (hw.cores, hw.threads) {
+                    (0, _) => String::from("-"),
+                    (c, t) if t > c => format!("{} cores, {} threads", c, t),
+                    (c, _) => format!("{} cores", c),
+                };
+                let cores = if hw.max_mhz >= 500 { format!("{}, up to {}.{} GHz", cores, hw.max_mhz / 1000, hw.max_mhz % 1000 / 100) } else { cores };
+                let mut cpu = hw.cpu.clone();
+                if !hw.core.is_empty() {
+                    cpu = format!("{} ({})", cpu, hw.core);
+                }
+                let gpu = hw.gpus.first().map(|g| g.name.clone()).unwrap_or_else(|| String::from("-"));
+                let feats = hw.features.join(" · ");
+                let mut rows: Vec<(&str, String)> = Vec::new();
+                if !hw.machine.is_empty() {
+                    rows.push(("Computer", hw.machine.clone()));
+                }
+                rows.push(("Processor", cpu));
+                rows.push(("Cores", cores));
+                if !feats.is_empty() {
+                    rows.push(("Features", feats));
+                }
+                rows.push(("Graphics", gpu));
+                rows.push(("System memory", format!("{} MB", sys.mem_total >> 20)));
+                rows.push(("Kernel heap", format!("{} / {} MB", used >> 20, total >> 20)));
+                rows.push(("Storage", String::from(if sys.fs.persistent { "Boot disk \\HYDATEK" } else { "Live session (read-only disk)" })));
+                rows.push(("Firmware", if hw.bios.is_empty() { sys.firmware.clone() } else { hw.bios.clone() }));
+                rows.push(("Architecture", format!("{} UEFI{}", hw.arch, if hw.snapdragon { " · Snapdragon" } else { "" })));
+                let h = 80 + rows.len() as i32 * 24;
+                card(ui, Rect::new(m.x, m.y, m.w, h));
                 ui.text(m.x + 16, m.y + 36, Face::Semibold, 24, "HydatekOS", t.text);
                 ui.text(m.x + 16, m.y + 58, Face::Regular, 13, "Version 0.1 \"Dune\" · milestone 1", t.text2);
-                let (used, total) = crate::heap::HEAP.stats();
-                kv(ui, m.x + 16, m.y + 92, m.w - 32, "System memory", &format!("{} MB", sys.mem_total >> 20));
-                kv(ui, m.x + 16, m.y + 116, m.w - 32, "Kernel heap", &format!("{} / {} MB", used >> 20, total >> 20));
-                kv(ui, m.x + 16, m.y + 140, m.w - 32, "Storage", if sys.fs.persistent { "Boot disk \\HYDATEK" } else { "Live session (read-only disk)" });
-                kv(ui, m.x + 16, m.y + 164, m.w - 32, "Firmware", &sys.firmware);
-                kv(ui, m.x + 16, m.y + 188, m.w - 32, "Architecture", "x86-64 UEFI");
-                ui.button(Rect::new(m.x, m.y + 230, 110, 32), "Restart", Action::App(inst, C_RESTART), false);
-                ui.button(Rect::new(m.x + 120, m.y + 230, 110, 32), "Shut down", Action::App(inst, C_SHUTDOWN), true);
+                for (i, (k, v)) in rows.iter().enumerate() {
+                    // long values (a processor's full name) are cut to fit
+                    let v = ui.fit(Face::Medium, 13, v, m.w - 32 - 130);
+                    kv(ui, m.x + 16, m.y + 92 + i as i32 * 24, m.w - 32, k, &v);
+                }
+                ui.button(Rect::new(m.x, m.y + h + 16, 110, 32), "Restart", Action::App(inst, C_RESTART), false);
+                ui.button(Rect::new(m.x + 120, m.y + h + 16, 110, 32), "Shut down", Action::App(inst, C_SHUTDOWN), true);
             }
         }
     }
@@ -1116,7 +1179,18 @@ impl App for Settings {
         let (text, save, max) = match self.focus {
             C_PIN_FIELD => (&mut self.pin, C_PIN_SAVE, 8),
             C_PW_FIELD => (&mut self.password, C_PW_SAVE, 64),
-            _ => return,
+            _ => {
+                // no box being typed in: ↑ and ↓ go through the sections
+                // (keyboards without a pointer, like ARM firmware's)
+                match k {
+                    Key::Up => self.sec = self.sec.saturating_sub(1),
+                    Key::Down => self.sec = (self.sec + 1).min(SECTIONS.len() - 1),
+                    _ => return,
+                }
+                self.page = true;
+                self.picking = false;
+                return;
+            }
         };
         match k {
             Key::Char(c) if text.chars().count() < max && (save == C_PW_SAVE && !c.is_control() || c.is_ascii_digit()) => text.push(c),

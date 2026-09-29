@@ -4,7 +4,7 @@
 //! IntelliMouse extension for the scroll wheel. The firmware's keyboard driver
 //! keeps owning the keyboard port; we only consume bytes flagged as AUX.
 
-use core::arch::asm;
+use crate::arch::{inb, outb};
 
 const DATA: u16 = 0x60;
 const CMD: u16 = 0x64;
@@ -12,14 +12,6 @@ const ST_OBF: u8 = 0x01;
 const ST_IBF: u8 = 0x02;
 const ST_AUX: u8 = 0x20;
 
-unsafe fn inb(p: u16) -> u8 {
-    let v: u8;
-    asm!("in al, dx", out("al") v, in("dx") p, options(nomem, nostack, preserves_flags));
-    v
-}
-unsafe fn outb(p: u16, v: u8) {
-    asm!("out dx, al", in("dx") p, in("al") v, options(nomem, nostack, preserves_flags));
-}
 
 fn wait_write() -> bool {
     for _ in 0..100_000 {

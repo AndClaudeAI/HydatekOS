@@ -24,6 +24,8 @@ pub mod accounts;
 pub mod keymap;
 #[path = "../../kernel/src/lineedit.rs"]
 pub mod lineedit;
+#[path = "../../kernel/src/hw.rs"]
+pub mod hw;
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
@@ -69,6 +71,8 @@ mod web_tests;
 mod claude_tests;
 #[cfg(test)]
 mod lineedit_tests;
+#[cfg(test)]
+mod hw_tests;
 #[cfg(test)]
 mod tls_tests;
 #[cfg(test)]

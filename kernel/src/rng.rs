@@ -1,12 +1,13 @@
 //! Cryptographically secure random numbers.
 //!
-//! Seeded from every source available — the CPU's RDRAND instruction, the firmware
-//! RNG protocol and timestamp-counter jitter — hashed together with SHA-256,
+//! Seeded from every source available — the CPU's random-number instruction
+//! (RDRAND on x86-64, RNDR on ARM64), the firmware RNG protocol and cycle
+//! counter jitter — hashed together with SHA-256,
 //! then expanded with ChaCha20 (fast key erasure).
 
 use crate::crypto::{chacha20_block, Sha256};
 use crate::efi;
-use core::arch::x86_64::{__cpuid, _rdtsc};
+use crate::arch;
 use core::cell::UnsafeCell;
 
 struct State {
@@ -19,22 +20,6 @@ struct Cell(UnsafeCell<State>);
 unsafe impl Sync for Cell {}
 static RNG: Cell = Cell(UnsafeCell::new(State { key: [0; 32], counter: 0, seeded: false }));
 
-fn rdrand() -> Option<u64> {
-    let leaf1 = __cpuid(1);
-    if leaf1.ecx & (1 << 30) == 0 {
-        return None;
-    }
-    for _ in 0..10 {
-        let v: u64;
-        let ok: u8;
-        unsafe { core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok) };
-        if ok != 0 {
-            return Some(v);
-        }
-    }
-    None
-}
-
 #[repr(C)]
 struct RngProtocol {
     get_info: usize,
@@ -46,7 +31,7 @@ pub fn init() -> &'static str {
     let mut h = Sha256::new();
     let mut hw = false;
     for _ in 0..16 {
-        if let Some(v) = rdrand() {
+        if let Some(v) = arch::hw_random() {
             h.update(&v.to_le_bytes());
             hw = true;
         }
@@ -59,9 +44,9 @@ pub fn init() -> &'static str {
             fw = true;
         }
     }
-    // Timer jitter: the low bits of the TSC around firmware stalls vary.
+    // Timer jitter: the low bits of the cycle counter around firmware stalls vary.
     for i in 0..256u32 {
-        let t = unsafe { _rdtsc() };
+        let t = arch::cycles();
         h.update(&t.to_le_bytes());
         if i % 32 == 0 {
             efi::stall_us(7);
@@ -73,11 +58,12 @@ pub fn init() -> &'static str {
     let st = unsafe { &mut *RNG.0.get() };
     st.key = h.finish();
     st.seeded = true;
+    let hwname = arch::HW_RANDOM;
     match (hw, fw) {
-        (true, true) => "RDRAND + firmware RNG + TSC",
-        (true, false) => "RDRAND + TSC",
-        (false, true) => "firmware RNG + TSC",
-        _ => "TSC jitter only",
+        (true, true) => if hwname == "RDRAND" { "RDRAND + firmware RNG + TSC" } else { "RNDR + firmware RNG + timer" },
+        (true, false) => if hwname == "RDRAND" { "RDRAND + TSC" } else { "RNDR + timer" },
+        (false, true) => "firmware RNG + timer",
+        _ => "timer jitter only",
     }
 }
 
@@ -87,7 +73,7 @@ pub fn stir(extra: u64) {
     let mut h = Sha256::new();
     h.update(&st.key);
     h.update(&extra.to_le_bytes());
-    h.update(&unsafe { _rdtsc() }.to_le_bytes());
+    h.update(&arch::cycles().to_le_bytes());
     st.key = h.finish();
 }
 

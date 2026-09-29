@@ -117,6 +117,8 @@ pub struct Sys {
     pub claude_model: String,
     /// the keyboard tester is open: keys go to it, not to shortcuts
     pub key_test: bool,
+    /// the processor, graphics and screen modes (hw.rs)
+    pub hw: crate::hw::Hardware,
     /// sound volume 0-100 (kept for when there's a sound driver) and mute
     pub volume: u8,
     pub muted: bool,
@@ -225,6 +227,7 @@ impl Sys {
             claude_key: String::new(),
             claude_model: String::new(),
             key_test: false,
+            hw: Default::default(),
             volume: 50,
             muted: false,
             brightness: 100,
