@@ -37,6 +37,7 @@ mod i2cdev;
 mod icons;
 mod image;
 mod input;
+mod bt;
 mod crypto;
 mod disks;
 mod ahci;
@@ -65,8 +66,10 @@ mod theme;
 mod touchpad;
 mod tls;
 mod ui;
+mod uefiwifi;
 mod usb;
 mod web;
+mod wifi;
 mod xhci;
 mod zip;
 
@@ -283,6 +286,12 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
+    // Wi-Fi through the firmware, where it has a driver
+    let mut fwifi = uefiwifi::FirmwareWifi::find();
+    if let Some(w) = fwifi.as_mut() {
+        w.scan();
+        sh.sys.wifi_nets = Some(Vec::new());
+    }
     // sound
     let mut audio = hda::start();
     sh.sys.audio = audio.as_ref().map(|a| alloc::format!("{} · {}", a.name, a.outputs.join(", ")));
@@ -363,6 +372,32 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             a.pump(sound::gain(sh.sys.volume, sh.sys.muted));
         } else {
             sh.sys.sounds.clear();
+        }
+        // Wi-Fi scans (every half minute, or when asked) and Bluetooth
+        if let Some(w) = fwifi.as_mut() {
+            if sh.sys.wifi_scan || ticks % 3000 == 2999 {
+                sh.sys.wifi_scan = false;
+                w.scan();
+            }
+            if w.poll() {
+                sh.sys.wifi_nets = Some(w.networks.iter().map(|n| (n.ssid.clone(), n.security.name(), n.quality)).collect());
+                sh.dirty = true;
+            }
+        }
+        if ticks % 50 == 3 {
+            if let Some(b) = input.usb.bts.first_mut() {
+                if core::mem::take(&mut sh.sys.bt_scan) {
+                    b.rescan();
+                }
+                let a = &b.adapter;
+                let summary = alloc::format!("{} · {} · {}", if a.name.is_empty() { "Bluetooth adapter" } else { a.name.as_str() }, a.address(), bt::version_name(a.version));
+                let near: Vec<(alloc::string::String, &'static str, i8)> = a.nearby.iter().map(|n| (n.label(), n.kind.name(), n.rssi)).collect();
+                if sh.sys.bt_adapter.as_deref() != Some(summary.as_str()) || sh.sys.bt_nearby != near {
+                    sh.sys.bt_adapter = Some(summary);
+                    sh.sys.bt_nearby = near;
+                    sh.dirty = true;
+                }
+            }
         }
         // the battery every 30 s, an ACPI light sensor every second
         if ticks % 3000 == 1 {

@@ -1,4 +1,4 @@
-//! AES-128/256 (FIPS 197, encryption only) and AES-GCM (NIST SP 800-38D).
+//! AES-128/256 (FIPS 197) and AES-GCM (NIST SP 800-38D).
 
 use alloc::vec::Vec;
 
@@ -88,6 +88,56 @@ impl Aes {
             for i in 0..16 {
                 b[i] = s[i] ^ self.rk[r][i];
             }
+        }
+    }
+}
+
+/// Multiply in GF(2^8) (the inverse MixColumns).
+#[allow(dead_code)]
+fn gm(mut a: u8, mut b: u8) -> u8 {
+    let mut p = 0;
+    while b != 0 {
+        if b & 1 != 0 {
+            p ^= a;
+        }
+        a = xtime(a);
+        b >>= 1;
+    }
+    p
+}
+
+impl Aes {
+    /// The inverse cipher (for key unwrapping: Wi-Fi's group keys).
+    #[allow(dead_code)]
+    pub fn decrypt(&self, b: &mut [u8; 16]) {
+        let mut inv = [0u8; 256];
+        for (i, v) in SBOX.iter().enumerate() {
+            inv[*v as usize] = i as u8;
+        }
+        let rounds = self.rk.len() - 1;
+        for i in 0..16 {
+            b[i] ^= self.rk[rounds][i];
+        }
+        for r in (0..rounds).rev() {
+            // inverse ShiftRows + inverse SubBytes
+            let mut s = [0u8; 16];
+            for c in 0..4 {
+                for row in 0..4 {
+                    s[4 * ((c + row) % 4) + row] = inv[b[4 * c + row] as usize];
+                }
+            }
+            for i in 0..16 {
+                s[i] ^= self.rk[r][i];
+            }
+            if r != 0 {
+                for c in 0..4 {
+                    let a = [s[4 * c], s[4 * c + 1], s[4 * c + 2], s[4 * c + 3]];
+                    for row in 0..4 {
+                        s[4 * c + row] = gm(a[row], 14) ^ gm(a[(row + 1) % 4], 11) ^ gm(a[(row + 2) % 4], 13) ^ gm(a[(row + 3) % 4], 9);
+                    }
+                }
+            }
+            *b = s;
         }
     }
 }

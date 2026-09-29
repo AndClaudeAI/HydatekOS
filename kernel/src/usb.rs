@@ -192,8 +192,22 @@ struct Dev {
 
 pub use crate::hidin::Event;
 
+/// A Bluetooth adapter: HCI commands go out as control transfers, events
+/// come in on the interrupt endpoint (split across USB packets).
+pub struct BtDev {
+    handle: Handle,
+    io: *mut UsbIo,
+    iface: u16,
+    pipe: &'static Pipe,
+    buf: Vec<u8>,
+    pub adapter: crate::bt::Adapter,
+    scanned: bool,
+}
+
 pub struct UsbHid {
     devs: Vec<Dev>,
+    /// Bluetooth adapters HydatekOS drives
+    pub bts: Vec<BtDev>,
     /// every USB interface seen, for Settings
     pub info: Vec<DeviceInfo>,
     /// counts up whenever `info` changes
@@ -257,6 +271,59 @@ fn report_descriptor_len(io: *mut UsbIo, iface: u8) -> usize {
     0
 }
 
+/// Start a Bluetooth adapter (class E0, subclass 1, protocol 1).
+fn attach_bt(h: Handle, io: *mut UsbIo) -> Option<BtDev> {
+    let mut id = InterfaceDescriptor::default();
+    if unsafe { ((*io).get_interface_descriptor)(io, &mut id) } != efi::SUCCESS || (id.class, id.subclass, id.protocol) != (0xE0, 1, 1) || id.number != 0 {
+        return None;
+    }
+    let mut ep = None;
+    for i in 0..id.endpoints {
+        let mut e = EndpointDescriptor::default();
+        if unsafe { ((*io).get_endpoint_descriptor)(io, i, &mut e) } == efi::SUCCESS && e.attributes & 3 == 3 && e.address & 0x80 != 0 {
+            ep = Some(e);
+        }
+    }
+    let ep = ep?;
+    let pipe: &'static Pipe = Box::leak(Box::new(Pipe { buf: UnsafeCell::new([[0; REPORT]; SLOTS]), len: UnsafeCell::new([0; SLOTS]), head: AtomicUsize::new(0), tail: AtomicUsize::new(0) }));
+    let size = (ep.max_packet & 0x7FF).clamp(1, REPORT as u16) as usize;
+    let st = unsafe { ((*io).async_interrupt)(io, ep.address, true, ep.interval.clamp(1, 16) as usize, size, Some(on_report), pipe as *const Pipe as *mut c_void) };
+    if st != efi::SUCCESS {
+        return None;
+    }
+    log!("bt: driving a Bluetooth adapter (interface {})", id.number);
+    Some(BtDev { handle: h, io, iface: id.number as u16, pipe, buf: Vec::new(), adapter: crate::bt::Adapter::new(), scanned: false })
+}
+
+impl BtDev {
+    fn poll(&mut self) {
+        // events arrive in pieces the size of the endpoint's packets
+        while let Some(r) = self.pipe.take() {
+            self.buf.extend_from_slice(&r);
+            while self.buf.len() >= 2 && self.buf.len() >= 2 + self.buf[1] as usize {
+                let n = 2 + self.buf[1] as usize;
+                let ev: Vec<u8> = self.buf.drain(..n).collect();
+                self.adapter.event(&ev);
+            }
+            if self.buf.len() > 1024 {
+                self.buf.clear();
+            }
+        }
+        if self.adapter.ready && !self.scanned {
+            self.scanned = true;
+            log!("bt: adapter {} ({}, {}) ready; scanning", self.adapter.address(), self.adapter.name, crate::bt::version_name(self.adapter.version));
+            self.adapter.scan();
+        }
+        if let Some(mut c) = self.adapter.next() {
+            control(self.io, 0x20, 0, 0, self.iface, DATA_OUT, &mut c);
+        }
+    }
+
+    pub fn rescan(&mut self) {
+        self.adapter.scan();
+    }
+}
+
 /// The USB class of an interface, in words.
 pub fn class_name(class: u8, subclass: u8, protocol: u8) -> &'static str {
     match (class, subclass, protocol) {
@@ -281,7 +348,7 @@ pub fn class_name(class: u8, subclass: u8, protocol: u8) -> &'static str {
 
 impl UsbHid {
     pub fn new() -> UsbHid {
-        let mut u = UsbHid { devs: Vec::new(), info: Vec::new(), generation: 1, seen: Vec::new(), polls: 0 };
+        let mut u = UsbHid { devs: Vec::new(), bts: Vec::new(), info: Vec::new(), generation: 1, seen: Vec::new(), polls: 0 };
         u.scan();
         u
     }
@@ -292,6 +359,7 @@ impl UsbHid {
         let handles = efi::handles(&USB_IO_GUID);
         // forget devices that went away
         self.devs.retain(|d| handles.contains(&d.handle));
+        self.bts.retain(|d| handles.contains(&d.handle));
         let gone: Vec<Handle> = self.seen.iter().filter(|h| !handles.contains(h)).copied().collect();
         if !gone.is_empty() {
             self.seen.retain(|h| handles.contains(h));
@@ -304,7 +372,9 @@ impl UsbHid {
             self.seen.push(h);
             changed = true;
             let Some(io) = efi::handle_protocol::<UsbIo>(h, &USB_IO_GUID) else { continue };
-            if let Some(d) = self.attach(h, io) {
+            if let Some(b) = attach_bt(h, io) {
+                self.bts.push(b);
+            } else if let Some(d) = self.attach(h, io) {
                 self.devs.push(d);
             }
         }
@@ -331,6 +401,11 @@ impl UsbHid {
                 Some(d) => String::from(d.hid.what()),
                 None => String::from(class_name(id.class, id.subclass, id.protocol)),
             };
+            if self.bts.iter().any(|b| b.handle == h) {
+                let (v, p) = (dd.vendor, dd.product);
+                self.info.push(DeviceInfo { name: if product.is_empty() { String::from("Bluetooth adapter") } else { product }, kind: String::from("Bluetooth adapter"), ids: format!("{:04x}:{:04x}", v, p), driver: "HydatekOS Bluetooth (HCI)" });
+                continue;
+            }
             let driver = if ours.is_some() {
                 "HydatekOS USB HID"
             } else if efi::handle_protocol::<c_void>(h, &TEXT_INPUT_GUID).is_some()
@@ -481,6 +556,9 @@ impl UsbHid {
         self.polls += 1;
         if self.polls % 200 == 0 {
             self.scan();
+        }
+        for b in self.bts.iter_mut() {
+            b.poll();
         }
         for d in self.devs.iter_mut() {
             while let Some(r) = d.pipe.take() {

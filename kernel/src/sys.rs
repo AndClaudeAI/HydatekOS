@@ -131,6 +131,15 @@ pub struct Sys {
     pub motors: usize,
     /// what ACPI describes and who drives it: (name, kind, driver)
     pub acpi_devices: Vec<(String, String, String)>,
+    /// the Bluetooth adapter (name · address · version) and what's nearby:
+    /// (name, kind, signal dBm); a scan asked for
+    pub bt_adapter: Option<String>,
+    pub bt_nearby: Vec<(String, &'static str, i8)>,
+    pub bt_scan: bool,
+    /// Wi-Fi networks the firmware's Wi-Fi driver found: (name, security,
+    /// quality 0-100); None when there's no Wi-Fi HydatekOS can use
+    pub wifi_nets: Option<Vec<(String, &'static str, u8)>>,
+    pub wifi_scan: bool,
     /// the sound device HydatekOS plays to, and the sounds waiting
     pub audio: Option<String>,
     pub sounds: Vec<crate::sound::Sound>,
@@ -259,6 +268,11 @@ impl Sys {
             haptic_pads: 0,
             motors: 0,
             acpi_devices: Vec::new(),
+            bt_adapter: None,
+            bt_nearby: Vec::new(),
+            bt_scan: false,
+            wifi_nets: None,
+            wifi_scan: false,
             audio: None,
             sounds: Vec::new(),
             disks: Vec::new(),

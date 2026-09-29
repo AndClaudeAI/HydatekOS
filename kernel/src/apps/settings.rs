@@ -798,6 +798,7 @@ const C_KEY_TEST_DONE: u32 = 39;
 const C_INK: u32 = 46;
 const C_INK_CLEAR: u32 = 47;
 const C_AUTOBRIGHT: u32 = 48;
+const C_BT_SCAN: u32 = 49;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -929,19 +930,63 @@ impl App for Settings {
                 kv(ui, m.x + 16, m.y + 156, m.w - 32, "Name", &if n.host.is_empty() { String::from("-") } else { alloc::format!("{}.local", n.host) });
                 kv(ui, m.x + 16, m.y + 180, m.w - 32, "Packets in / out", &alloc::format!("{} / {}", n.rx, n.tx));
                 card(ui, Rect::new(m.x, m.y + 224, m.w, 64));
-                row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", "Wi-Fi adapter drivers are not included yet; use Ethernet");
+                let wsub = match &sys.wifi_nets {
+                    Some(n) if n.is_empty() => String::from("Scanning through the firmware's Wi-Fi driver..."),
+                    Some(n) => format!("{} networks nearby", n.len()),
+                    None => String::from("This Wi-Fi chip has no driver yet; use Ethernet"),
+                };
+                row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", &wsub);
                 ui.switch(sw_x, m.y + 244, sys.wifi, Action::App(inst, C_WIFI));
+                if let Some(nets) = &sys.wifi_nets {
+                    let mut y = m.y + 300;
+                    for (ssid, sec, q) in nets.iter() {
+                        if y + 36 > m.b() {
+                            break;
+                        }
+                        card(ui, Rect::new(m.x, y, m.w, 32));
+                        let label = if ssid.is_empty() { "(hidden network)" } else { ssid.as_str() };
+                        ui.text(m.x + 14, y + 21, Face::Medium, 13, label, t.text);
+                        let bars = match q { 75.. => "▂▄▆█", 50..=74 => "▂▄▆", 25..=49 => "▂▄", _ => "▂" };
+                        ui.text_in(Rect::new(m.r() - 200, y, 186, 32), Face::Regular, 12, &format!("{} · {}", sec, bars), t.text2, 2);
+                        y += 36;
+                    }
+                }
             }
             5 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 64));
-                row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, "Bluetooth", if sys.bt { "On" } else { "Off" });
+                let sub = match &sys.bt_adapter {
+                    Some(a) if sys.bt => a.clone(),
+                    Some(_) => String::from("Off"),
+                    None => String::from("No Bluetooth adapter found"),
+                };
+                row(ui, Rect::new(m.x + 16, m.y, m.w - 32, 64), m.y + 12, "Bluetooth", &sub);
                 ui.switch(sw_x, m.y + 20, sys.bt, Action::App(inst, C_BT));
-                card(ui, Rect::new(m.x, m.y + 78, m.w, 120));
-                ui.text(m.x + 16, m.y + 104, Face::Semibold, 13, "No adapter driver yet", t.text);
-                let lines = ["Bluetooth needs a USB (xHCI) host driver and an HCI stack,", "planned for milestone 4. Phone Link already works over", "your home network."];
-                for (i, l) in lines.iter().enumerate() {
-                    let l = ui.fit(Face::Regular, 13, l, m.w - 32);
-                    ui.text(m.x + 16, m.y + 128 + i as i32 * 20, Face::Regular, 13, &l, t.text2);
+                if sys.bt_adapter.is_none() {
+                    card(ui, Rect::new(m.x, m.y + 78, m.w, 100));
+                    let lines = ["HydatekOS drives USB Bluetooth adapters (and the ones inside", "laptops that sit on USB). Plug one in and it appears here.", "Phone Link also works over your home network."];
+                    for (i, l) in lines.iter().enumerate() {
+                        let l = ui.fit(Face::Regular, 13, l, m.w - 32);
+                        ui.text(m.x + 16, m.y + 104 + i as i32 * 22, Face::Regular, 13, &l, t.text2);
+                    }
+                } else if sys.bt {
+                    let top = m.y + 78;
+                    ui.text(m.x + 4, top + 16, Face::Semibold, 14, "Nearby", t.text);
+                    ui.button(Rect::new(m.r() - 90, top, 90, 26), "Scan again", Action::App(inst, C_BT_SCAN), false);
+                    let mut y = top + 34;
+                    if sys.bt_nearby.is_empty() {
+                        ui.text(m.x + 4, y + 16, Face::Regular, 13, "Looking for devices...", t.text2);
+                    }
+                    for (name, kind, rssi) in sys.bt_nearby.iter() {
+                        if y + 40 > m.b() {
+                            break;
+                        }
+                        card(ui, Rect::new(m.x, y, m.w, 36));
+                        let nm = ui.fit(Face::Medium, 13, name, m.w - 180);
+                        ui.text(m.x + 14, y + 23, Face::Medium, 13, &nm, t.text);
+                        let right = if *rssi > -127 { format!("{} · {} dBm", kind, rssi) } else { String::from(*kind) };
+                        ui.text_in(Rect::new(m.r() - 170, y, 156, 36), Face::Regular, 12, &right, t.text2, 2);
+                        y += 40;
+                    }
                 }
             }
             6 => {
@@ -1218,6 +1263,10 @@ impl App for Settings {
             }
             C_INK_CLEAR => {
                 self.ink.clear();
+                return;
+            }
+            C_BT_SCAN => {
+                sys.bt_scan = true;
                 return;
             }
             C_AUTOBRIGHT => {
