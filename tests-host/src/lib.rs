@@ -26,6 +26,25 @@ pub mod keymap;
 pub mod lineedit;
 #[path = "../../kernel/src/hw.rs"]
 pub mod hw;
+#[path = "../../kernel/src/anim.rs"]
+pub mod anim;
+#[path = "../../kernel/src/haptics.rs"]
+pub mod haptics;
+/// The kernel's rectangle, for anim.rs.
+pub mod gfx {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+    pub struct Rect {
+        pub x: i32,
+        pub y: i32,
+        pub w: i32,
+        pub h: i32,
+    }
+    impl Rect {
+        pub fn new(x: i32, y: i32, w: i32, h: i32) -> Rect {
+            Rect { x, y, w, h }
+        }
+    }
+}
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
@@ -73,6 +92,10 @@ mod claude_tests;
 mod lineedit_tests;
 #[cfg(test)]
 mod hw_tests;
+#[cfg(test)]
+mod anim_tests;
+#[cfg(test)]
+mod haptics_tests;
 #[cfg(test)]
 mod tls_tests;
 #[cfg(test)]

@@ -15,6 +15,8 @@ use crate::efi;
 use crate::font::Face;
 use crate::gfx::{Canvas, Color, Rect};
 use crate::icons::Icon;
+use crate::anim;
+use crate::haptics::Haptic;
 use crate::input::Ev;
 use crate::sys::{Req, Sys};
 use crate::theme::{theme, Theme};
@@ -49,6 +51,39 @@ struct Win {
     r: Rect,
     min: bool,
     max: bool,
+    /// an animation in progress (opening, coming back from the dock, moving)
+    fx: Option<WinFx>,
+}
+
+#[derive(Clone, Copy)]
+struct WinFx {
+    kind: FxKind,
+    /// where it's coming from: the old place, or the dock icon
+    from: Rect,
+    start: u64,
+    dur: u64,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FxKind {
+    /// zooming up from a little smaller, fading in
+    Open,
+    /// growing out of its dock icon
+    Restore,
+    /// gliding to a new place or size (maximise, snap, restore)
+    Move,
+}
+
+/// A picture of a window that has gone (closed or minimised), animated out.
+struct Ghost {
+    snap: Canvas,
+    from: Rect,
+    to: Rect,
+    start: u64,
+    dur: u64,
+    /// opacity at the start and the end (0-255)
+    alpha: (i32, i32),
+    ease: fn(i32) -> i32,
 }
 
 #[derive(Clone, Copy)]
@@ -174,6 +209,12 @@ pub struct Shell {
     osd: Option<(Osd, u64)>,
     /// windows Hydatek+D put away, to bring back on the next Hydatek+D
     peeked: Vec<u32>,
+    /// closed and minimised windows on their way out
+    ghosts: Vec<Ghost>,
+    /// the launcher, menu and shortcuts sheet as last drawn, and when the
+    /// latest of them appeared (it fades in)
+    popups: (bool, Option<u8>, bool),
+    popup_at: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -216,6 +257,9 @@ impl Shell {
             sheet: false,
             osd: None,
             peeked: vec![],
+            ghosts: vec![],
+            popups: (false, None, false),
+            popup_at: 0,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -257,7 +301,7 @@ impl Shell {
             return;
         }
         if let Some(i) = self.wins.iter().position(|w| w.app.kind() == k) {
-            self.wins[i].min = false;
+            self.unminimise(i);
             let w = self.wins.remove(i);
             self.wins.push(w);
             self.kfocus = KFocus::Top;
@@ -279,8 +323,112 @@ impl Shell {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.wins.push(Win { id, app, r: Rect::new(x, y, ww, wh), min: false, max: false });
+        let r = Rect::new(x, y, ww, wh);
+        let dur = self.motion(anim::OPEN);
+        let fx = if dur > 0 { Some(WinFx { kind: FxKind::Open, from: r, start: self.clock(), dur }) } else { None };
+        self.wins.push(Win { id, app, r, min: false, max: false, fx });
         self.kfocus = KFocus::Top;
+    }
+
+    // ---- motion ---------------------------------------------------------------
+
+    /// The animation clock, in ticks (10 ms) of real time.
+    fn clock(&self) -> u64 {
+        crate::arch::ms() / 10
+    }
+
+    /// An animation's length, or none with Reduce motion on.
+    fn motion(&self, ticks: u64) -> u64 {
+        if self.sys.reduce_motion {
+            0
+        } else {
+            ticks
+        }
+    }
+
+    /// Change a window's place or size (`f`), gliding there.
+    fn reshape(&mut self, i: usize, f: impl FnOnce(&mut Win)) {
+        let from = self.win_rect(&self.wins[i]);
+        f(&mut self.wins[i]);
+        self.sys.feel(Haptic::Tick);
+        let dur = self.motion(anim::MOVE);
+        if dur > 0 && !self.wins[i].min && self.win_rect(&self.wins[i]) != from {
+            self.wins[i].fx = Some(WinFx { kind: FxKind::Move, from, start: self.clock(), dur });
+        }
+    }
+
+    /// Minimise window `i`: it flies into its dock icon.
+    fn minimise(&mut self, i: usize) {
+        if self.wins[i].min {
+            return;
+        }
+        let dur = self.motion(anim::MINIMISE);
+        if dur > 0 && !self.mobile_mode() {
+            let from = self.win_rect(&self.wins[i]);
+            let to = self.dock_icon(self.wins[i].app.kind());
+            let snap = self.snapshot(i);
+            self.ghosts.push(Ghost { snap, from, to, start: self.clock(), dur, alpha: (255, 40), ease: anim::ease_in_out });
+        }
+        self.wins[i].min = true;
+        self.wins[i].fx = None;
+    }
+
+    /// Bring window `i` back from the dock.
+    fn unminimise(&mut self, i: usize) {
+        if !self.wins[i].min {
+            return;
+        }
+        self.wins[i].min = false;
+        let dur = self.motion(anim::MINIMISE);
+        if dur > 0 {
+            let from = self.dock_icon(self.wins[i].app.kind());
+            self.wins[i].fx = Some(WinFx { kind: FxKind::Restore, from, start: self.clock(), dur });
+        }
+    }
+
+    /// Where an app's dock icon is (as draw_dock lays them out).
+    fn dock_icon(&self, kind: AppKind) -> Rect {
+        let mut extra: Vec<AppKind> = vec![];
+        for k in self.wins.iter().map(|w| w.app.kind()) {
+            if !DOCK_APPS.contains(&k) && !extra.contains(&k) {
+                extra.push(k);
+            }
+        }
+        let n = 1 + DOCK_APPS.len() as i32 + extra.len() as i32;
+        let (bw, gap) = (40, 7);
+        let dw = n * bw + (n - 1) * gap + 16 + if extra.is_empty() { 0 } else { 12 };
+        let dock = Rect::new((self.w - dw) / 2, self.h - 16 - 56, dw, 56);
+        let at = DOCK_APPS.iter().chain(extra.iter()).position(|k| *k == kind).map(|i| i as i32 + 1);
+        match at {
+            Some(idx) => {
+                let sep = if idx >= 1 + DOCK_APPS.len() as i32 { 12 } else { 0 };
+                Rect::new(dock.x + 8 + idx * (bw + gap) + sep, dock.y + 8, bw, bw)
+            }
+            None => Rect::new(dock.x + dock.w / 2 - 20, dock.y + 8, bw, bw),
+        }
+    }
+
+    /// Window `i` drawn on its own, at its size (for animating it out).
+    fn snapshot(&mut self, i: usize) -> Canvas {
+        let r = self.win_rect(&self.wins[i]);
+        let (s, t, ticks) = (self.s, self.theme(), self.sys.ticks);
+        let mut c = Canvas::new(r.w.max(1) * s, r.h.max(1) * s);
+        {
+            let mut ui = Ui::new(&mut c, s, t, None, ticks);
+            let Shell { wins, sys, .. } = self;
+            draw_win(&mut ui, &mut wins[i], Rect::new(0, 0, r.w, r.h), true, sys, None);
+        }
+        c
+    }
+
+    /// Something is moving: redraw every tick.
+    fn moving(&self) -> bool {
+        let (now, clock) = (self.sys.ticks, self.clock());
+        self.wins.iter().any(|w| w.fx.is_some())
+            || !self.ghosts.is_empty()
+            || clock < self.popup_at + self.motion(anim::POPUP)
+            || self.toasts.iter().any(|t| now < t.until.saturating_sub(500) + self.motion(anim::POPUP) + 8)
+            || self.osd.map_or(false, |o| now < o.1.saturating_sub(150) + self.motion(anim::POPUP))
     }
 
     fn win_idx(&self, id: u32) -> Option<usize> {
@@ -302,6 +450,13 @@ impl Shell {
 
     fn close_win(&mut self, id: u32) {
         if let Some(i) = self.win_idx(id) {
+            let dur = self.motion(anim::CLOSE);
+            if dur > 0 && !self.wins[i].min && !self.mobile_mode() {
+                // it shrinks a little and fades away
+                let from = self.win_rect(&self.wins[i]);
+                let snap = self.snapshot(i);
+                self.ghosts.push(Ghost { snap, from, to: anim::scale_rect(from, 920), start: self.clock(), dur, alpha: (255, 0), ease: anim::ease_in });
+            }
             let mut w = self.wins.remove(i);
             w.app.close(&mut self.sys);
         }
@@ -471,6 +626,17 @@ impl Shell {
         self.toasts.retain(|t| t.until > ticks);
         if before != self.toasts.len() {
             self.dirty = true;
+        }
+        if self.moving() {
+            self.dirty = true;
+        }
+        // haptic patterns go to whatever can play them: the paired phone,
+        // when asked (no motor or haptic touchpad has a driver yet)
+        for pat in core::mem::take(&mut self.sys.haptics.pending) {
+            if self.sys.haptics.phone && self.sys.phone_haptics() {
+                let w = crate::hlp::Msg::new("haptic").with("p", &crate::haptics::encode(&pat));
+                self.sys.link.outbox.push(w);
+            }
         }
         if self.osd.map_or(false, |o| ticks >= o.1) {
             self.osd = None;
@@ -719,32 +885,35 @@ impl Shell {
                 if open.is_empty() {
                     for id in core::mem::take(&mut self.peeked) {
                         if let Some(i) = self.win_idx(id) {
-                            self.wins[i].min = false;
+                            self.unminimise(i);
                         }
                     }
                 } else {
-                    for w in self.wins.iter_mut() {
-                        w.min = true;
+                    for i in 0..self.wins.len() {
+                        self.minimise(i);
                     }
                     self.peeked = open;
                 }
             }
             Key::Char('m') => {
-                for w in self.wins.iter_mut() {
-                    w.min = true;
+                for i in 0..self.wins.len() {
+                    self.minimise(i);
                 }
                 self.peeked.clear();
             }
             Key::Tab => self.cycle_windows(crate::input::shift()),
             Key::Up => {
                 if let Some(i) = self.top() {
-                    self.wins[i].max = true;
+                    self.reshape(i, |w| w.max = true);
                 }
             }
             Key::Down => {
                 if let Some(i) = self.top() {
-                    let w = &mut self.wins[i];
-                    if w.max { w.max = false } else { w.min = true }
+                    if self.wins[i].max {
+                        self.reshape(i, |w| w.max = false);
+                    } else {
+                        self.minimise(i);
+                    }
                 }
             }
             Key::Left | Key::Right => {
@@ -753,9 +922,10 @@ impl Shell {
                 if let Some(i) = self.top() {
                     let half = wa.w / 2;
                     let x = if k == Key::Left { wa.x } else { wa.x + wa.w - half };
-                    let w = &mut self.wins[i];
-                    w.max = false;
-                    w.r = Rect::new(x, wa.y, half, wa.h + 10);
+                    self.reshape(i, |w| {
+                        w.max = false;
+                        w.r = Rect::new(x, wa.y, half, wa.h + 10);
+                    });
                 }
             }
             _ => {}
@@ -767,6 +937,7 @@ impl Shell {
             return;
         }
         let now = self.sys.ticks;
+        let failed_before = self.lock.last_failure();
         let outcome = match ev {
             Ev::Move => {
                 let h = self.hit(x, y);
@@ -779,7 +950,11 @@ impl Shell {
             Ev::Down => {
                 self.dirty = true;
                 match self.hit(x, y) {
-                    Some(Action::Lock(a)) => self.lock.action(a, &mut self.sys, now),
+                    Some(Action::Lock(a)) => {
+                        // a key on the keypad or the on-screen keyboard
+                        self.sys.feel(Haptic::Tap);
+                        self.lock.action(a, &mut self.sys, now)
+                    }
                     _ => return,
                 }
             }
@@ -789,7 +964,11 @@ impl Shell {
             }
             _ => return,
         };
+        if self.lock.last_failure() != failed_before {
+            self.sys.feel(Haptic::Error);
+        }
         if let lock::Outcome::Unlock = outcome {
+            self.sys.feel(Haptic::Success);
             self.unlock();
         }
     }
@@ -809,7 +988,15 @@ impl Shell {
             Ev::Down => {
                 self.dirty = true;
                 match self.zones.iter().rev().find(|z| z.r.contains(x, y)).map(|z| z.a) {
-                    Some(Action::Setup(c)) => st.action(c, &mut self.sys, now),
+                    Some(Action::Setup(c)) => {
+                        self.sys.feel(Haptic::Tap);
+                        let had = st.has_error();
+                        let out = st.action(c, &mut self.sys, now);
+                        if !had && st.has_error() {
+                            self.sys.feel(Haptic::Warning);
+                        }
+                        out
+                    }
                     _ => return,
                 }
             }
@@ -883,7 +1070,7 @@ impl Shell {
                 if let Some(i) = self.wins.iter().position(|w| w.app.kind() == k) {
                     let top = self.top();
                     if top == Some(i) && !self.wins[i].min {
-                        self.wins[i].min = true;
+                        self.minimise(i);
                         return;
                     }
                 }
@@ -908,7 +1095,7 @@ impl Shell {
             Action::WinDrag(id) => {
                 if double {
                     if let Some(i) = self.win_idx(id) {
-                        self.wins[i].max = !self.wins[i].max;
+                        self.reshape(i, |w| w.max = !w.max);
                     }
                 } else if let Some(i) = self.win_idx(id) {
                     let r = self.win_rect(&self.wins[i]);
@@ -935,12 +1122,12 @@ impl Shell {
             Action::WinClose(id) => self.close_win(id),
             Action::WinMin(id) => {
                 if let Some(i) = self.win_idx(id) {
-                    self.wins[i].min = true;
+                    self.minimise(i);
                 }
             }
             Action::WinMax(id) => {
                 if let Some(i) = self.win_idx(id) {
-                    self.wins[i].max = !self.wins[i].max;
+                    self.reshape(i, |w| w.max = !w.max);
                 }
             }
             Action::App(inst, code) => {
@@ -964,6 +1151,7 @@ impl Shell {
                 self.run_cmd(cmd);
             }
             Action::Mobile(id, act) => {
+                self.sys.feel(Haptic::Tap);
                 let m = if id == 0 { &mut self.local } else { &mut self.phone };
                 m.act(act, &mut self.sys);
             }
@@ -1000,7 +1188,7 @@ impl Shell {
             }
             Cmd::MinWin => {
                 if let Some(i) = self.top() {
-                    self.wins[i].min = true;
+                    self.minimise(i);
                 }
             }
             Cmd::Dark => {
@@ -1087,8 +1275,8 @@ impl Shell {
         }
         if k == Key::F(11) && !self.mobile_mode() {
             // maximise the front window, or put it back
-            if let Some(w) = self.wins.iter_mut().rev().find(|w| !w.min) {
-                w.max = !w.max;
+            if let Some(i) = self.top() {
+                self.reshape(i, |w| w.max = !w.max);
             }
             return;
         }
@@ -1152,7 +1340,9 @@ impl Shell {
         let t = self.theme();
         let mut ui = Ui::new(canvas, self.s, t, None, ticks);
         let (w, h) = (260, 52);
-        let r = Rect::new((self.w - w) / 2, self.h - 150, w, h);
+        // rises a little as it appears
+        let p = self.osd.map_or(1000, |o| anim::progress(o.1.saturating_sub(150), self.motion(anim::POPUP), ticks));
+        let r = Rect::new((self.w - w) / 2, self.h - 150 + (1000 - anim::ease_out(p)) * 16 / 1000, w, h);
         ui.shadow(r, h / 2, 18, 6, 60);
         ui.rrect(r, h / 2, t.surface.with_alpha(248));
         let (icon, level) = match what {
@@ -1243,10 +1433,23 @@ impl Shell {
         ui.c.copy_from(&self.wall.as_ref().unwrap().0, b);
         self.draw_widgets(&mut ui);
         self.draw_windows(&mut ui);
+        self.draw_ghosts(&mut ui);
         self.draw_dock(&mut ui);
         self.draw_bar(&mut ui);
         // notifications under the launcher and open menus
         self.draw_toasts(&mut ui);
+        // the launcher, a menu or the shortcuts fade in when they appear
+        let state = (self.launcher.is_some(), self.menu, self.sheet);
+        if state != self.popups {
+            let (was_l, was_m, was_s) = self.popups;
+            if (state.0 && !was_l) || (state.1.is_some() && state.1 != was_m) || (state.2 && !was_s) {
+                self.popup_at = self.clock();
+            }
+            self.popups = state;
+        }
+        let clock = self.clock();
+        let fade = clock < self.popup_at + self.motion(anim::POPUP) && (state.0 || state.1.is_some() || state.2);
+        let base = if fade { Some(ui.c.px.clone()) } else { None };
         if self.launcher.is_some() {
             self.draw_launcher(&mut ui);
         }
@@ -1255,6 +1458,10 @@ impl Shell {
         }
         if self.sheet {
             self.draw_sheet(&mut ui);
+        }
+        if let Some(b) = base {
+            let e = anim::ease_out(anim::progress(self.popup_at, self.motion(anim::POPUP), clock));
+            ui.c.fade_from(&b, (e * 255 / 1000) as u32);
         }
         self.zones = core::mem::take(&mut ui.zones);
     }
@@ -1303,45 +1510,65 @@ impl Shell {
         let top = self.top();
         let kfocus = self.kfocus;
         let wa = self.work_area();
+        let (now, s) = (self.clock(), self.s);
         self.mirrors[1].rect = None;
         let Shell { wins, sys, phone, mirrors, .. } = self;
         for (i, win) in wins.iter_mut().enumerate() {
             if win.min {
                 continue;
             }
-            let r = if win.max { Rect::new(wa.x, wa.y, wa.w, wa.h + 10) } else { win.r };
+            let target = if win.max { Rect::new(wa.x, wa.y, wa.w, wa.h + 10) } else { win.r };
             let focused = Some(i) == top && kfocus == KFocus::Top;
+            let mut r = target;
+            // opening and coming back from the dock: drawn on its own, then
+            // scaled and faded into place
+            let mut layer: Option<(Rect, i32)> = None;
+            if let Some(fx) = win.fx {
+                let p = anim::progress(fx.start, fx.dur, now);
+                if p >= 1000 {
+                    win.fx = None;
+                } else {
+                    match fx.kind {
+                        FxKind::Move => r = anim::mix_rect(fx.from, target, anim::ease_in_out(p)),
+                        FxKind::Open => {
+                            // a small spring: up past full size and back
+                            let e = anim::ease_out_back(p);
+                            layer = Some((anim::scale_rect(target, anim::mix(940, 1000, e)), anim::mix(0, 255, anim::ease_out(p)).min(255)));
+                        }
+                        FxKind::Restore => {
+                            let e = anim::ease_in_out(p);
+                            layer = Some((anim::mix_rect(fx.from, target, e), anim::mix(60, 255, e)));
+                        }
+                    }
+                }
+            }
+            if let Some((dst, alpha)) = layer {
+                ui.shadow(dst, 14, 20, 10, (70 * alpha / 255) as u8);
+                let mut c = Canvas::new(target.w.max(1) * s, target.h.max(1) * s);
+                {
+                    let mut off = Ui::new(&mut c, s, t, None, now);
+                    draw_win(&mut off, win, Rect::new(0, 0, target.w, target.h), focused, sys, None);
+                }
+                let rad = 14 * s * dst.w / target.w.max(1);
+                ui.c.blit_scaled_alpha(&c, dst.scale(s), rad, alpha as u32);
+                continue;
+            }
             ui.shadow(r, 14, if focused { 20 } else { 12 }, 10, if focused { 70 } else { 38 });
-            ui.rrect(r, 14, t.surface);
-            if t.dark {
-                ui.stroke(r.inset(-1), 15, 1, t.line);
-            }
-            ui.zone(r, Action::WinFocus(win.id));
-            ui.zone(Rect::new(r.x, r.y, r.w, HEADER), Action::WinDrag(win.id));
-            let old = ui.clip_in(r);
-            win.app.render(ui, r, sys, win.id);
-            if let Some(pr) = ui.phone_embed.take() {
-                // Render the phone at native resolution, then scale it in.
-                mirrors[1].draw(ui, phone, sys, pr, 1, 26);
-            }
-            // window controls
-            let cy = r.y + 10;
-            let ctrls = [(Icon::Minimize, Action::WinMin(win.id)), (Icon::Maximize, Action::WinMax(win.id)), (Icon::Close, Action::WinClose(win.id))];
-            for (k, (ic, a)) in ctrls.iter().enumerate() {
-                let b = Rect::new(r.r() - 98 + k as i32 * 30, cy, 24, 24);
-                let close = k == 2;
-                let bg = if close { t.accent } else { t.chip };
-                ui.circle(b.x + 12, b.y + 12, 12, if ui.hot(*a) { bg.mix(t.text, 35) } else { bg });
-                ui.icon_in(*ic, b, 12, if close { t.on_accent } else { t.text });
-                ui.zone(b, *a);
-            }
-            ui.zone(Rect::new(r.r() - 16, r.b() - 16, 16, 16), Action::WinResize(win.id));
-            ui.set_clip(old);
-            if !focused {
-                // subtle dim for background windows
-                ui.rrect(r, 14, Color::rgba(if t.dark { 0 } else { 0xFFFFFF }, 18));
-            }
+            draw_win(ui, win, r, focused, sys, Some((&mut *phone, &mut mirrors[1])));
         }
+    }
+
+    /// Closed and minimised windows on their way out.
+    fn draw_ghosts(&mut self, ui: &mut Ui) {
+        let (now, s) = (self.clock(), self.s);
+        for g in self.ghosts.iter() {
+            let e = (g.ease)(anim::progress(g.start, g.dur, now));
+            let r = anim::mix_rect(g.from, g.to, e);
+            let alpha = anim::mix(g.alpha.0, g.alpha.1, e).clamp(0, 255) as u32;
+            let rad = 14 * s * r.w / g.from.w.max(1);
+            ui.c.blit_scaled_alpha(&g.snap, r.scale(s), rad, alpha);
+        }
+        self.ghosts.retain(|g| now < g.start + g.dur);
     }
 
     fn draw_dock(&self, ui: &mut Ui) {
@@ -1673,7 +1900,10 @@ impl Shell {
     fn draw_toasts(&self, ui: &mut Ui) {
         let t = ui.t;
         for (i, toast) in self.toasts.iter().enumerate() {
-            let r = Rect::new(self.w - 336, BAR_H + 14 + i as i32 * 78, 320, 66);
+            // slides in from the right edge
+            let p = anim::progress(toast.until.saturating_sub(500), self.motion(anim::POPUP + 8), ui.ticks);
+            let dx = (1000 - anim::ease_out(p)) * 340 / 1000;
+            let r = Rect::new(self.w - 336 + dx, BAR_H + 14 + i as i32 * 78, 320, 66);
             ui.shadow(r, 16, 12, 6, 55);
             ui.rrect(r, 16, t.surface);
             if t.dark {
@@ -1689,6 +1919,44 @@ impl Shell {
             ui.text(r.x + 64, r.y + 47, Face::Regular, 12, &bb, t.text2);
             ui.zone(r, Action::Toast(i as u32));
         }
+    }
+}
+
+/// A window: its surface, the app, the window controls. `embed` draws the
+/// phone mirror Phone Link asks for (not when the window is drawn on its own
+/// for an animation).
+fn draw_win(ui: &mut Ui, win: &mut Win, r: Rect, focused: bool, sys: &Sys, embed: Option<(&mut Mobile, &mut Mirror)>) {
+    let t = ui.t;
+    ui.rrect(r, 14, t.surface);
+    if t.dark {
+        ui.stroke(r.inset(-1), 15, 1, t.line);
+    }
+    ui.zone(r, Action::WinFocus(win.id));
+    ui.zone(Rect::new(r.x, r.y, r.w, HEADER), Action::WinDrag(win.id));
+    let old = ui.clip_in(r);
+    win.app.render(ui, r, sys, win.id);
+    if let Some(pr) = ui.phone_embed.take() {
+        if let Some((phone, mirror)) = embed {
+            // Render the phone at native resolution, then scale it in.
+            mirror.draw(ui, phone, sys, pr, 1, 26);
+        }
+    }
+    // window controls
+    let cy = r.y + 10;
+    let ctrls = [(Icon::Minimize, Action::WinMin(win.id)), (Icon::Maximize, Action::WinMax(win.id)), (Icon::Close, Action::WinClose(win.id))];
+    for (k, (ic, a)) in ctrls.iter().enumerate() {
+        let b = Rect::new(r.r() - 98 + k as i32 * 30, cy, 24, 24);
+        let close = k == 2;
+        let bg = if close { t.accent } else { t.chip };
+        ui.circle(b.x + 12, b.y + 12, 12, if ui.hot(*a) { bg.mix(t.text, 35) } else { bg });
+        ui.icon_in(*ic, b, 12, if close { t.on_accent } else { t.text });
+        ui.zone(b, *a);
+    }
+    ui.zone(Rect::new(r.r() - 16, r.b() - 16, 16, 16), Action::WinResize(win.id));
+    ui.set_clip(old);
+    if !focused {
+        // subtle dim for background windows
+        ui.rrect(r, 14, Color::rgba(if t.dark { 0 } else { 0xFFFFFF }, 18));
     }
 }
 

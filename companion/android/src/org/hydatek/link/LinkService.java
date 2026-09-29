@@ -289,6 +289,17 @@ public class LinkService extends Service implements LinkClient.Listener {
                 }
             });
             event("Text from your PC (copied)", text);
+        } else if (op.equals("haptic")) {
+            // HydatekOS's feedback (a tap, a buzz for a wrong PIN) on this phone
+            Haptic h = Haptic.parse(m.get("p"));
+            android.os.Vibrator vib = getSystemService(android.os.Vibrator.class);
+            if (h != null && vib != null && vib.hasVibrator()) {
+                if (vib.hasAmplitudeControl()) {
+                    vib.vibrate(android.os.VibrationEffect.createWaveform(h.timings, h.amplitudes, -1));
+                } else {
+                    vib.vibrate(android.os.VibrationEffect.createWaveform(h.timings, -1));
+                }
+            }
         } else if (op.equals("unlock_req")) {
             askUnlock(m.get("id"), m.get("name"));
         } else if (op.equals("unlock_cancel")) {

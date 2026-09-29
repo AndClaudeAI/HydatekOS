@@ -11,6 +11,7 @@ extern crate alloc;
 
 #[macro_use]
 mod serial;
+mod anim;
 mod apps;
 mod arch;
 mod brand;
@@ -21,6 +22,7 @@ mod fs;
 mod gfx;
 mod grid;
 mod gridio;
+mod haptics;
 mod heap;
 mod hlp;
 mod icons;
@@ -190,6 +192,7 @@ impl Display {
 pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -> efi::Status {
     unsafe { efi::init(image, st) };
     serial::init();
+    arch::calibrate();
     log!("HydatekOS 0.1 \"Dune\" booting");
     // Disable the firmware's 5-minute watchdog.
     (efi::bs().set_watchdog_timer)(0, 0, 0, core::ptr::null());

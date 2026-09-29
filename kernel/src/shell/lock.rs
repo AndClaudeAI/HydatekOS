@@ -145,6 +145,11 @@ impl Lock {
         self.osk = self.mode == Mode::Password && touch(sys);
     }
 
+    /// When the last wrong PIN or password was entered (for feedback).
+    pub fn last_failure(&self) -> u64 {
+        self.shake_from
+    }
+
     fn waiting(&self, now: u64) -> bool {
         now < self.wait_until
     }

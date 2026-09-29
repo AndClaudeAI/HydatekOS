@@ -28,6 +28,41 @@ pub fn cycles() -> u64 {
     }
 }
 
+/// Cycles of `cycles()` per millisecond, measured at start-up (`calibrate`).
+static PER_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static START: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Measure the cycle counter against the firmware's delay (ARM64 knows its
+/// timer's frequency), so `ms` tells real time.
+pub fn calibrate() {
+    use core::sync::atomic::Ordering;
+    #[cfg(target_arch = "aarch64")]
+    let per_ms = {
+        let f: u64;
+        unsafe { core::arch::asm!("mrs {v}, cntfrq_el0", v = out(reg) f, options(nomem, nostack, preserves_flags)) };
+        f / 1000
+    };
+    #[cfg(target_arch = "x86_64")]
+    let per_ms = {
+        let t0 = cycles();
+        crate::efi::stall_us(20_000);
+        (cycles() - t0) / 20
+    };
+    PER_MS.store(per_ms.max(1), Ordering::Relaxed);
+    START.store(cycles(), Ordering::Relaxed);
+}
+
+/// Milliseconds since `calibrate`: animations run on this, so they take
+/// the same time however long a frame takes to draw.
+pub fn ms() -> u64 {
+    use core::sync::atomic::Ordering;
+    let per = PER_MS.load(Ordering::Relaxed);
+    if per == 0 {
+        return 0;
+    }
+    cycles().wrapping_sub(START.load(Ordering::Relaxed)) / per
+}
+
 /// A random number from the processor's own generator, if it has one:
 /// RDRAND on x86-64, RNDR (Armv8.5 FEAT_RNG) on ARM64.
 pub fn hw_random() -> Option<u64> {

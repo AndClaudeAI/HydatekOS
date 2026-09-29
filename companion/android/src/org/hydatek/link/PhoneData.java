@@ -52,6 +52,9 @@ final class PhoneData {
         caps.add("files");
         caps.add("clip");
         if (UnlockActivity.supported(c)) caps.add("bio");
+        // HydatekOS's haptic feedback, played on this phone's motor
+        android.os.Vibrator vib = c.getSystemService(android.os.Vibrator.class);
+        if (vib != null && vib.hasVibrator()) caps.add("haptics");
         StringBuilder sb = new StringBuilder();
         for (String s : caps) sb.append(sb.length() == 0 ? "" : ",").append(s);
         return sb.toString();

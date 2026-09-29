@@ -109,6 +109,19 @@ impl Canvas {
         Canvas { w, h, px: vec![0; (w * h) as usize], clip: Rect::new(0, 0, w, h) }
     }
 
+    /// Fade the whole canvas back towards `base` (an earlier copy of it):
+    /// what was drawn since shows at `alpha` (0-255).
+    pub fn fade_from(&mut self, base: &[u32], alpha: u32) {
+        if base.len() != self.px.len() || alpha >= 255 {
+            return;
+        }
+        for (p, b) in self.px.iter_mut().zip(base.iter()) {
+            if *p != *b {
+                *p = lerp(*b, *p, alpha + (alpha >> 7));
+            }
+        }
+    }
+
     pub fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.w, self.h)
     }
@@ -252,6 +265,15 @@ impl Canvas {
     /// Draw `src` scaled into `dst` (box-filtered; intended for shrinking),
     /// clipped to a rounded rectangle of `radius`.
     pub fn blit_scaled(&mut self, src: &Canvas, dst: Rect, radius: i32) {
+        self.blit_scaled_alpha(src, dst, radius, 255);
+    }
+
+    /// `blit_scaled`, faded to `alpha` (0-255): windows and popups fading
+    /// in and out as they open and close.
+    pub fn blit_scaled_alpha(&mut self, src: &Canvas, dst: Rect, radius: i32, alpha: u32) {
+        if alpha == 0 {
+            return;
+        }
         let rad = radius.min(dst.w / 2).min(dst.h / 2).max(0);
         let m: &[u8] = if rad > 0 { corner_mask(rad) } else { &[] };
         let d = dst.intersect(&self.clip);
@@ -284,7 +306,7 @@ impl Canvas {
                 let mx = if lx < rad { lx } else if lx >= dst.w - rad { dst.w - 1 - lx } else { rad };
                 let my = if ly < rad { ly } else if ly >= dst.h - rad { dst.h - 1 - ly } else { rad };
                 let cov = if mx < rad && my < rad { m[(my * rad + mx) as usize] as u32 } else { 255 };
-                blend(&mut self.px[(y * self.w + x) as usize], c, cov);
+                blend(&mut self.px[(y * self.w + x) as usize], c, cov * alpha.min(255) / 255);
             }
         }
     }

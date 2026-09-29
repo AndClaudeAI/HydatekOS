@@ -117,6 +117,10 @@ pub struct Sys {
     pub claude_model: String,
     /// the keyboard tester is open: keys go to it, not to shortcuts
     pub key_test: bool,
+    /// windows and menus appear without animating
+    pub reduce_motion: bool,
+    /// haptic feedback: settings and the patterns waiting to be played
+    pub haptics: crate::haptics::Haptics,
     /// the processor, graphics and screen modes (hw.rs)
     pub hw: crate::hw::Hardware,
     /// sound volume 0-100 (kept for when there's a sound driver) and mute
@@ -227,6 +231,8 @@ impl Sys {
             claude_key: String::new(),
             claude_model: String::new(),
             key_test: false,
+            reduce_motion: false,
+            haptics: Default::default(),
             hw: Default::default(),
             volume: 50,
             muted: false,
@@ -305,6 +311,8 @@ impl Sys {
         self.claude_key.clear();
         self.claude_model.clear();
         self.key_test = false;
+        self.reduce_motion = false;
+        self.haptics = Default::default();
         self.volume = 50;
         self.muted = false;
         self.brightness = 100;
@@ -468,6 +476,16 @@ impl Sys {
         Ok(())
     }
 
+    /// Haptic feedback (see haptics.rs).
+    pub fn feel(&mut self, h: crate::haptics::Haptic) {
+        self.haptics.feel(h, crate::arch::ms());
+    }
+
+    /// The paired phone can play haptic patterns.
+    pub fn phone_haptics(&self) -> bool {
+        self.link.source == crate::link::Source::Phone && self.link.caps.iter().any(|c| c == "haptics")
+    }
+
     pub fn toast(&mut self, title: &str, body: &str) {
         self.reqs.push(Req::Toast(title.to_string(), body.to_string()));
     }
@@ -493,6 +511,10 @@ impl Sys {
                 "engine" => self.search_engine = crate::web::engines::by_id(v).id.to_string(),
                 "volume" => self.volume = v.parse::<u8>().unwrap_or(50).min(100),
                 "muted" => self.muted = b,
+                "motion" => self.reduce_motion = v == "reduced",
+                "haptics" => self.haptics.on = b,
+                "hstrength" => self.haptics.strength = crate::haptics::Strength::from_id(v),
+                "hphone" => self.haptics.phone = b,
                 "brightness" => self.brightness = v.parse::<u8>().unwrap_or(100).clamp(MIN_BRIGHTNESS, 100),
                 _ => {}
             }
@@ -501,7 +523,7 @@ impl Sys {
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nvolume={}\nmuted={}\nbrightness={}\n",
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nvolume={}\nmuted={}\nbrightness={}\nmotion={}\nhaptics={}\nhstrength={}\nhphone={}\n",
             self.dark as u8,
             self.accent,
             self.wifi as u8,
@@ -515,7 +537,11 @@ impl Sys {
             self.search_engine,
             self.volume,
             self.muted as u8,
-            self.brightness
+            self.brightness,
+            if self.reduce_motion { "reduced" } else { "full" },
+            self.haptics.on as u8,
+            self.haptics.strength.id(),
+            self.haptics.phone as u8
         );
         let f = self.sys_file("settings.txt");
         self.fs.write_raw(&f, s.as_bytes());

@@ -1,12 +1,18 @@
 # Installing HydatekOS on a PC
 
-HydatekOS 0.1 runs on 64-bit x86 PCs with **UEFI firmware** (almost every PC made
-since ~2012). You need 512 MB of RAM or more.
+HydatekOS 0.1 runs on computers with **UEFI firmware** (almost every PC made since
+~2012). You need 512 MB of RAM or more. One stick carries both builds:
+
+- **x86-64**: Intel and AMD PCs (`\EFI\BOOT\BOOTX64.EFI`);
+- **ARM64**: Qualcomm Snapdragon X laptops and other ARM machines with UEFI
+  (`\EFI\BOOT\BOOTAA64.EFI`). See [HARDWARE.md](HARDWARE.md) for what works on
+  ARM so far.
 
 ## 1. Build the disk image
 
 ```sh
 rustup target add x86_64-unknown-uefi
+rustup target add aarch64-unknown-uefi   # for ARM64 / Snapdragon (optional)
 sudo apt install mtools            # macOS: brew install mtools
 tools/mkimage.sh                   # -> build/hydatekos.img (128 MB, GPT + EFI System Partition)
 ```
@@ -56,9 +62,10 @@ partitions.
 
 | Area | Status |
 |---|---|
-| Display | Uses the firmware framebuffer (GOP) at the panel's native resolution; 2x scaling at 2560x1440+ |
+| Processor | x86-64 (Intel, AMD) and ARM64 (Qualcomm Snapdragon, Arm Cortex/Neoverse); Settings › About names it |
+| Display | Uses the firmware framebuffer (GOP) at the panel's native resolution; 2x scaling at 2560x1440+; Settings › Display names the GPU |
 | Keyboard | USB and PS/2, through the firmware |
-| Mouse / touchpad | USB through the firmware, or the HydatekOS PS/2 mouse driver (with wheel) |
+| Mouse / touchpad | USB through the firmware, or the HydatekOS PS/2 mouse driver (with wheel). On ARM64, only if the firmware has a pointer driver |
 | Storage | The boot disk's FAT partition |
 | Ethernet | Through the firmware's network driver; DHCP, then Phone Link on port 7743 |
 | Wi-Fi, Bluetooth, audio, camera | Not yet (see ROADMAP.md) |

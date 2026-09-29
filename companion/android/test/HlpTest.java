@@ -55,7 +55,11 @@ public class HlpTest {
         Hlp.Msg rt = Hlp.Msg.decode(new Hlp.Msg("msg").put("text", "a\nb\\c=d").blob(new byte[] {1, 10, 10, 2}).encode());
         check(rt.get("text").equals("a\nb\\c=d") && rt.blob.length == 4, "message round trip");
 
-        Pairing p = Pairing.parse("http://192.168.1.5:7743/#k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&d=ab12cd");
+        // HydatekOS's Error pattern at medium strength (kernel/src/haptics.rs)
+        org.hydatek.link.Haptic h = org.hydatek.link.Haptic.parse("40:191:50,40:191:50,40:191:0");
+        check(h != null && h.timings.length == 7 && h.timings[1] == 40 && h.timings[2] == 50 && h.amplitudes[1] == 191 && h.amplitudes[2] == 0, "haptic pattern to waveform");
+        check(org.hydatek.link.Haptic.parse("10:0:0") == null && org.hydatek.link.Haptic.parse("x") == null && org.hydatek.link.Haptic.parse("5000:100:0") == null, "haptic pattern rejects nonsense");
+                Pairing p = Pairing.parse("http://192.168.1.5:7743/#k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&d=ab12cd");
         check(p != null && p.host.equals("192.168.1.5") && p.port == 7743 && p.key[31] == 31 && p.pairId.equals("ab12cd"), "parse pairing link");
         check(Pairing.parse("hydatek://pair?u=" + java.net.URLEncoder.encode(p.url, "UTF-8")) != null, "parse hydatek:// wrapper");
         check(Pairing.parse("http://example.com/") == null, "reject link without key");

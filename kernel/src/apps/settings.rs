@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 12] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "About"];
+pub const SECTIONS: [&str; 13] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -306,6 +306,100 @@ impl Settings {
         ui.text(m.x, y, Face::Regular, 12, &note, if ts.esc.is_some() { t.accent } else { t.text3 });
     }
 
+    /// Sound & haptics: the volume, and haptic feedback with a picture of
+    /// each pattern as it plays.
+    fn render_sound(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::haptics::{self, Haptic, Strength};
+        let t = ui.t;
+        let sw_x = m.r() - 54;
+        // sound
+        card(ui, Rect::new(m.x, m.y, m.w, 110));
+        let inner = Rect::new(m.x + 16, m.y, m.w - 32, 110);
+        row(ui, inner, m.y + 6, "Volume", if sys.muted { "Muted" } else { "No sound driver yet" });
+        let bar = Rect::new(m.r() - 16 - 40 - 150, m.y + 28, 150, 6);
+        ui.button(Rect::new(bar.x - 40, m.y + 18, 30, 26), "-", Action::App(inst, C_VOL_DOWN), false);
+        ui.rrect(bar, 3, t.chip.mix(t.text, 30));
+        let level = if sys.muted { 0 } else { sys.volume as i32 };
+        if level > 0 {
+            ui.rrect(Rect::new(bar.x, bar.y, (bar.w * level / 100).max(6), bar.h), 3, t.accent);
+        }
+        ui.button(Rect::new(bar.r() + 10, m.y + 18, 30, 26), "+", Action::App(inst, C_VOL_UP), false);
+        row(ui, inner, m.y + 56, "Mute", "The mute key does this too");
+        ui.switch(sw_x, m.y + 62, sys.muted, Action::App(inst, C_MUTE));
+
+        // haptics
+        let h = &sys.haptics;
+        let top = m.y + 124;
+        card(ui, Rect::new(m.x, top, m.w, 160));
+        let inner = Rect::new(m.x + 16, top, m.w - 32, 160);
+        row(ui, inner, top + 6, "Haptic feedback", "A tap for keys and switches, a buzz for mistakes");
+        ui.switch(sw_x, top + 12, h.on, Action::App(inst, C_HAPTICS));
+        row(ui, inner, top + 56, "Strength", "");
+        let segw = 76;
+        for (i, s) in Strength::ALL.iter().enumerate() {
+            let b = Rect::new(m.r() - 16 - 3 * segw + i as i32 * segw, top + 62, segw - 4, 28);
+            ui.button(b, s.name(), Action::App(inst, C_HSTRENGTH + i as u32), h.strength == *s);
+        }
+        let phone = if !sys.link.paired {
+            "Pair an Android phone in Phone Link to feel it there"
+        } else if sys.phone_haptics() {
+            "Your phone plays each pattern with its vibration motor"
+        } else {
+            "Your phone's HydatekOS Link app needs updating for this"
+        };
+        row(ui, inner, top + 106, "Vibrate my phone", phone);
+        ui.switch(sw_x, top + 112, h.phone, Action::App(inst, C_HPHONE));
+
+        // try each pattern; the latest one is drawn as it plays
+        let top = top + 174;
+        ui.text(m.x, top + 14, Face::Semibold, 14, "Try it", t.text);
+        let mut x = m.x;
+        let mut y = top + 26;
+        for (i, hk) in Haptic::ALL.iter().enumerate() {
+            let w = ui.tw(Face::Medium, 12, hk.name()) + 24;
+            if x + w > m.r() {
+                x = m.x;
+                y += 34;
+            }
+            ui.button(Rect::new(x, y, w, 28), hk.name(), Action::App(inst, C_HAPTIC + i as u32), false);
+            x += w + 6;
+        }
+        let wave = Rect::new(m.x, y + 40, m.w, 56);
+        card(ui, wave);
+        match h.last {
+            Some((kind, at)) => {
+                let pat = haptics::pattern(kind, h.strength);
+                let total = haptics::duration(&pat).max(1);
+                // 300 ms across the card
+                let span = 300u32.max(total);
+                let px = |ms: u32| wave.x + 12 + ((wave.w - 24) as u32 * ms / span) as i32;
+                let mut at_ms = 0u32;
+                let base = wave.b() - 10;
+                for q in &pat {
+                    let hgt = (wave.h - 34) * q.amp as i32 / 255;
+                    let r = Rect::new(px(at_ms), base - hgt, (px(at_ms + q.ms as u32) - px(at_ms)).max(2), hgt);
+                    ui.rrect(r, 2, t.accent);
+                    at_ms += q.ms as u32 + q.gap as u32;
+                }
+                ui.rect(Rect::new(wave.x + 12, base, wave.w - 24, 1), t.line);
+                // the playhead while it plays
+                let since = crate::arch::ms().saturating_sub(at) as u32;
+                if since < total {
+                    ui.rect(Rect::new(px(since), wave.y + 6, 2, wave.h - 12), t.text);
+                }
+                let label = format!("{} · {} ms · {}", kind.name(), total, h.strength.name());
+                let lw = ui.tw(Face::Medium, 12, &label);
+                ui.text(wave.r() - 12 - lw, wave.y + 20, Face::Medium, 12, &label, t.text2);
+            }
+            None => {
+                ui.text(wave.x + 14, wave.y + 33, Face::Regular, 13, "Press one to see its pattern", t.text3);
+            }
+        }
+        let note = "This computer has no vibration motor or haptic touchpad HydatekOS can drive yet.";
+        let note = ui.fit(Face::Regular, 12, note, m.w);
+        ui.text(m.x, wave.b() + 22, Face::Regular, 12, &note, t.text3);
+    }
+
     /// The Assistant section: Claude, its API key and model.
     fn render_assistant(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
         use crate::web::claude;
@@ -535,6 +629,16 @@ const C_CLAUDE_REMOVE: u32 = 35;
 const C_CLAUDE_MODELS: u32 = 36;
 const C_CLAUDE_OPEN: u32 = 37;
 const C_KEY_TEST: u32 = 38;
+const C_MOTION: u32 = 40;
+const C_VOL_DOWN: u32 = 41;
+const C_VOL_UP: u32 = 42;
+const C_MUTE: u32 = 43;
+const C_HAPTICS: u32 = 44;
+const C_HPHONE: u32 = 45;
+/// + strength index
+const C_HSTRENGTH: u32 = 50;
+/// + Haptic::ALL index
+const C_HAPTIC: u32 = 60;
 const C_KEY_TEST_DONE: u32 = 39;
 const C_PICK: u32 = 1000;
 /// + model index
@@ -612,6 +716,7 @@ impl App for Settings {
             1 => self.render_accounts(ui, m, sys, inst),
             3 => self.render_keyboard(ui, m, sys, inst),
             10 => self.render_assistant(ui, m, sys, inst),
+            11 => self.render_sound(ui, m, sys, inst),
             2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
@@ -639,12 +744,14 @@ impl App for Settings {
                 ui.text_in(Rect::new(sw_x - 12, m.y + 154, 20, 26), Face::Semibold, 13, &ps, t.text, 1);
                 ui.button(Rect::new(sw_x + 12, m.y + 154, 30, 26), "+", Action::App(inst, C_PTR_UP), false);
 
-                card(ui, Rect::new(m.x, m.y + 204, m.w, 110));
-                let inner = Rect::new(m.x + 16, m.y + 204, m.w - 32, 110);
+                card(ui, Rect::new(m.x, m.y + 204, m.w, 160));
+                let inner = Rect::new(m.x + 16, m.y + 204, m.w - 32, 160);
                 row(ui, inner, m.y + 216, "Mobile shell", "Use the HydatekOS Mobile home screen on this device");
                 ui.switch(sw_x, m.y + 222, sys.mobile_shell, Action::App(inst, C_MOBILE));
                 row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
                 ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
+                row(ui, inner, m.y + 312, "Reduce motion", "Windows and menus appear and go without animating");
+                ui.switch(sw_x, m.y + 320, sys.reduce_motion, Action::App(inst, C_MOTION));
             }
             4 => {
                 let n = &sys.net;
@@ -885,7 +992,41 @@ impl App for Settings {
         if !(C_ACC_REMOVE..C_ACC_REMOVE + 16).contains(&code) {
             self.acc_confirm = None;
         }
+        // switches click
+        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN].contains(&code) {
+            sys.feel(crate::haptics::Haptic::Click);
+        }
         match code {
+            C_VOL_DOWN | C_VOL_UP | C_MUTE => {
+                use crate::ui::Media;
+                sys.reqs.push(Req::Media(match code {
+                    C_VOL_DOWN => Media::VolumeDown,
+                    C_VOL_UP => Media::VolumeUp,
+                    _ => Media::Mute,
+                }));
+                return;
+            }
+            C_HAPTICS => {
+                sys.haptics.on = !sys.haptics.on;
+                sys.feel(crate::haptics::Haptic::Click);
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_HPHONE => {
+                sys.haptics.phone = !sys.haptics.phone;
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            c if (C_HSTRENGTH..C_HSTRENGTH + 3).contains(&c) => {
+                sys.haptics.strength = crate::haptics::Strength::ALL[(c - C_HSTRENGTH) as usize];
+                sys.feel(crate::haptics::Haptic::Tap);
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            c if (C_HAPTIC..C_HAPTIC + 7).contains(&c) => {
+                sys.feel(crate::haptics::Haptic::ALL[(c - C_HAPTIC) as usize]);
+                return;
+            }
             C_KEY_TEST => {
                 self.tester = Some(Tester::new());
                 sys.key_test = true;
@@ -1109,6 +1250,7 @@ impl App for Settings {
             C_WIFI => sys.wifi = !sys.wifi,
             C_BT => sys.bt = !sys.bt,
             C_FOCUS => sys.focus = !sys.focus,
+            C_MOTION => sys.reduce_motion = !sys.reduce_motion,
             C_PTR_DOWN => sys.pointer_speed = (sys.pointer_speed - 1).max(1),
             C_PTR_UP => sys.pointer_speed = (sys.pointer_speed + 1).min(9),
             C_OPEN_LINK => sys.reqs.push(Req::Open(AppKind::PhoneLink)),
@@ -1204,7 +1346,8 @@ impl App for Settings {
     }
 
     fn animating(&self) -> bool {
-        self.focus != 0 || self.tester.is_some()
+        // the Sound & haptics pattern's playhead moves too
+        self.focus != 0 || self.tester.is_some() || self.sec == 11
     }
 
     fn close(&mut self, sys: &mut Sys) {

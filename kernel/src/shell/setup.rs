@@ -377,6 +377,11 @@ impl Setup {
         Outcome::Stay
     }
 
+    /// Something needs fixing (for feedback).
+    pub fn has_error(&self) -> bool {
+        !self.error.is_empty()
+    }
+
     /// Redraw for the caret?
     pub fn animating(&self) -> bool {
         self.field != 0

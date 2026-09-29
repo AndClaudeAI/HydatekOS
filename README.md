@@ -48,7 +48,17 @@ Windows, macOS or Linux.
 
 ## What works today (milestone 1, "Dune")
 
-- **Boots on real x86-64 PCs** from a USB stick or the internal disk (UEFI, Secure Boot off).
+- **Boots on real x86-64 PCs and ARM64 laptops** (Qualcomm Snapdragon X and
+  other ARM machines with UEFI) from one USB stick or the internal disk (Secure
+  Boot off). Settings › About names the processor, its cores and features, and
+  the graphics (Intel, AMD, NVIDIA, Qualcomm Adreno…). Details:
+  [docs/HARDWARE.md](docs/HARDWARE.md).
+- **Motion and haptics:** windows zoom open, fade away when closed, fly into
+  the dock when minimised and glide when maximised or snapped; the start menu,
+  menus and notifications animate in. Haptic feedback taps for keys and
+  switches and buzzes for mistakes, played on a paired Android phone's motor;
+  Settings › Sound & haptics shows each pattern. Details:
+  [docs/MOTION_AND_HAPTICS.md](docs/MOTION_AND_HAPTICS.md).
 - **Setup assistant and profile:** the first start asks for your name, a picture
   (initials, one of six drawn pictures, or a photo of your own), a PIN or password
   and light or dark. Your picture and name then show on the lock screen and in the
@@ -158,6 +168,11 @@ An operating system is a long project. Here's what's still missing; the plan is 
   need a physical keyboard.
 - **Accounts keep people apart inside HydatekOS only:** files aren't encrypted
   yet, and one person is signed in at a time.
+- **On ARM64 the pointer depends on the firmware.** There's no PS/2 on ARM, and
+  QEMU's ARM firmware has no USB mouse driver, so there HydatekOS is used with the
+  keyboard (the Hydatek key, the launcher, ↑/↓ in Settings). No computer has a
+  haptic motor or touchpad HydatekOS can drive yet: patterns play on a paired
+  phone.
 - Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
   (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
 
@@ -217,7 +232,7 @@ covers putting HydatekOS on the internal disk next to another OS.
 ## Repository layout
 
 ```
-kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64)
+kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64 and ARM64)
   src/main.rs      boot, heap, display, main loop, cursor
   src/efi.rs       hand-written UEFI bindings
   src/heap.rs      kernel memory allocator
