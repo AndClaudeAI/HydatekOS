@@ -58,14 +58,22 @@ Settings › Sound & haptics:
 **Try it** plays each pattern and draws it: the pulses, their strength, and a
 playhead as it plays.
 
-**Where it's felt:** the firmware gives HydatekOS no way to drive a vibration
-motor or a haptic touchpad, so no computer can play the patterns itself yet.
-A paired Android phone can. With **Vibrate my phone** on, each pattern goes to
+**Where it's felt:** HydatekOS plays each pattern directly on the hardware it
+drives ([DRIVERS.md](DRIVERS.md)):
+- **Haptic touchpads** (USB, and I²C once those are found) play the nearest HID
+  waveform: Tap and Tick a click, Click a press, Success two clicks, Warning and
+  Error buzzes, Long press a rumble, at the chosen strength.
+- **Game controllers' rumble motors** (Xbox 360, Xbox One / Series, DualShock 4,
+  DualSense) play the pulses themselves: light pulses on the small motor, strong
+  ones on both, each stretched to at least 40 ms so the motor spins up.
+
+Settings › Sound & haptics says which of them it's playing on. A paired
+Android phone can play them too. With **Vibrate my phone** on, each pattern goes to
 the phone over Phone Link as a `haptic` message (`"10:180:0"`: milliseconds on,
 strength, milliseconds off), and HydatekOS Link plays it on the phone's motor.
-The phone says it can with the `haptics` capability. Haptic touchpads and
-built-in motors will play the same patterns once HydatekOS has drivers for
-them (milestone 2's USB / I²C HID work).
+The phone says it can with the `haptics` capability. A laptop's own vibration
+motor, where it has one, sits behind the chipset's power management (Qualcomm
+SPMI, for instance) and has no driver yet.
 
 ## How it's built
 
@@ -76,4 +84,6 @@ them (milestone 2's USB / I²C HID work).
 | Faded, scaled drawing | `kernel/src/gfx.rs` (`blit_scaled_alpha`, `fade_from`) |
 | Real-time clock | `kernel/src/arch.rs` (`calibrate`, `ms`) |
 | Patterns, strengths, the engine, the message format | `kernel/src/haptics.rs` (host-tested) |
+| Waveforms for haptic touchpads | `kernel/src/haptics.rs` (`waveform`), `kernel/src/hid.rs` (`HapticController`) |
+| Rumble motors | `kernel/src/gamepad.rs` (`Motor`, `rumble`), `kernel/src/usb.rs` |
 | The phone playing them | `companion/android/src/org/hydatek/link/Haptic.java`, `LinkService.java` (JVM-tested parsing) |

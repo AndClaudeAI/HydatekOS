@@ -30,6 +30,14 @@ pub mod hw;
 pub mod anim;
 #[path = "../../kernel/src/haptics.rs"]
 pub mod haptics;
+#[path = "../../kernel/src/hid.rs"]
+pub mod hid;
+#[path = "../../kernel/src/touchpad.rs"]
+pub mod touchpad;
+#[path = "../../kernel/src/gamepad.rs"]
+pub mod gamepad;
+#[path = "../../kernel/src/i2c.rs"]
+pub mod i2c;
 /// The kernel's rectangle, for anim.rs.
 pub mod gfx {
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -96,6 +104,12 @@ mod hw_tests;
 mod anim_tests;
 #[cfg(test)]
 mod haptics_tests;
+#[cfg(test)]
+mod hid_tests;
+#[cfg(test)]
+mod i2c_tests;
+#[cfg(test)]
+mod gamepad_tests;
 #[cfg(test)]
 mod tls_tests;
 #[cfg(test)]

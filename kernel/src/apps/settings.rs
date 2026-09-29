@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 13] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "About"];
+pub const SECTIONS: [&str; 14] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -308,6 +308,87 @@ impl Settings {
 
     /// Sound & haptics: the volume, and haptic feedback with a picture of
     /// each pattern as it plays.
+    /// Settings › Devices: everything HydatekOS found, and who drives it.
+    fn render_devices(&mut self, ui: &mut Ui, m: Rect, sys: &Sys) {
+        let t = ui.t;
+        let mut list: Vec<(String, String, &str)> = Vec::new();
+        let mut heads: Vec<(usize, &str)> = Vec::new();
+        heads.push((list.len(), "USB"));
+        for d in &sys.usb {
+            list.push((d.name.clone(), format!("{} · {}", d.kind, d.ids), d.driver));
+        }
+        if sys.usb.is_empty() {
+            list.push((String::from("No USB devices"), String::new(), ""));
+        }
+        heads.push((list.len(), "PCI"));
+        for d in &sys.hw.pci {
+            list.push((d.name.clone(), format!("{} · {}", d.kind, d.ids), d.driver));
+        }
+        if sys.hw.pci.is_empty() {
+            list.push((String::from("No PCI bus"), String::from("The processor's devices are built into the chip"), ""));
+        }
+        let i2c = &sys.hw.i2c;
+        if i2c.hid + i2c.designware + i2c.other > 0 {
+            heads.push((list.len(), "I2C (from ACPI)"));
+            if i2c.hid > 0 {
+                list.push((format!("{} HID over I2C device{}", i2c.hid, if i2c.hid > 1 { "s" } else { "" }), String::from("Touchpads, touch screens, pens"), "Waits for ACPI"));
+            }
+            if i2c.designware > 0 {
+                list.push((format!("{} DesignWare I2C controller{}", i2c.designware, if i2c.designware > 1 { "s" } else { "" }), String::from("Intel, AMD and ARM laptops"), "HydatekOS I2C"));
+            }
+            if i2c.other > 0 {
+                list.push((format!("{} Qualcomm I2C controller{}", i2c.other, if i2c.other > 1 { "s" } else { "" }), String::from("Snapdragon serial engines"), "No driver yet"));
+            }
+        }
+        const ROW: i32 = 40;
+        const HEAD: i32 = 30;
+        let mut y = m.y;
+        let mut shown = 0;
+        for (i, (name, sub, driver)) in list.iter().enumerate() {
+            if let Some((_, h)) = heads.iter().find(|(at, _)| *at == i) {
+                if y + HEAD + ROW > m.b() {
+                    break;
+                }
+                ui.label(m.x + 4, y + 20, 11, h, t.text2);
+                y += HEAD;
+            }
+            if y + ROW > m.b() - 20 && i + 1 < list.len() {
+                break;
+            }
+            card(ui, Rect::new(m.x, y, m.w, ROW - 4));
+            let dw = if driver.is_empty() { 0 } else { ui.tw(Face::Medium, 11, driver) + 18 };
+            let nm = ui.fit(Face::Medium, 13, name, m.w - 40 - dw);
+            ui.text(m.x + 14, y + 16, Face::Medium, 13, &nm, t.text);
+            if !sub.is_empty() {
+                let sb = ui.fit(Face::Regular, 11, sub, m.w - 40 - dw);
+                ui.text(m.x + 14, y + 30, Face::Regular, 11, &sb, t.text2);
+            }
+            if !driver.is_empty() {
+                let ours = driver.starts_with("HydatekOS") || driver.contains("+ HydatekOS");
+                let none = driver.starts_with("No driver") || driver.starts_with("Waits");
+                let (bg, fg) = if ours {
+                    (t.accent, t.on_accent)
+                } else if none {
+                    (t.chip.mix(t.danger, 40), t.text)
+                } else {
+                    (t.chip, t.text2)
+                };
+                let chip = Rect::new(m.r() - 12 - dw, y + 8, dw, 20);
+                ui.rrect(chip, 10, bg);
+                ui.text_in(chip, Face::Medium, 11, driver, fg, 1);
+            }
+            y += ROW;
+            shown += 1;
+        }
+        let rows = list.iter().filter(|l| !l.2.is_empty()).count();
+        if shown < list.len() {
+            ui.text(m.x + 4, m.b() - 4, Face::Regular, 12, &format!("…and {} more", list.len() - shown), t.text2);
+        } else if rows > 0 {
+            let ours = list.iter().filter(|l| l.2.contains("HydatekOS")).count();
+            ui.text(m.x + 4, (y + 18).min(m.b() - 4), Face::Regular, 12, &format!("{} devices · {} with HydatekOS drivers", rows, ours), t.text2);
+        }
+    }
+
     fn render_sound(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
         use crate::haptics::{self, Haptic, Strength};
         let t = ui.t;
@@ -332,7 +413,13 @@ impl Settings {
         let top = m.y + 124;
         card(ui, Rect::new(m.x, top, m.w, 160));
         let inner = Rect::new(m.x + 16, top, m.w - 32, 160);
-        row(ui, inner, top + 6, "Haptic feedback", "A tap for keys and switches, a buzz for mistakes");
+        let on = match (sys.haptic_pads, sys.motors) {
+            (0, 0) => String::from("A tap for keys and switches, a buzz for mistakes"),
+            (p, 0) => format!("Played on your haptic touchpad{}", if p > 1 { "s" } else { "" }),
+            (0, c) => format!("Played on {} controller{}'s rumble motors", c, if c > 1 { "s" } else { "" }),
+            (p, c) => format!("Played on {} haptic touchpad{} and {} controller{}", p, if p > 1 { "s" } else { "" }, c, if c > 1 { "s" } else { "" }),
+        };
+        row(ui, inner, top + 6, "Haptic feedback", &on);
         ui.switch(sw_x, top + 12, h.on, Action::App(inst, C_HAPTICS));
         row(ui, inner, top + 56, "Strength", "");
         let segw = 76;
@@ -717,6 +804,7 @@ impl App for Settings {
             3 => self.render_keyboard(ui, m, sys, inst),
             10 => self.render_assistant(ui, m, sys, inst),
             11 => self.render_sound(ui, m, sys, inst),
+            12 => self.render_devices(ui, m, sys),
             2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);

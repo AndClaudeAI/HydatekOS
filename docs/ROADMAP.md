@@ -7,11 +7,14 @@
 - ✅ Hyda Workspace: Hyda Scripts, Hyda Grids and Hyda Slides, with Word, Excel and PowerPoint import and export
 - ✅ First-start setup assistant and a profile (name, picture, sign-in, look), shown on the lock screen and desktop and recorded as the author of documents
 - Persistent storage on the boot disk; light and dark themes
-- PS/2 mouse driver; firmware keyboard, USB input, disk and framebuffer
+- PS/2 mouse driver; firmware keyboard, disk and framebuffer
+- ✅ HydatekOS HID stack over the firmware's USB host: mice and tablets (ARM64 included), Precision Touchpads with gestures, touch screens, media keys, gamepads (HID, Xbox 360, Xbox One), haptic touchpad waveforms and controller rumble motors ([DRIVERS.md](DRIVERS.md))
+- ✅ HID over I2C and a DesignWare I2C controller driver (tested against a simulated bus); Settings › Devices
 
 ## M2 — own the machine
 - `ExitBootServices`; own page tables, GDT/IDT, APIC timer and interrupts
-- Drivers: PS/2 keyboard, xHCI + USB HID (keyboard, mouse, touchpad), I2C-HID touchpads
+- Drivers: PS/2 keyboard, an xHCI host controller driver under the HID stack
+- An ACPI AML interpreter, so I2C touchpads are found and started; Qualcomm GENI I2C and SPMI haptics (Snapdragon)
 - AHCI and NVMe storage; a native FAT32 driver, then a HydatekOS file system
 - Preemptive scheduler, processes and a syscall ABI; apps move out of the kernel
 - ✅ JPEG, PNG, WebP, GIF and BMP decoders, SVG; pictures open from Files

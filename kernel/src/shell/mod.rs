@@ -630,8 +630,8 @@ impl Shell {
         if self.moving() {
             self.dirty = true;
         }
-        // haptic patterns go to whatever can play them: the paired phone,
-        // when asked (no motor or haptic touchpad has a driver yet)
+        // haptic patterns go to the paired phone when asked; main.rs plays
+        // them on haptic touchpads and controllers' motors (usb.rs)
         for pat in core::mem::take(&mut self.sys.haptics.pending) {
             if self.sys.haptics.phone && self.sys.phone_haptics() {
                 let w = crate::hlp::Msg::new("haptic").with("p", &crate::haptics::encode(&pat));

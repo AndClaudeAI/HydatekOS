@@ -4,7 +4,8 @@ A calm desktop **and** mobile operating system, written from scratch.
 
 HydatekOS boots straight from a PC's UEFI firmware. The kernel, memory allocator,
 graphics compositor, window manager, font and icon renderers, file system layer,
-PS/2 mouse driver, TCP/IP network stack, cryptography and every app are
+PS/2 mouse driver, USB and I²C HID drivers (mice, touchpads, touch screens,
+game controllers, haptics), TCP/IP network stack, cryptography and every app are
 HydatekOS code: Rust, `no_std`, zero third-party crates. It isn't a skin on
 Windows, macOS or Linux.
 
@@ -168,13 +169,16 @@ An operating system is a long project. Here's what's still missing; the plan is 
   need a physical keyboard.
 - **Accounts keep people apart inside HydatekOS only:** files aren't encrypted
   yet, and one person is signed in at a time.
-- **On ARM64 the pointer depends on the firmware.** There's no PS/2 on ARM, and
-  QEMU's ARM firmware has no USB mouse driver, so there HydatekOS is used with the
-  keyboard (the Hydatek key, the launcher, ↑/↓ in Settings). No computer has a
-  haptic motor or touchpad HydatekOS can drive yet: patterns play on a paired
-  phone.
-- Milestone 1 still uses the firmware for USB input, disk access and the framebuffer
-  (it never calls `ExitBootServices`). Milestone 2 replaces these with HydatekOS drivers.
+- **I²C touchpads aren't started yet.** HydatekOS has the HID over I²C protocol and
+  a DesignWare I²C controller driver, but finding the touchpad needs ACPI's AML,
+  which HydatekOS can't run yet. USB touchpads, mice, touch screens and controllers
+  work on x86 and ARM64 alike ([docs/DRIVERS.md](docs/DRIVERS.md)); haptic
+  touchpads and controllers' rumble motors play HydatekOS's haptic patterns. Haptic
+  touchpads and controllers have only been tested against simulated and virtual
+  devices, not real ones.
+- Milestone 1 still uses the firmware for the USB host controller, disk access and the
+  framebuffer (it never calls `ExitBootServices`). Milestone 2 replaces these with
+  HydatekOS drivers.
 
 ## Try it in a virtual machine
 
@@ -240,6 +244,10 @@ kernel/            the HydatekOS kernel + shell (Rust, no_std, UEFI x86-64 and A
   src/font.rs      text rendering from the prebuilt font pack
   src/icons.rs     vector icon set
   src/ps2.rs       PS/2 mouse driver
+  src/usb.rs       USB HID driver (pointers, touchpads, touch screens, media keys,
+                   game controllers, haptic touchpads, rumble motors)
+  src/hid.rs       HID report descriptors; touchpad.rs gestures; gamepad.rs controllers
+  src/i2c.rs       DesignWare I2C controller and HID over I2C
   src/input.rs     keyboard + pointer input
   src/fs.rs        virtual file system persisted to the boot disk
   src/shell/       desktop shell, window manager, mobile shell, lock screen, setup assistant

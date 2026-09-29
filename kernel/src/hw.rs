@@ -247,6 +247,89 @@ pub fn tidy(name: &str) -> String {
     s.trim().to_string()
 }
 
+/// What a PCI device is, from its class code (base, subclass, interface).
+pub fn pci_class(base: u8, sub: u8, iface: u8) -> &'static str {
+    match (base, sub, iface) {
+        (0x01, 0x01, _) => "IDE storage controller",
+        (0x01, 0x06, _) => "SATA storage controller",
+        (0x01, 0x08, _) => "NVMe storage controller",
+        (0x01, 0x00, _) => "SCSI storage controller",
+        (0x01, _, _) => "Storage controller",
+        (0x02, 0x00, _) => "Ethernet adapter",
+        (0x02, 0x80, _) => "Wi-Fi / network adapter",
+        (0x02, _, _) => "Network adapter",
+        (0x03, _, _) => "Display controller",
+        (0x04, 0x03, _) => "Audio device",
+        (0x04, _, _) => "Multimedia device",
+        (0x05, _, _) => "Memory controller",
+        (0x06, 0x00, _) => "Host bridge",
+        (0x06, 0x01, _) => "ISA bridge",
+        (0x06, 0x04, _) => "PCI bridge",
+        (0x06, _, _) => "Bridge",
+        (0x07, _, _) => "Communication controller",
+        (0x08, _, _) => "System peripheral",
+        (0x09, _, _) => "Input device controller",
+        (0x0C, 0x03, 0x00) => "USB 1.1 controller (UHCI)",
+        (0x0C, 0x03, 0x10) => "USB 1.1 controller (OHCI)",
+        (0x0C, 0x03, 0x20) => "USB 2.0 controller (EHCI)",
+        (0x0C, 0x03, 0x30) => "USB 3 controller (xHCI)",
+        (0x0C, 0x03, _) => "USB controller",
+        (0x0C, 0x05, _) => "SMBus controller",
+        (0x0C, 0x80, _) => "Serial bus controller (I2C / SPI)",
+        (0x0C, _, _) => "Serial bus controller",
+        (0x0D, _, _) => "Wireless controller (Bluetooth)",
+        (0x11, _, _) => "Signal processing controller",
+        (0x12, _, _) => "Processing accelerator (NPU)",
+        _ => "Other device",
+    }
+}
+
+/// Who drives a kind of PCI device in HydatekOS.
+pub fn pci_driver(base: u8, sub: u8) -> &'static str {
+    match (base, sub) {
+        (0x01, _) => "Firmware (block I/O)",
+        (0x02, 0x00) => "Firmware network + HydatekOS TCP/IP",
+        (0x03, _) => "Firmware framebuffer",
+        (0x0C, 0x03) => "Firmware host + HydatekOS USB HID",
+        (0x06, _) | (0x05, _) | (0x08, _) => "Built in",
+        (0x0C, 0x80) => "HydatekOS I2C (waits for ACPI)",
+        _ => "No driver yet",
+    }
+}
+
+/// A PCI device, for Settings › Devices.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PciDev {
+    pub name: String,
+    pub kind: &'static str,
+    pub ids: String,
+    pub driver: &'static str,
+}
+
+/// What ACPI's tables say is on the I2C buses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct I2cFinds {
+    /// HID over I2C devices (touchpads, touch screens, pens: PNP0C50)
+    pub hid: u32,
+    /// I2C controllers HydatekOS has a driver for (DesignWare)
+    pub designware: u32,
+    /// other I2C controllers (Qualcomm GENI and the like)
+    pub other: u32,
+}
+
+/// Look through ACPI tables (the DSDT and SSDTs, AML) for I2C devices by
+/// their hardware ids, as strings or compressed EISA ids. A count, not a
+/// map: where they are needs an AML interpreter.
+pub fn i2c_devices(aml: &[u8]) -> I2cFinds {
+    let count = |pat: &[u8]| aml.windows(pat.len()).filter(|w| *w == pat).count() as u32;
+    // PNP0C50 compressed: "PNP" -> 0x41D0, then 0x0C50
+    let hid = count(b"PNP0C50") + count(b"ACPI0C50") + count(&[0x0C, 0x41, 0xD0, 0x0C, 0x50]);
+    let dw: u32 = ["INT33C2", "INT33C3", "INT3432", "INT3433", "80860F41", "808622C1", "AMDI0010", "AMDI0019", "AMDI0510", "APMC0D0F", "HISI02A1", "HYGO0010"].iter().map(|id| count(id.as_bytes())).sum();
+    // Qualcomm's I2C (GENI serial engines) on Snapdragon laptops
+    let other = count(b"QCOM0220") + count(b"QCOM0411");
+    I2cFinds { hid, designware: dw, other }
+}
+
 /// A graphics device.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gpu {
@@ -276,6 +359,10 @@ pub struct Hardware {
     pub mode: (u32, u32),
     pub machine: String,
     pub bios: String,
+    /// every PCI device
+    pub pci: Vec<PciDev>,
+    /// I2C devices ACPI lists
+    pub i2c: I2cFinds,
 }
 
 #[cfg(target_os = "uefi")]
@@ -370,6 +457,84 @@ mod detect {
         0
     }
 
+    fn pci() -> Vec<PciDev> {
+        let mut out = Vec::new();
+        for h in efi::handles(&PCI_IO_GUID) {
+            let Some(p) = efi::handle_protocol::<PciIo>(h, &PCI_IO_GUID) else { continue };
+            let (mut id, mut class) = (0u32, 0u32);
+            unsafe {
+                if ((*p).pci.read)(p, 2, 0, 1, &mut id as *mut u32 as *mut u8) != efi::SUCCESS {
+                    continue;
+                }
+                ((*p).pci.read)(p, 2, 8, 1, &mut class as *mut u32 as *mut u8);
+            }
+            let (vendor, device) = (id as u16, (id >> 16) as u16);
+            let (base, sub, iface) = ((class >> 24) as u8, (class >> 16) as u8, (class >> 8) as u8);
+            let kind = pci_class(base, sub, iface);
+            let name = if base == 0x03 {
+                gpu_name(vendor, device)
+            } else {
+                match pci_vendor(vendor) {
+                    "" => String::from(kind),
+                    v => format!("{} {}", v, kind),
+                }
+            };
+            out.push(PciDev { name, kind, ids: format!("{:04x}:{:04x}", vendor, device), driver: pci_driver(base, sub) });
+        }
+        out
+    }
+
+    /// The ACPI tables' AML (DSDT and SSDTs), for i2c_devices.
+    fn acpi_i2c() -> I2cFinds {
+        const ACPI2_GUID: Guid = Guid(0x8868E871, 0xE4F1, 0x11D3, [0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C, 0x88, 0x81]);
+        let mut f = I2cFinds::default();
+        let Some(rsdp) = table(&ACPI2_GUID) else { return f };
+        unsafe {
+            if core::slice::from_raw_parts(rsdp, 8) != b"RSD PTR " || *rsdp.add(15) < 2 {
+                return f;
+            }
+            let rd64 = |p: *const u8| u64::from_le_bytes(core::slice::from_raw_parts(p, 8).try_into().unwrap());
+            let rd32 = |p: *const u8| u32::from_le_bytes(core::slice::from_raw_parts(p, 4).try_into().unwrap());
+            let xsdt = rd64(rsdp.add(24)) as usize as *const u8;
+            if xsdt.is_null() || core::slice::from_raw_parts(xsdt, 4) != b"XSDT" {
+                return f;
+            }
+            let n = (rd32(xsdt.add(4)) as usize).saturating_sub(36) / 8;
+            let mut add = |t: *const u8| {
+                let len = rd32(t.add(4)) as usize;
+                if len > 36 && len < 16 << 20 {
+                    let g = i2c_devices(core::slice::from_raw_parts(t.add(36), len - 36));
+                    f.hid += g.hid;
+                    f.designware += g.designware;
+                    f.other += g.other;
+                }
+            };
+            for i in 0..n.min(256) {
+                let t = rd64(xsdt.add(36 + i * 8)) as usize as *const u8;
+                if t.is_null() {
+                    continue;
+                }
+                match core::slice::from_raw_parts(t, 4) {
+                    b"SSDT" => add(t),
+                    b"FACP" => {
+                        // the DSDT: X_DSDT (64-bit) at 140, else DSDT at 40
+                        let len = rd32(t.add(4)) as usize;
+                        let mut d = if len >= 148 { rd64(t.add(140)) as usize } else { 0 };
+                        if d == 0 {
+                            d = rd32(t.add(40)) as usize;
+                        }
+                        let d = d as *const u8;
+                        if !d.is_null() && core::slice::from_raw_parts(d, 4) == b"DSDT" {
+                            add(d);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        f
+    }
+
     fn gpus() -> Vec<Gpu> {
         let mut out = Vec::new();
         for h in efi::handles(&PCI_IO_GUID) {
@@ -451,9 +616,12 @@ mod detect {
             mode,
             machine,
             bios,
+            pci: pci(),
+            i2c: acpi_i2c(),
         };
         log!("hw: midr {:#x}, SMBIOS processor \"{}\", machine \"{}\"", id.midr, sm.cpu_name, hw.machine);
         log!("hw: {} {} ({} cores) [{}]; graphics: {}; {} screen modes", hw.arch, hw.cpu, hw.cores, hw.features.join(" "), hw.gpus.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", "), hw.modes.len());
+        log!("hw: {} PCI devices; ACPI I2C: {} HID devices, {} DesignWare controllers, {} other", hw.pci.len(), hw.i2c.hid, hw.i2c.designware, hw.i2c.other);
         hw
     }
 }

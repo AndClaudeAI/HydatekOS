@@ -123,6 +123,12 @@ pub struct Sys {
     pub haptics: crate::haptics::Haptics,
     /// the processor, graphics and screen modes (hw.rs)
     pub hw: crate::hw::Hardware,
+    /// USB devices and who drives them (usb.rs), and when that list changed
+    pub usb: Vec<crate::usb::DeviceInfo>,
+    pub usb_gen: u32,
+    /// haptic touchpads and controllers with rumble motors HydatekOS drives
+    pub haptic_pads: usize,
+    pub motors: usize,
     /// sound volume 0-100 (kept for when there's a sound driver) and mute
     pub volume: u8,
     pub muted: bool,
@@ -234,6 +240,10 @@ impl Sys {
             reduce_motion: false,
             haptics: Default::default(),
             hw: Default::default(),
+            usb: Vec::new(),
+            usb_gen: 0,
+            haptic_pads: 0,
+            motors: 0,
             volume: 50,
             muted: false,
             brightness: 100,

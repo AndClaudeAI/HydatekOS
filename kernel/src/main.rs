@@ -18,13 +18,16 @@ mod brand;
 mod hw;
 mod efi;
 mod font;
+mod gamepad;
 mod fs;
 mod gfx;
 mod grid;
 mod gridio;
 mod haptics;
+mod hid;
 mod heap;
 mod hlp;
+mod i2c;
 mod icons;
 mod image;
 mod input;
@@ -47,8 +50,10 @@ mod rng;
 mod shell;
 mod sys;
 mod theme;
+mod touchpad;
 mod tls;
 mod ui;
+mod usb;
 mod web;
 mod zip;
 
@@ -285,6 +290,18 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             sh.event(ev, input.x, input.y);
         }
         sh.tick(ticks);
+        // haptic feedback on HydatekOS's own devices: haptic touchpads and
+        // controllers' rumble motors
+        for (h, pulses) in core::mem::take(&mut sh.sys.haptics.device) {
+            input.usb.feel(h, &pulses, sh.sys.haptics.strength.percent(), arch::ms());
+        }
+        if sh.sys.usb_gen != input.usb.generation {
+            sh.sys.usb_gen = input.usb.generation;
+            sh.sys.usb = input.usb.info.clone();
+            sh.sys.haptic_pads = input.usb.haptic_pads();
+            sh.sys.motors = input.usb.motors();
+            sh.dirty = true;
+        }
         if net.is_none() && !sh.sys.web.queue.is_empty() {
             // no network adapter: every request fails at once
             for r in core::mem::take(&mut sh.sys.web.queue) {

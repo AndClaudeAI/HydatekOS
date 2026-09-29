@@ -8,7 +8,7 @@ HydatekOS runs on the two kinds of processor in today's laptops and desktops:
 | Boot file | `\EFI\BOOT\BOOTX64.EFI` | `\EFI\BOOT\BOOTAA64.EFI` |
 | Random numbers | RDRAND + firmware RNG + TSC jitter | RNDR (Armv8.5) + firmware RNG + timer jitter |
 | Debug log | COM1 | the firmware's serial port |
-| Mouse without firmware support | HydatekOS PS/2 driver | none yet (keyboard only) |
+| Mouse without firmware support | HydatekOS PS/2 and USB HID drivers | HydatekOS USB HID driver |
 
 `tools/mkimage.sh` puts both on the same stick when the `aarch64-unknown-uefi`
 Rust target is installed, and the firmware picks the one for its processor.
@@ -43,6 +43,8 @@ Settings › About and Settings › Display show:
   Snapdragon)".
 - **Screen modes:** every mode the firmware's graphics driver offers, with the one
   in use highlighted.
+- **Devices** (Settings › Devices): every PCI and USB device, what it is, and
+  what drives it: HydatekOS, the firmware, or nothing yet.
 
 ![Display on ARM64](screenshots/arm64-display.png)
 
@@ -53,17 +55,19 @@ composites in software, so any GPU the firmware can show a picture on works.
 There's no GPU acceleration yet: that needs drivers for each GPU family.
 
 On ARM64 the keyboard, disk, network and screen all go through the firmware,
-as on x86. The difference is the pointer. PCs can fall back on HydatekOS's own
-PS/2 mouse driver, but ARM machines have no PS/2, so a mouse or touchpad works
-only when the firmware has a driver for it. QEMU's ARM firmware doesn't, so
-there HydatekOS is driven from the keyboard:
+as on x86. Pointers don't have to: ARM firmware often has no mouse driver
+(QEMU's doesn't), so HydatekOS drives USB mice, tablets, touchpads, touch
+screens and controllers itself ([DRIVERS.md](DRIVERS.md)). In QEMU's ARM
+machine the USB tablet and mouse both work.
+
+A Snapdragon laptop's built-in touchpad sits on I²C, not USB. HydatekOS has
+the HID over I²C protocol, but it can't find the touchpad until it can read
+ACPI's AML, and Snapdragon's I²C controller (Qualcomm GENI) has no driver yet.
+Settings › Devices counts the I²C devices ACPI lists. Until then, a USB mouse or
+the keyboard works:
 - the Hydatek key opens the start menu;
 - Gen+Space opens the launcher;
 - ↑/↓ move through Settings.
-
-Whether a Snapdragon laptop's firmware exposes its touchpad hasn't been tried
-on real hardware yet. A native USB / I²C HID driver (milestone 2) removes the
-question.
 
 ## How it's built
 

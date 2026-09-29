@@ -84,14 +84,18 @@ impl Strength {
         }
     }
 
-    /// Scale an amplitude (1-255) for this strength.
-    fn scale(self, amp: u8) -> u8 {
-        let pct: u32 = match self {
+    /// How strong, in percent.
+    pub fn percent(self) -> u32 {
+        match self {
             Strength::Light => 45,
             Strength::Medium => 75,
             Strength::Strong => 100,
-        };
-        (amp as u32 * pct / 100).clamp(1, 255) as u8
+        }
+    }
+
+    /// Scale an amplitude (1-255) for this strength.
+    fn scale(self, amp: u8) -> u8 {
+        (amp as u32 * self.percent() / 100).clamp(1, 255) as u8
     }
 }
 
@@ -124,6 +128,19 @@ pub fn pattern(h: Haptic, s: Strength) -> Vec<Pulse> {
         Haptic::LongPress => &[p(60, 210, 0)],
     };
     base.iter().map(|q| Pulse { amp: s.scale(q.amp), ..*q }).collect()
+}
+
+/// A haptic touchpad plays waveforms rather than pulses: the HID waveform
+/// (hid.rs WAVE_*), how many more times to play it, and how far apart (ms).
+pub fn waveform(h: Haptic) -> (u16, u32, u32) {
+    match h {
+        Haptic::Tap | Haptic::Tick => (crate::hid::WAVE_CLICK, 0, 0),
+        Haptic::Click => (crate::hid::WAVE_PRESS, 0, 0),
+        Haptic::Success => (crate::hid::WAVE_CLICK, 1, 80),
+        Haptic::Warning => (crate::hid::WAVE_BUZZ, 1, 120),
+        Haptic::Error => (crate::hid::WAVE_BUZZ, 2, 90),
+        Haptic::LongPress => (crate::hid::WAVE_RUMBLE, 0, 0),
+    }
 }
 
 /// How long a pattern lasts (ms).
@@ -174,6 +191,8 @@ pub struct Haptics {
     pub phone: bool,
     /// patterns asked for since the outputs last took them
     pub pending: Vec<Vec<Pulse>>,
+    /// the same, for HydatekOS's own drivers (haptic touchpads, pad motors)
+    pub device: Vec<(Haptic, Vec<Pulse>)>,
     /// the latest feedback and when it was asked for (ms)
     pub last: Option<(Haptic, u64)>,
     /// how many have been asked for (Settings shows it)
@@ -182,7 +201,7 @@ pub struct Haptics {
 
 impl Default for Haptics {
     fn default() -> Haptics {
-        Haptics { on: true, strength: Strength::Medium, phone: false, pending: Vec::new(), last: None, count: 0 }
+        Haptics { on: true, strength: Strength::Medium, phone: false, pending: Vec::new(), device: Vec::new(), last: None, count: 0 }
     }
 }
 
@@ -204,6 +223,9 @@ impl Haptics {
         self.count = self.count.wrapping_add(1);
         if self.pending.len() < 8 {
             self.pending.push(pattern(h, self.strength));
+        }
+        if self.device.len() < 8 {
+            self.device.push((h, pattern(h, self.strength)));
         }
     }
 }

@@ -1,0 +1,690 @@
+//! HydatekOS's USB HID driver.
+//!
+//! The firmware runs the USB host controller (xHCI/EHCI) and enumerates
+//! devices; it gives each interface an EFI USB I/O protocol. HydatekOS takes
+//! every HID interface no firmware driver has claimed (mice and tablets on ARM
+//! machines, touchpads, touch screens, media keys, haptic touchpads) and
+//! drives it itself:
+//! - reads its HID report descriptor and works out what it is (hid.rs);
+//! - switches boot-protocol devices to report protocol and turns off idle
+//!   repeats;
+//! - listens on its interrupt endpoint with asynchronous transfers, which the
+//!   firmware completes in the background into a ring per device;
+//! - turns reports into pointer movement, clicks, scrolling, touchpad
+//!   gestures (touchpad.rs) and media keys;
+//! - drives game controllers: HID gamepads, and Xbox 360 / Xbox One pads
+//!   (Microsoft's own protocols, which no firmware driver takes); the D-pad,
+//!   stick and buttons navigate the desktop (gamepad.rs);
+//! - plays haptic feedback directly on the hardware: waveforms on haptic
+//!   touchpads (SET_REPORT output reports), and the rumble motors of Xbox,
+//!   DualShock 4 and DualSense controllers (interrupt OUT packets).
+//!
+//! Keyboards stay with the firmware's keyboard driver, which HydatekOS
+//! already reads through the text input protocol.
+
+use crate::efi::{self, Guid, Handle, Status};
+use crate::gamepad::{self, Motor, Nav, Navigator, Rumble};
+use crate::haptics::{Haptic, Pulse};
+use crate::hid::{self, Consumer, Descriptor, HapticController, Mouse, Touchpad};
+use crate::touchpad::{Gesture, Gestures};
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+const USB_IO_GUID: Guid = Guid(0x2B2F68D6, 0x0CD2, 0x44CF, [0x8E, 0x8B, 0xBB, 0xA2, 0x0B, 0x1B, 0x5B, 0x75]);
+const TEXT_INPUT_GUID: Guid = Guid(0x387477C1, 0x69C7, 0x11D2, [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B]);
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default)]
+struct DeviceRequest {
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default)]
+pub struct DeviceDescriptor {
+    pub length: u8,
+    pub kind: u8,
+    pub usb: u16,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+    pub max_packet0: u8,
+    pub vendor: u16,
+    pub product: u16,
+    pub release: u16,
+    pub i_maker: u8,
+    pub i_product: u8,
+    pub i_serial: u8,
+    pub configs: u8,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default)]
+struct InterfaceDescriptor {
+    length: u8,
+    kind: u8,
+    number: u8,
+    alternate: u8,
+    endpoints: u8,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+    i_name: u8,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default)]
+struct EndpointDescriptor {
+    length: u8,
+    kind: u8,
+    address: u8,
+    attributes: u8,
+    max_packet: u16,
+    interval: u8,
+}
+
+type AsyncCallback = extern "efiapi" fn(*mut c_void, usize, *mut c_void, u32) -> Status;
+
+#[repr(C)]
+struct UsbIo {
+    control: extern "efiapi" fn(*mut UsbIo, *mut DeviceRequest, u32, u32, *mut c_void, usize, *mut u32) -> Status,
+    bulk: usize,
+    async_interrupt: extern "efiapi" fn(*mut UsbIo, u8, bool, usize, usize, Option<AsyncCallback>, *mut c_void) -> Status,
+    sync_interrupt: extern "efiapi" fn(*mut UsbIo, u8, *mut c_void, *mut usize, usize, *mut u32) -> Status,
+    isochronous: usize,
+    async_isochronous: usize,
+    get_device_descriptor: extern "efiapi" fn(*mut UsbIo, *mut DeviceDescriptor) -> Status,
+    get_config_descriptor: usize,
+    get_interface_descriptor: extern "efiapi" fn(*mut UsbIo, *mut InterfaceDescriptor) -> Status,
+    get_endpoint_descriptor: extern "efiapi" fn(*mut UsbIo, u8, *mut EndpointDescriptor) -> Status,
+    get_string_descriptor: extern "efiapi" fn(*mut UsbIo, u16, u8, *mut *mut u16) -> Status,
+    get_supported_languages: usize,
+    port_reset: usize,
+}
+
+const DATA_IN: u32 = 0;
+const DATA_OUT: u32 = 1;
+const NO_DATA: u32 = 2;
+
+// ---- the report ring the firmware fills -----------------------------------------------
+
+const SLOTS: usize = 32;
+const REPORT: usize = 64;
+
+/// Reports from one endpoint: the firmware's completion callback writes,
+/// the input loop reads (single producer, single consumer).
+struct Pipe {
+    buf: UnsafeCell<[[u8; REPORT]; SLOTS]>,
+    len: UnsafeCell<[u8; SLOTS]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+}
+
+unsafe impl Sync for Pipe {}
+
+extern "efiapi" fn on_report(data: *mut c_void, len: usize, ctx: *mut c_void, status: u32) -> Status {
+    if status == 0 && len > 0 && !data.is_null() && !ctx.is_null() {
+        let p = unsafe { &*(ctx as *const Pipe) };
+        let (h, t) = (p.head.load(Ordering::Acquire), p.tail.load(Ordering::Acquire));
+        if h.wrapping_sub(t) < SLOTS {
+            let n = len.min(REPORT);
+            unsafe {
+                let slot = &mut (*p.buf.get())[h % SLOTS];
+                core::ptr::copy_nonoverlapping(data as *const u8, slot.as_mut_ptr(), n);
+                (*p.len.get())[h % SLOTS] = n as u8;
+            }
+            p.head.store(h.wrapping_add(1), Ordering::Release);
+        }
+    }
+    efi::SUCCESS
+}
+
+impl Pipe {
+    fn take(&self) -> Option<Vec<u8>> {
+        let (h, t) = (self.head.load(Ordering::Acquire), self.tail.load(Ordering::Acquire));
+        if h == t {
+            return None;
+        }
+        let r = unsafe {
+            let n = (&*self.len.get())[t % SLOTS] as usize;
+            (&*self.buf.get())[t % SLOTS][..n].to_vec()
+        };
+        self.tail.store(t.wrapping_add(1), Ordering::Release);
+        Some(r)
+    }
+}
+
+// ---- devices ------------------------------------------------------------------------
+
+/// A USB device as Settings › Devices lists it.
+#[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub name: String,
+    /// what it is: "Mouse", "Touchpad", "Keyboard", "Storage"…
+    pub kind: String,
+    pub ids: String,
+    /// who drives it
+    pub driver: &'static str,
+}
+
+struct Dev {
+    handle: Handle,
+    io: *mut UsbIo,
+    iface: u16,
+    desc: Descriptor,
+    mouse: Option<Mouse>,
+    pad: Option<(Touchpad, Gestures)>,
+    consumer: Option<(Consumer, Vec<u16>)>,
+    haptic: Option<HapticController>,
+    /// a game controller: how its reports read, and what it means
+    pad_kind: Option<PadKind>,
+    nav: Navigator,
+    /// its rumble motors, and the OUT endpoint that reaches them
+    rumble: Option<Rumble>,
+    motor: Motor,
+    out_ep: Option<u8>,
+    seq: u8,
+    pipe: &'static Pipe,
+    buttons: u32,
+}
+
+enum PadKind {
+    Hid(hid::Gamepad, bool),
+    Xbox360,
+    XboxOne,
+}
+
+/// What the input loop gets from USB devices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// movement (device counts)
+    Move(i32, i32),
+    /// a position, 0..=32767 on each axis (tablets, virtual machines)
+    Place(i32, i32),
+    /// buttons held: bit 0 left, 1 right, 2 middle
+    Buttons(u32),
+    Scroll(i32),
+    /// a consumer (media) key pressed: its usage
+    Media(u16),
+    /// a game controller's D-pad, stick or button
+    Nav(Nav),
+}
+
+pub struct UsbHid {
+    devs: Vec<Dev>,
+    /// every USB interface seen, for Settings
+    pub info: Vec<DeviceInfo>,
+    /// counts up whenever `info` changes
+    pub generation: u32,
+    seen: Vec<Handle>,
+    polls: u64,
+}
+
+fn string(io: *mut UsbIo, idx: u8) -> String {
+    if idx == 0 {
+        return String::new();
+    }
+    let mut p: *mut u16 = core::ptr::null_mut();
+    if unsafe { ((*io).get_string_descriptor)(io, 0x0409, idx, &mut p) } != efi::SUCCESS || p.is_null() {
+        return String::new();
+    }
+    let mut v = Vec::new();
+    unsafe {
+        let mut k = 0;
+        while *p.add(k) != 0 && k < 128 {
+            v.push(*p.add(k));
+            k += 1;
+        }
+        (efi::bs().free_pool)(p as *mut u8);
+    }
+    String::from_utf16_lossy(&v).trim().into()
+}
+
+fn control(io: *mut UsbIo, rt: u8, req: u8, value: u16, index: u16, dir: u32, data: &mut [u8]) -> bool {
+    let mut r = DeviceRequest { request_type: rt, request: req, value, index, length: data.len() as u16 };
+    let mut status = 0u32;
+    let ptr = if data.is_empty() { core::ptr::null_mut() } else { data.as_mut_ptr() as *mut c_void };
+    unsafe { ((*io).control)(io, &mut r, dir, 500, ptr, data.len(), &mut status) == efi::SUCCESS }
+}
+
+/// The HID report descriptor's length, from the configuration descriptor.
+fn report_descriptor_len(io: *mut UsbIo, iface: u8) -> usize {
+    let mut head = [0u8; 9];
+    if !control(io, 0x80, 6, 0x0200, 0, DATA_IN, &mut head) {
+        return 0;
+    }
+    let total = (u16::from_le_bytes([head[2], head[3]]) as usize).clamp(9, 4096);
+    let mut all = alloc::vec![0u8; total];
+    if !control(io, 0x80, 6, 0x0200, 0, DATA_IN, &mut all) {
+        return 0;
+    }
+    // walk the descriptors: our interface, then its HID descriptor (0x21)
+    let (mut i, mut ours) = (0, false);
+    while i + 2 <= all.len() {
+        let (len, kind) = (all[i] as usize, all[i + 1]);
+        if len < 2 {
+            break;
+        }
+        if kind == 4 && i + 3 <= all.len() {
+            ours = all[i + 2] == iface;
+        } else if kind == 0x21 && ours && i + 9 <= all.len() {
+            return u16::from_le_bytes([all[i + 7], all[i + 8]]) as usize;
+        }
+        i += len;
+    }
+    0
+}
+
+/// The USB class of an interface, in words.
+pub fn class_name(class: u8, subclass: u8, protocol: u8) -> &'static str {
+    match (class, subclass, protocol) {
+        (1, _, _) => "Audio",
+        (2, _, _) | (0x0A, _, _) => "Modem / network",
+        (3, 1, 1) => "Keyboard",
+        (3, 1, 2) => "Mouse",
+        (3, _, _) => "HID device",
+        (6, _, _) => "Camera / scanner (still image)",
+        (7, _, _) => "Printer",
+        (8, _, _) => "Storage",
+        (9, _, _) => "Hub",
+        (0x0B, _, _) => "Smart card reader",
+        (0x0E, _, _) => "Camera",
+        (0xE0, 1, 1) => "Bluetooth adapter",
+        (0xE0, _, _) => "Wireless adapter",
+        (0xEF, 2, 1) => "Composite device",
+        (0xFF, _, _) => "Vendor-specific device",
+        _ => "USB device",
+    }
+}
+
+impl UsbHid {
+    pub fn new() -> UsbHid {
+        let mut u = UsbHid { devs: Vec::new(), info: Vec::new(), generation: 1, seen: Vec::new(), polls: 0 };
+        u.scan();
+        u
+    }
+
+    /// Take any new USB interfaces (called at start-up and every few seconds:
+    /// devices come and go).
+    fn scan(&mut self) {
+        let handles = efi::handles(&USB_IO_GUID);
+        // forget devices that went away
+        self.devs.retain(|d| handles.contains(&d.handle));
+        let gone: Vec<Handle> = self.seen.iter().filter(|h| !handles.contains(h)).copied().collect();
+        if !gone.is_empty() {
+            self.seen.retain(|h| handles.contains(h));
+        }
+        let mut changed = !gone.is_empty();
+        for h in handles {
+            if self.seen.contains(&h) {
+                continue;
+            }
+            self.seen.push(h);
+            changed = true;
+            let Some(io) = efi::handle_protocol::<UsbIo>(h, &USB_IO_GUID) else { continue };
+            if let Some(d) = self.attach(h, io) {
+                self.devs.push(d);
+            }
+        }
+        if changed {
+            self.inventory();
+        }
+    }
+
+    /// Everything plugged in, for Settings › Devices.
+    fn inventory(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.info.clear();
+        for &h in &self.seen {
+            let Some(io) = efi::handle_protocol::<UsbIo>(h, &USB_IO_GUID) else { continue };
+            let (mut dd, mut id) = (DeviceDescriptor::default(), InterfaceDescriptor::default());
+            unsafe {
+                ((*io).get_device_descriptor)(io, &mut dd);
+                ((*io).get_interface_descriptor)(io, &mut id);
+            }
+            let product = string(io, dd.i_product);
+            let maker = string(io, dd.i_maker);
+            let ours = self.devs.iter().find(|d| d.handle == h);
+            let kind = match ours {
+                Some(d) => String::from(hid::describe(&d.desc)),
+                None => String::from(class_name(id.class, id.subclass, id.protocol)),
+            };
+            let driver = if ours.is_some() {
+                "HydatekOS USB HID"
+            } else if efi::handle_protocol::<c_void>(h, &TEXT_INPUT_GUID).is_some()
+                || efi::handle_protocol::<c_void>(h, &efi::SIMPLE_POINTER_GUID).is_some()
+                || efi::handle_protocol::<c_void>(h, &efi::ABSOLUTE_POINTER_GUID).is_some()
+                || efi::handle_protocol::<c_void>(h, &efi::SIMPLE_FS_GUID).is_some()
+                || id.class == 9
+            {
+                "Firmware"
+            } else {
+                "No driver yet"
+            };
+            let name = match (maker.is_empty(), product.is_empty()) {
+                (_, false) if !maker.is_empty() && !product.starts_with(&maker) => format!("{} {}", maker, product),
+                (_, false) => product,
+                (false, true) => maker,
+                _ => kind.clone(),
+            };
+            let (v, p) = (dd.vendor, dd.product);
+            self.info.push(DeviceInfo { name, kind, ids: format!("{:04x}:{:04x}", v, p), driver });
+        }
+    }
+
+    /// Start driving a HID interface, if it's one HydatekOS takes.
+    fn attach(&self, h: Handle, io: *mut UsbIo) -> Option<Dev> {
+        let mut id = InterfaceDescriptor::default();
+        if unsafe { ((*io).get_interface_descriptor)(io, &mut id) } != efi::SUCCESS {
+            return None;
+        }
+        let mut dd = DeviceDescriptor::default();
+        unsafe { ((*io).get_device_descriptor)(io, &mut dd) };
+        let (vendor, product) = (dd.vendor, dd.product);
+        let iface = id.number as u16;
+        // Xbox controllers: vendor class, Microsoft's protocols
+        let xbox = match (id.class, id.subclass, id.protocol) {
+            (0xFF, 0x5D, 0x01) => Some(PadKind::Xbox360),
+            (0xFF, 0x47, 0xD0) => Some(PadKind::XboxOne),
+            _ => None,
+        };
+        if id.class != 3 && xbox.is_none() {
+            return None;
+        }
+        // the firmware's keyboard and pointer drivers keep what they claimed
+        if efi::handle_protocol::<c_void>(h, &TEXT_INPUT_GUID).is_some()
+            || efi::handle_protocol::<c_void>(h, &efi::SIMPLE_POINTER_GUID).is_some()
+            || efi::handle_protocol::<c_void>(h, &efi::ABSOLUTE_POINTER_GUID).is_some()
+        {
+            return None;
+        }
+        // boot keyboards too, if the firmware hasn't bound them yet
+        if id.class == 3 && id.subclass == 1 && id.protocol == 1 {
+            return None;
+        }
+        // the endpoints: interrupt IN for reports, interrupt OUT for motors
+        let (mut ep_in, mut ep_out) = (None, None);
+        for i in 0..id.endpoints {
+            let mut e = EndpointDescriptor::default();
+            if unsafe { ((*io).get_endpoint_descriptor)(io, i, &mut e) } == efi::SUCCESS && e.attributes & 3 == 3 {
+                if e.address & 0x80 != 0 {
+                    ep_in = ep_in.or(Some(e));
+                } else {
+                    ep_out = ep_out.or(Some(e.address));
+                }
+            }
+        }
+        let ep = ep_in?;
+        let mut dev = Dev {
+            handle: h,
+            io,
+            iface,
+            desc: Descriptor::parse(&[]),
+            mouse: None,
+            pad: None,
+            consumer: None,
+            haptic: None,
+            pad_kind: None,
+            nav: Navigator::new(),
+            rumble: None,
+            motor: Motor::default(),
+            out_ep: ep_out,
+            seq: 0,
+            pipe: Box::leak(Box::new(Pipe { buf: UnsafeCell::new([[0; REPORT]; SLOTS]), len: UnsafeCell::new([0; SLOTS]), head: AtomicUsize::new(0), tail: AtomicUsize::new(0) })),
+            buttons: 0,
+        };
+        let what: &str;
+        if let Some(k) = xbox {
+            dev.rumble = Some(if matches!(k, PadKind::Xbox360) { Rumble::Xbox360 } else { Rumble::XboxOne });
+            dev.pad_kind = Some(k);
+            what = if dev.rumble == Some(Rumble::Xbox360) { "Xbox 360 controller" } else { "Xbox controller" };
+        } else {
+            let len = match report_descriptor_len(io, id.number) {
+                0 => 512,
+                n => n.min(4096),
+            };
+            let mut rd = alloc::vec![0u8; len];
+            if !control(io, 0x81, 6, 0x2200, iface, DATA_IN, &mut rd) {
+                return None;
+            }
+            let desc = Descriptor::parse(&rd);
+            dev.mouse = Mouse::find(&desc);
+            dev.pad = Touchpad::find(&desc).map(|t| (t, Gestures::new()));
+            dev.consumer = Consumer::find(&desc).map(|c| (c, Vec::new()));
+            dev.haptic = HapticController::find(&desc);
+            let sony = vendor == 0x054C;
+            dev.pad_kind = hid::Gamepad::find(&desc).map(|g| PadKind::Hid(g, sony));
+            if sony {
+                dev.rumble = match product {
+                    0x05C4 | 0x09CC | 0x0BA0 => Some(Rumble::DualShock4),
+                    0x0CE6 | 0x0DF2 => Some(Rumble::DualSense),
+                    _ => None,
+                };
+            }
+            if dev.mouse.is_none() && dev.pad.is_none() && dev.consumer.is_none() && dev.haptic.is_none() && dev.pad_kind.is_none() {
+                log!("usb: HID interface {} ({}) not used", iface, hid::describe(&desc));
+                return None;
+            }
+            // report protocol (not the boot protocol), and no idle repeats
+            if id.subclass == 1 {
+                control(io, 0x21, 0x0B, 1, iface, NO_DATA, &mut []);
+            }
+            control(io, 0x21, 0x0A, 0, iface, NO_DATA, &mut []);
+            // a touchpad starts reporting fingers when told to (input mode 3)
+            if dev.pad.is_some() {
+                if let Some(f) = desc.fields.iter().find(|f| f.kind == hid::Kind::Feature && f.usage == hid::usage(hid::DIGITIZER, 0x52)) {
+                    let mut r = alloc::vec![0u8; desc.report_len(hid::Kind::Feature, f.report_id)];
+                    if desc.ids {
+                        r[0] = f.report_id;
+                    }
+                    hid::put(f, &mut r, desc.ids, 3);
+                    control(io, 0x21, 0x09, 0x0300 | f.report_id as u16, iface, DATA_OUT, &mut r);
+                }
+            }
+            // a haptic touchpad's waveforms
+            if let Some(hc) = dev.haptic.as_mut() {
+                if let Some(rid) = hc.list_report() {
+                    let mut r = alloc::vec![0u8; desc.report_len(hid::Kind::Feature, rid)];
+                    if control(io, 0xA1, 0x01, 0x0300 | rid as u16, iface, DATA_IN, &mut r) {
+                        hc.read_list(&r, desc.ids);
+                    }
+                }
+            }
+            what = hid::describe(&desc);
+            dev.desc = desc;
+        }
+        let size = (ep.max_packet & 0x7FF).clamp(1, REPORT as u16) as usize;
+        let st = unsafe { ((*io).async_interrupt)(io, ep.address, true, ep.interval.clamp(1, 32) as usize, size, Some(on_report), dev.pipe as *const Pipe as *mut c_void) };
+        if st != efi::SUCCESS {
+            log!("usb: interface {} wouldn't start ({:#x})", iface, st);
+            return None;
+        }
+        if dev.rumble == Some(Rumble::XboxOne) {
+            // it stays quiet until told to start
+            let mut m = gamepad::xbox_one_start(0);
+            dev.seq = 1;
+            dev.send(&mut m);
+        }
+        let extra = if dev.haptic.as_ref().map_or(false, |h| !h.waveforms.is_empty()) {
+            " with haptics"
+        } else if dev.rumble.is_some() {
+            " with rumble motors"
+        } else {
+            ""
+        };
+        log!("usb: driving {:04x}:{:04x} interface {} as {}{}", vendor, product, iface, what, extra);
+        Some(dev)
+    }
+
+    /// Read what the devices sent since last time, and run the motors.
+    /// `now` in ms.
+    pub fn poll(&mut self, now: u64, out: &mut Vec<Event>) {
+        self.polls += 1;
+        if self.polls % 200 == 0 {
+            self.scan();
+        }
+        for d in self.devs.iter_mut() {
+            while let Some(r) = d.pipe.take() {
+                d.report(&r, now, out);
+            }
+            if let Some(a) = d.motor.due(now) {
+                d.set_motors(a);
+            }
+        }
+    }
+
+    /// How many interfaces HydatekOS drives.
+    pub fn driven(&self) -> usize {
+        self.devs.len()
+    }
+
+    /// Haptic touchpads HydatekOS can play waveforms on.
+    pub fn haptic_pads(&self) -> usize {
+        self.devs.iter().filter(|d| d.haptic.as_ref().map_or(false, |h| !h.waveforms.is_empty())).count()
+    }
+
+    /// Controllers with rumble motors.
+    pub fn motors(&self) -> usize {
+        self.devs.iter().filter(|d| d.rumble.is_some()).count()
+    }
+
+    /// Play feedback on every haptic touchpad (as a waveform) and every
+    /// controller's motors (as pulses). `strength` 0-100.
+    pub fn feel(&mut self, h: Haptic, pulses: &[Pulse], strength: u32, now: u64) {
+        let (wave, repeat, period) = crate::haptics::waveform(h);
+        for d in self.devs.iter_mut() {
+            let r = d.haptic.as_ref().and_then(|hc| hc.play(&d.desc, wave, strength, repeat, period));
+            if let Some(mut r) = r {
+                let rid = hid::report_id(&r, d.desc.ids) as u16;
+                control(d.io, 0x21, 0x09, 0x0200 | rid, d.iface, DATA_OUT, &mut r);
+            }
+            if d.rumble.is_some() {
+                d.motor.play(pulses, now);
+                if let Some(a) = d.motor.due(now) {
+                    d.set_motors(a);
+                }
+            }
+        }
+    }
+}
+
+impl Dev {
+    /// Send a packet to the device: on its interrupt OUT endpoint, or as a
+    /// HID output report.
+    fn send(&mut self, data: &mut [u8]) -> bool {
+        if let Some(ep) = self.out_ep {
+            let (mut len, mut status) = (data.len(), 0u32);
+            let st = unsafe { ((*self.io).sync_interrupt)(self.io, ep, data.as_mut_ptr() as *mut c_void, &mut len, 100, &mut status) };
+            return st == efi::SUCCESS;
+        }
+        let rid = data.first().copied().unwrap_or(0) as u16;
+        control(self.io, 0x21, 0x09, 0x0200 | rid, self.iface, DATA_OUT, data)
+    }
+
+    fn set_motors(&mut self, amp: u8) {
+        let Some(kind) = self.rumble else { return };
+        let (strong, weak) = gamepad::split(amp);
+        let mut p = gamepad::rumble(kind, strong, weak, self.seq);
+        self.seq = self.seq.wrapping_add(1);
+        self.send(&mut p);
+    }
+
+    fn report(&mut self, r: &[u8], now: u64, out: &mut Vec<Event>) {
+        let ids = self.desc.ids;
+        // game controllers
+        let pad = match &self.pad_kind {
+            Some(PadKind::Xbox360) => gamepad::xbox360(r),
+            Some(PadKind::XboxOne) => {
+                if let Some(g) = gamepad::xbox_one_guide(r) {
+                    let b = if g { self.buttons | gamepad::GUIDE } else { self.buttons & !gamepad::GUIDE };
+                    Some(gamepad::Pad { buttons: b, ..Default::default() })
+                } else {
+                    gamepad::xbox_one(r)
+                }
+            }
+            Some(PadKind::Hid(g, sony)) => g.read(r, ids).map(|p| gamepad::from_hid(&p, *sony)),
+            None => None,
+        };
+        if let Some(p) = pad {
+            self.buttons = p.buttons;
+            for n in self.nav.feed(&p, now) {
+                out.push(Event::Nav(n));
+            }
+            return;
+        }
+        if let Some((rep, abs)) = self.mouse.as_ref().and_then(|m| m.read(r, ids).map(|x| (x, m.absolute))) {
+            if abs {
+                out.push(Event::Place(rep.x, rep.y));
+            } else if rep.x != 0 || rep.y != 0 {
+                out.push(Event::Move(rep.x, rep.y));
+            }
+            if rep.buttons != self.buttons {
+                self.buttons = rep.buttons;
+                out.push(Event::Buttons(rep.buttons));
+            }
+            if rep.wheel != 0 {
+                // wheel up is positive in HID, "scroll up" to HydatekOS is negative
+                out.push(Event::Scroll(-rep.wheel));
+            }
+            return;
+        }
+        if let Some((t, g)) = self.pad.as_mut() {
+            if let Some(rep) = t.read(r, ids) {
+                if t.app == hid::APP_TOUCHSCREEN {
+                    // a touch screen points where it's touched
+                    let first = rep.contacts.iter().find(|c| c.tip);
+                    if let Some(c) = first {
+                        let sx = (c.x as i64 * 32767 / t.max_x.max(1) as i64) as i32;
+                        let sy = (c.y as i64 * 32767 / t.max_y.max(1) as i64) as i32;
+                        out.push(Event::Place(sx, sy));
+                    }
+                    let b = first.is_some() as u32;
+                    if b != self.buttons {
+                        self.buttons = b;
+                        out.push(Event::Buttons(b));
+                    }
+                    return;
+                }
+                for gst in g.feed(&rep, t.max_x, now) {
+                    match gst {
+                        Gesture::Move(x, y) => out.push(Event::Move(x, y)),
+                        Gesture::Scroll(n) => out.push(Event::Scroll(n)),
+                        Gesture::ScrollX(_) => {}
+                        Gesture::Press(b) => {
+                            self.buttons |= 1 << b;
+                            out.push(Event::Buttons(self.buttons));
+                        }
+                        Gesture::Release(b) => {
+                            self.buttons &= !(1 << b);
+                            out.push(Event::Buttons(self.buttons));
+                        }
+                        Gesture::Click(b) => {
+                            out.push(Event::Buttons(self.buttons | 1 << b));
+                            out.push(Event::Buttons(self.buttons));
+                        }
+                    }
+                }
+                return;
+            }
+        }
+        if let Some((c, held)) = self.consumer.as_mut() {
+            if let Some(now_held) = c.read(r, ids) {
+                for k in &now_held {
+                    if !held.contains(k) {
+                        out.push(Event::Media(*k));
+                    }
+                }
+                *held = now_held;
+            }
+        }
+    }
+}

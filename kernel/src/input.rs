@@ -1,8 +1,10 @@
 //! Keyboard and pointer input.
 //!
-//! Milestone 1 reads devices through the firmware's input protocols, which
-//! means USB/PS2 keyboards, mice, touchpads and tablets all work on real
-//! hardware without HydatekOS drivers. Native drivers come in milestone 2.
+//! Keyboards and the pointers the firmware drives come through its input
+//! protocols. HydatekOS drives the rest itself: a PS/2 mouse (ps2.rs) and
+//! every USB HID device the firmware leaves alone (usb.rs): mice and tablets
+//! on ARM machines, multitouch touchpads with gestures, touch screens, media
+//! keys and haptic touchpads.
 
 use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTextInputEx};
 use crate::ui::{Key, Media};
@@ -145,6 +147,9 @@ pub struct Input {
     /// in (firmware that only reports strokes)
     polls: u64,
     lone: Option<u64>,
+    /// HydatekOS's own USB HID driver
+    pub usb: crate::usb::UsbHid,
+    usb_evs: Vec<crate::usb::Event>,
 }
 
 impl Input {
@@ -182,7 +187,8 @@ impl Input {
                 ptrs.push(Ptr::Ps2(m));
             }
         }
-        log!("pointers: {} (firmware abs {}, simple {})", ptrs.len(), abs, simple);
+        let usb = crate::usb::UsbHid::new();
+        log!("pointers: {} (firmware abs {}, simple {}), USB HID devices driven by HydatekOS: {}", ptrs.len(), abs, simple, usb.driven());
         let kbd_ex = efi::handle_protocol::<SimpleTextInputEx>(st.console_in_handle, &efi::TEXT_INPUT_EX_GUID);
         if let Some(k) = kbd_ex {
             // ask for strokes of modifiers alone (the Hydatek key tapped on its
@@ -194,11 +200,11 @@ impl Input {
             let st = unsafe { ((*k).set_state)(k, &mut t) };
             log!("input: partial keys {}", if st == efi::SUCCESS { "reported" } else { "not supported" });
         }
-        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None }
+        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None, usb, usb_evs: Vec::new() }
     }
 
     pub fn pointer_count(&self) -> usize {
-        self.ptrs.len()
+        self.ptrs.len() + self.usb.driven()
     }
 
     pub fn poll(&mut self, speed: i32, out: &mut Vec<Ev>) {
@@ -269,6 +275,94 @@ impl Input {
                 }
             }
         }
+        // HydatekOS's own USB devices
+        let mut evs = core::mem::take(&mut self.usb_evs);
+        self.usb.poll(crate::arch::ms(), &mut evs);
+        let mut media = Vec::new();
+        let mut keys = Vec::new();
+        for e in evs.drain(..) {
+            use crate::usb::Event as U;
+            match e {
+                U::Move(dx, dy) => {
+                    let k = speed.clamp(1, 9);
+                    self.acc.0 += dx * k * 64 / 3;
+                    self.acc.1 += dy * k * 64 / 3;
+                    let (px, py) = (self.acc.0 / 64, self.acc.1 / 64);
+                    self.acc.0 -= px * 64;
+                    self.acc.1 -= py * 64;
+                    if px != 0 || py != 0 {
+                        self.x = (self.x + px).clamp(0, self.w - 1);
+                        self.y = (self.y + py).clamp(0, self.h - 1);
+                        moved = true;
+                    }
+                }
+                U::Place(ax, ay) => {
+                    let nx = (ax as i64 * self.w as i64 / 32768) as i32;
+                    let ny = (ay as i64 * self.h as i64 / 32768) as i32;
+                    let (nx, ny) = (nx.clamp(0, self.w - 1), ny.clamp(0, self.h - 1));
+                    if nx != self.x || ny != self.y {
+                        self.x = nx;
+                        self.y = ny;
+                        moved = true;
+                    }
+                }
+                U::Buttons(b) => {
+                    // each change goes out as it happened (a tap's press and
+                    // release can arrive in the same poll)
+                    let (l, r) = (b & 1 != 0, b & 2 != 0);
+                    if moved && (l != left || r != right) {
+                        out.push(Ev::Move);
+                        moved = false;
+                    }
+                    if l != left {
+                        left = l;
+                        self.left = l;
+                        out.push(if l { Ev::Down } else { Ev::Up });
+                    }
+                    if r != right {
+                        right = r;
+                        self.right = r;
+                        if r {
+                            out.push(Ev::RightDown);
+                        }
+                    }
+                }
+                U::Scroll(n) => self.scroll_acc += n,
+                U::Nav(n) => {
+                    use crate::gamepad::Nav as N;
+                    keys.push(match n {
+                        N::Up => Ev::Key(Key::Up, false),
+                        N::Down => Ev::Key(Key::Down, false),
+                        N::Left => Ev::Key(Key::Left, false),
+                        N::Right => Ev::Key(Key::Right, false),
+                        N::Accept => Ev::Key(Key::Enter, false),
+                        N::Back => Ev::Key(Key::Esc, false),
+                        N::Next | N::Prev => Ev::Key(Key::Tab, false),
+                        N::Menu => Ev::HydatekTap,
+                    });
+                }
+                U::Media(u) => {
+                    let m = match u {
+                        0xE2 => Some(Media::Mute),
+                        0xE9 => Some(Media::VolumeUp),
+                        0xEA => Some(Media::VolumeDown),
+                        0x6F => Some(Media::BrightnessUp),
+                        0x70 => Some(Media::BrightnessDown),
+                        0x32 | 0x34 => Some(Media::Sleep),
+                        0xB8 => Some(Media::Eject),
+                        _ => None,
+                    };
+                    if let Some(m) = m {
+                        media.push(m);
+                    }
+                }
+            }
+        }
+        self.usb_evs = evs;
+        for m in media {
+            out.push(Ev::Key(Key::Media(m), false));
+        }
+        out.extend(keys);
         if moved {
             out.push(Ev::Move);
         }
