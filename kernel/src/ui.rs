@@ -52,6 +52,10 @@ pub struct Zone {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
     Char(char),
+    /// Ctrl+letter while Ctrl isn't the Gen key (lower case)
+    Ctrl(char),
+    /// Aux+key that types no special character (lower case)
+    Aux(char),
     Enter,
     Backspace,
     Delete,

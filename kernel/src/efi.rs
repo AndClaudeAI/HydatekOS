@@ -178,6 +178,11 @@ pub const RIGHT_SHIFT: u32 = 0x1;
 pub const LEFT_SHIFT: u32 = 0x2;
 pub const RIGHT_CONTROL: u32 = 0x4;
 pub const LEFT_CONTROL: u32 = 0x8;
+pub const RIGHT_ALT: u32 = 0x10;
+pub const LEFT_ALT: u32 = 0x20;
+/// the Windows (⊞) key, or Command (⌘) on an Apple keyboard
+pub const RIGHT_LOGO: u32 = 0x40;
+pub const LEFT_LOGO: u32 = 0x80;
 
 #[repr(C)]
 pub struct GopModeInfo {

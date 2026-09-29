@@ -320,7 +320,7 @@ impl App for Notes {
         ui.icon_button(Rect::new(bx, r.y + 8, 28, 28), Icon::Trash, Action::App(inst, C_DELETE), 16);
         ui.icon_button(Rect::new(bx + 34, r.y + 8, 28, 28), Icon::Save, Action::App(inst, C_SAVE), 16);
         let words = self.edit.text.split_whitespace().count();
-        let status = format!("{} words · {} · Ctrl+S to save", words, if self.dirty { "edited" } else { "saved" });
+        let status = format!("{} words · {} · Gen+S to save", words, if self.dirty { "edited" } else { "saved" });
         ui.text(main.x + 22, r.b() - 12, Face::Regular, 12, &status, t.text3);
         let ed = Rect::new(main.x + 22, r.y + HEADER + 16, main.w - 44, r.h - HEADER - 46);
         self.edit.render(ui, ed, true, Action::App(inst, C_EDIT));
@@ -373,11 +373,13 @@ impl App for Notes {
         }
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
-        if ctrl && matches!(k, Key::Char('s') | Key::Char('S')) {
-            return self.action(C_SAVE, false, sys);
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
+        match k {
+            Key::Char('s') if gen => return self.action(C_SAVE, false, sys),
+            Key::Char('n') if gen => return self.action(C_NEW, false, sys),
+            _ => {}
         }
-        if ctrl {
+        if gen {
             return;
         }
         if self.edit.key(k) {
@@ -401,7 +403,7 @@ impl App for Notes {
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
-            0 => vec![("New Note", C_NEW), ("Save", C_SAVE), ("Move to Bin", C_DELETE)],
+            0 => vec![("New Note\tGen+N", C_NEW), ("Save\tGen+S", C_SAVE), ("Move to Bin", C_DELETE)],
             _ => vec![],
         }
     }

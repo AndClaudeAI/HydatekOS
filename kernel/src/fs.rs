@@ -101,19 +101,19 @@ impl Vfs {
 The **word processor** of *Hyda Workspace*, written from scratch for HydatekOS. Documents are saved in its own format, **.hyds**.\n\
 ## Try it\n\
 - Pick a paragraph style from the menu at the left of the toolbar\n\
-- Select text and press **B**, *I*, U or ~~S~~ (or Ctrl+B, Ctrl+I, Ctrl+U)\n\
+- Select text and press **B**, *I*, U or ~~S~~ (or Gen+B, Gen+I, Gen+U)\n\
 - Centre or right-align paragraphs, and make bulleted or numbered lists\n\
 ## Sharing\n\
 1. File › Export makes a Word (.docx), text or Markdown copy to send to others\n\
 2. Word, text and Markdown files open here too; saving one creates a .hyds copy and leaves the original as it was\n\
 ## Keyboard\n\
-- Ctrl+S saves, Ctrl+O opens, Ctrl+N starts a new document\n\
-- Ctrl+Z undoes and Ctrl+Y redoes; Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste\n\
+- Gen+S saves, Gen+O opens, Gen+N starts a new document\n\
+- Gen+Z undoes and Gen+Y redoes; Gen+X, Gen+C and Gen+V cut, copy and paste\n\
 > Tip: click the document name at the top to rename it.\n";
         if self.get("/home").is_some() {
             return;
         }
-        let welcome = b"Welcome to HydatekOS!\n\nThis is Notes. Everything you type here is saved to your\ndisk when you press Ctrl+S or click Save.\n\nTips\n- Click the grid button in the dock to see every app.\n- Drag windows by their title bar. Double-click to maximise.\n- Open Phone Link to pair HydatekOS Mobile.\n";
+        let welcome = b"Welcome to HydatekOS!\n\nThis is Notes. Everything you type here is saved to your\ndisk when you press Gen+S or click Save.\n\nTips\n- Click the grid button in the dock to see every app.\n- Drag windows by their title bar. Double-click to maximise.\n- Open Phone Link to pair HydatekOS Mobile.\n";
         let strategy = b"Hydatek Strategy 2026\n\n1. Ship HydatekOS milestone 1 (desktop + mobile shells).\n2. Own the stack: kernel, drivers, UI toolkit, apps.\n3. Phone Link: messages, notifications and files across devices.\n";
         let meeting = b"Meeting notes - 27 September\n\n- Review dock icons\n- Dark mode polish\n- Phone Link pairing flow\n";
         for d in ["/home", "/home/Documents", "/home/Pictures", "/home/Downloads", "/home/Shared", "/trash", "/system"] {

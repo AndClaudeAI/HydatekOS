@@ -57,6 +57,11 @@ Windows, macOS or Linux.
   and new people set up their own picture and PIN the first time they sign in.
   The lock screen shows everyone's picture to choose from, and inside HydatekOS
   nobody can reach anyone else's files. Details: [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+- **Gen and Aux keys:** HydatekOS's own modifiers. **Gen** is the shortcut key
+  (the ⊞ or ⌘ key, and Ctrl): Gen+S saves, Gen+Space opens an app, Gen+/ shows
+  every shortcut, and menus show each one. **Aux** (Alt, or ⌥ Option) types
+  special characters (Aux+N ₦, Aux+E €, Aux+- –) and switches windows with
+  Aux+Tab. Details: [docs/KEYBOARD.md](docs/KEYBOARD.md).
 - **Boot logo and lock screen:** after the PC maker's logo the screen goes black
   and the **Hydatek Systems** wordmark fades in, in white, with a thin progress bar
   while drivers, files and the network come up, then a fade into the lock screen (clock,
@@ -174,12 +179,15 @@ covers putting HydatekOS on the internal disk next to another OS.
 
 | Action | How |
 |---|---|
-| Open any app | Grid button in the dock, the search icon in the menu bar, or **F1** |
+| Open any app | Grid button in the dock, the search icon in the menu bar, **Gen+Space** or **F1** |
 | Move / maximise a window | Drag the header / double-click it |
 | Resize a window | Drag the bottom-right corner |
-| Close the front window | **Ctrl+W** or the orange button |
-| Save a note or document | **Ctrl+S** |
-| Bold / italic / underline in Hyda Scripts | **Ctrl+B** / **Ctrl+I** / **Ctrl+U** |
+| Close the front window | **Gen+W** or the orange button |
+| Switch windows | **Gen+Tab** or **Aux+Tab** |
+| See every shortcut | **Gen+/** |
+| Type ₦ € £ – … | **Aux+N**, **Aux+E**, **Aux+3**, **Aux+-**, **Aux+;** |
+| Save a note or document | **Gen+S** |
+| Bold / italic / underline in Hyda Scripts | **Gen+B** / **Gen+I** / **Gen+U** |
 | Rename / delete a file | **F2** / **Delete** (File menu has the same actions) |
 | Lock the screen | **F12**, the logo menu, or `lock` in Terminal |
 | Switch account / sign out | Lock the screen and choose another picture / profile menu › **Sign Out** |
@@ -221,7 +229,7 @@ tests-host/        host-side tests of kernel modules
 assets/branding/   the Hydatek Systems wordmark (source of the boot logo)
 assets/fonts/      source fonts (Figtree, Bodoni Moda, DejaVu Sans and Sans Mono) + licences
 tools/             image builder, QEMU runner, GPT writer, font generator, boot logo maker
-docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, accounts, roadmap
+docs/              architecture, install guide, Phone Link, Hyda Workspace, profile, accounts, keyboard, roadmap
 ```
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -4,6 +4,7 @@
 pub mod cursor;
 pub mod lock;
 pub mod mobile;
+pub mod keys;
 pub mod osk;
 pub mod setup;
 pub mod splash;
@@ -79,6 +80,7 @@ enum Cmd {
     Shutdown,
     Profile,
     SignOut,
+    Shortcuts,
     None,
 }
 
@@ -165,6 +167,8 @@ pub struct Shell {
     setup: Option<setup::Setup>,
     /// signed out: the next sign-in starts a fresh session
     signed_out: bool,
+    /// the keyboard shortcuts sheet is showing
+    sheet: bool,
 }
 
 impl Shell {
@@ -198,6 +202,7 @@ impl Shell {
             last_input: 0,
             setup: None,
             signed_out: false,
+            sheet: false,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -489,6 +494,11 @@ impl Shell {
                     self.sys.settings_page = Some(i);
                     self.open_app(AppKind::Settings);
                 }
+                Req::Shortcuts => {
+                    self.sheet = true;
+                    self.menu = None;
+                    self.launcher = None;
+                }
                 Req::Setup => {
                     self.setup = Some(setup::Setup::new(&self.sys));
                     self.menu = None;
@@ -598,9 +608,9 @@ impl Shell {
                     self.with_app(inst, |a, _| a.scroll(dz));
                 }
             }
-            Ev::Key(k, ctrl) => {
+            Ev::Key(k, gen) => {
                 self.dirty = true;
-                self.key(k, ctrl);
+                self.key(k, gen);
             }
         }
     }
@@ -719,6 +729,7 @@ impl Shell {
             Action::Lock(_) | Action::Setup(_) => {}
             Action::Background | Action::Swallow => {
                 self.launcher = None;
+                self.sheet = false;
             }
             Action::Launch(k) => {
                 self.launcher = None;
@@ -864,6 +875,7 @@ impl Shell {
             Cmd::Lock => self.lock_now(),
             Cmd::Profile => self.sys.reqs.push(Req::Settings(0)),
             Cmd::SignOut => self.sign_out(),
+            Cmd::Shortcuts => self.sheet = true,
             Cmd::None => {}
         }
     }
@@ -873,7 +885,18 @@ impl Shell {
         DESKTOP_APPS.iter().copied().filter(|k| k.name().to_lowercase().contains(&q)).collect()
     }
 
-    fn key(&mut self, k: Key, ctrl: bool) {
+    fn key(&mut self, k: Key, gen: bool) {
+        if self.sheet {
+            // any key closes the shortcuts
+            self.sheet = false;
+            return;
+        }
+        if gen && k == Key::Char('/') {
+            self.sheet = true;
+            self.menu = None;
+            self.launcher = None;
+            return;
+        }
         if let Some(q) = self.launcher.as_mut() {
             match k {
                 Key::Esc => self.launcher = None,
@@ -886,7 +909,8 @@ impl Shell {
                 Key::Backspace => {
                     q.pop();
                 }
-                Key::Char(c) if !c.is_control() && !ctrl => q.push(c),
+                Key::Char(' ') if gen => self.launcher = None,
+                Key::Char(c) if !c.is_control() && !gen => q.push(c),
                 _ => {}
             }
             return;
@@ -901,20 +925,46 @@ impl Shell {
             return self.lock_now();
         }
         if !self.mobile_mode() {
-            match (k, ctrl) {
-                (Key::Char('w'), true) => return self.run_cmd(Cmd::CloseWin),
-                (Key::F(1), _) => {
+            // window switching: the logo key or Aux (Ctrl+Tab stays with the
+            // app: some firmware sends Ctrl+I as Tab)
+            if k == Key::Tab && (crate::input::logo() || crate::input::aux()) {
+                return self.cycle_windows(crate::input::shift());
+            }
+            match (k, gen) {
+                (Key::Char('w'), true) | (Key::Char('q'), true) => return self.run_cmd(Cmd::CloseWin),
+                (Key::Char(' '), true) | (Key::F(1), _) => {
                     self.launcher = Some(String::new());
                     return;
                 }
+                (Key::Char(','), true) => return self.sys.reqs.push(Req::Settings(0)),
                 _ => {}
             }
         } else if k == Key::Esc && !self.local.app.as_ref().map_or(false, |a| a.fullscreen()) {
             return self.local.act(MobileAct::Home, &mut self.sys);
         }
         if let Some(inst) = self.focused_inst() {
-            self.with_app(inst, |a, sys| a.key(k, ctrl, sys));
+            self.with_app(inst, |a, sys| a.key(k, gen, sys));
         }
+    }
+
+    /// Bring the next window forward (Gen+Tab / Alt+Tab), or with `back` the
+    /// one before; minimised windows come back too.
+    fn cycle_windows(&mut self, back: bool) {
+        if self.wins.len() < 2 && self.wins.iter().all(|w| !w.min) {
+            return;
+        }
+        if back {
+            if let Some(w) = self.wins.pop() {
+                self.wins.insert(0, w);
+            }
+        } else {
+            let w = self.wins.remove(0);
+            self.wins.push(w);
+        }
+        if let Some(w) = self.wins.last_mut() {
+            w.min = false;
+        }
+        self.kfocus = KFocus::Top;
     }
 
     // ---- rendering ----------------------------------------------------------
@@ -1001,6 +1051,9 @@ impl Shell {
         }
         if self.menu.is_some() {
             self.draw_menu(&mut ui);
+        }
+        if self.sheet {
+            self.draw_sheet(&mut ui);
         }
         self.zones = core::mem::take(&mut ui.zones);
     }
@@ -1257,19 +1310,21 @@ impl Shell {
         match m {
             0 => {
                 items.push(("About HydatekOS".to_string(), Cmd::Open(AppKind::Settings)));
-                items.push(("App launcher".to_string(), Cmd::Launcher));
+                items.push(("Settings…\tGen+,".to_string(), Cmd::Profile));
+                items.push(("App launcher\tGen+Space".to_string(), Cmd::Launcher));
+                items.push(("Keyboard Shortcuts\tGen+/".to_string(), Cmd::Shortcuts));
                 items.push(("Terminal".to_string(), Cmd::Open(AppKind::Terminal)));
                 items.push(("Phone Link".to_string(), Cmd::Open(AppKind::PhoneLink)));
                 items.push(("-".to_string(), Cmd::None));
                 items.push(("Restart".to_string(), Cmd::Restart));
                 items.push(("Shut Down".to_string(), Cmd::Shutdown));
                 items.push(("-".to_string(), Cmd::None));
-                items.push(("Lock Screen   F12".to_string(), Cmd::Lock));
+                items.push(("Lock Screen\tF12".to_string(), Cmd::Lock));
             }
             1 => {
                 if focused.is_some() {
                     items.push(("Minimise Window".to_string(), Cmd::MinWin));
-                    items.push(("Close Window".to_string(), Cmd::CloseWin));
+                    items.push(("Close Window\tGen+W".to_string(), Cmd::CloseWin));
                 }
                 items.push(("New Notes Window".to_string(), Cmd::Open(AppKind::Notes)));
             }
@@ -1283,7 +1338,7 @@ impl Shell {
                 items.push((self.sys.profile.name.clone(), Cmd::None));
                 items.push(("-".to_string(), Cmd::None));
                 items.push(("Profile…".to_string(), Cmd::Profile));
-                items.push(("Lock Screen   F12".to_string(), Cmd::Lock));
+                items.push(("Lock Screen\tF12".to_string(), Cmd::Lock));
                 if self.sys.people.len() > 1 {
                     items.push(("-".to_string(), Cmd::None));
                     items.push(("Sign Out".to_string(), Cmd::SignOut));
@@ -1292,7 +1347,7 @@ impl Shell {
             3 => {
                 items.push((if self.sys.dark { "Light Mode" } else { "Dark Mode" }.to_string(), Cmd::Dark));
                 items.push(("Mobile Shell".to_string(), Cmd::MobileShell));
-                items.push(("All Apps".to_string(), Cmd::Launcher));
+                items.push(("All Apps\tGen+Space".to_string(), Cmd::Launcher));
             }
             _ => {
                 items.push(("Home Folder".to_string(), Cmd::GoHome));
@@ -1312,7 +1367,13 @@ impl Shell {
             }
             x -= 8;
         }
-        let w = 220;
+        // wide enough for the longest label and its shortcut
+        let mut w = 220;
+        for (label, _) in &items {
+            let (l, hint) = label.split_once('\t').unwrap_or((label.as_str(), ""));
+            let need = ui.tw(Face::Regular, 13, l) + if hint.is_empty() { 0 } else { ui.tw(Face::Regular, 12, hint) + 28 } + 44;
+            w = w.max(need.min(360));
+        }
         let head = if m == 5 { 26 } else { 0 };
         let h = items.iter().map(|i| if i.0 == "-" { 9 } else { 30 }).sum::<i32>() + 12 + head;
         if m == 5 {
@@ -1349,11 +1410,58 @@ impl Shell {
                 ui.rrect(ir, 8, t.accent);
             }
             let col = if !enabled { t.text3 } else if ui.hot(a) { t.on_accent } else { t.text };
+            let (label, hint) = label.split_once('\t').unwrap_or((label.as_str(), ""));
             ui.text_in(Rect::new(ir.x + 10, ir.y, ir.w - 20, ir.h), Face::Regular, 13, label, col, 0);
+            if !hint.is_empty() {
+                let hc = if ui.hot(a) && enabled { t.on_accent } else { t.text3 };
+                ui.text_in(Rect::new(ir.x + 10, ir.y, ir.w - 20, ir.h), Face::Regular, 12, hint, hc, 2);
+            }
             ui.zone(ir, a);
             y += 30;
         }
         self.menu_items = items;
+    }
+
+    /// The keyboard shortcuts (Gen+/): any key or click closes it.
+    fn draw_sheet(&self, ui: &mut Ui) {
+        let t = ui.t;
+        ui.rect(Rect::new(0, 0, self.w, self.h), Color::rgba(0x100e18, 110));
+        ui.zone(Rect::new(0, 0, self.w, self.h), Action::Background);
+        let cols = if self.w >= 1180 { 3 } else if self.w >= 900 { 2 } else { 1 };
+        let pw = match cols {
+            3 => 1120.min(self.w - 32),
+            2 => 820.min(self.w - 32),
+            _ => self.w - 32,
+        };
+        let row = 30;
+        let groups = keys::SHEET;
+        let per_col = (groups.len() + cols - 1) / cols;
+        let col_h: i32 = (0..cols).map(|c| groups.iter().skip(c * per_col).take(per_col).map(|g| 34 + g.keys.len() as i32 * row + 12).sum::<i32>()).max().unwrap_or(0);
+        let ph = (116 + col_h).min(self.h - 32);
+        let panel = Rect::new((self.w - pw) / 2, (self.h - ph) / 2, pw, ph);
+        ui.shadow(panel, 24, 20, 10, 90);
+        ui.rrect(panel, 24, t.surface);
+        ui.text(panel.x + 32, panel.y + 46, Face::Semibold, 22, "Keyboard shortcuts", t.text);
+        let what = if crate::input::ctrl_is_gen() { "Gen is the ⊞ or ⌘ key (Ctrl works too). Aux is Alt, or ⌥ Option." } else { "Gen is the ⊞ or ⌘ key. Aux is Alt, or ⌥ Option." };
+        let what = ui.fit(Face::Regular, 13, what, pw - 64);
+        ui.text(panel.x + 32, panel.y + 70, Face::Regular, 13, &what, t.text2);
+        let cw = (pw - 64) / cols as i32;
+        for c in 0..cols {
+            let mut y = panel.y + 100;
+            let x = panel.x + 32 + c as i32 * cw;
+            for g in groups.iter().skip(c * per_col).take(per_col) {
+                ui.label(x, y + 14, 11, &g.title.to_uppercase(), t.accent);
+                y += 34;
+                for (combo, what) in g.keys {
+                    keys::keycaps(ui, x, y + row / 2 - 6, combo, 12);
+                    let d = ui.fit(Face::Regular, 13, what, cw - 150);
+                    ui.text(x + 136, y + row / 2 - 1, Face::Regular, 13, &d, t.text);
+                    y += row;
+                }
+                y += 12;
+            }
+        }
+        ui.text_in(Rect::new(panel.x, panel.b() - 30, panel.w, 20), Face::Regular, 12, "Press any key to close", t.text3, 1);
     }
 
     fn draw_toasts(&self, ui: &mut Ui) {

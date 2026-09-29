@@ -106,7 +106,7 @@ impl AppKind {
     pub fn size(self) -> (i32, i32) {
         match self {
             AppKind::Files => (640, 400),
-            AppKind::Settings => (680, 520),
+            AppKind::Settings => (700, 590),
             AppKind::Terminal => (600, 380),
             AppKind::PhoneLink => (760, 500),
             AppKind::Calendar => (700, 460),
@@ -133,7 +133,7 @@ pub trait App {
     /// right-hand 110 units belong to the window controls).
     fn render(&mut self, ui: &mut Ui, r: Rect, sys: &Sys, inst: u32);
     fn action(&mut self, _code: u32, _double: bool, _sys: &mut Sys) {}
-    fn key(&mut self, _k: Key, _ctrl: bool, _sys: &mut Sys) {}
+    fn key(&mut self, _k: Key, _gen: bool, _sys: &mut Sys) {}
     fn scroll(&mut self, _dy: i32) {}
     /// Pointer position (logical) at the time of the next `action` call.
     fn mouse(&mut self, _x: i32, _y: i32) {}

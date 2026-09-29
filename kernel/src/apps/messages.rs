@@ -190,7 +190,7 @@ impl App for Messages {
         self.view.action(code, sys);
     }
 
-    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
         self.view.key(k, sys);
     }
 

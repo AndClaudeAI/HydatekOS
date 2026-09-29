@@ -7,6 +7,8 @@ built on no other word processor: the document model, its own file format
 (`.hyds`, `.hydg`, `.hydp`), page and slide layout, and the importers and exporters for other formats are
 all HydatekOS code, with no third-party libraries.
 
+Shortcuts use **Gen**, HydatekOS's shortcut key: the ⊞ or ⌘ key, or Ctrl ([KEYBOARD.md](KEYBOARD.md)). Aux (Alt or ⌥) types special characters such as ₦, € and —.
+
 Documents record who made them. When you first save or export one, your profile
 name becomes its author, in HydatekOS's formats (`author` line) and in Word,
 Excel, PowerPoint and PDF files, where other programs show it under the
@@ -41,22 +43,22 @@ screen from Files, with the page fitted to the width.
 
 | Keys | Action |
 |---|---|
-| Ctrl+B / Ctrl+I / Ctrl+U | Bold / italic / underline |
-| Ctrl+E / Ctrl+L / Ctrl+R | Centre / left / right align |
-| Ctrl+1 / Ctrl+2 / Ctrl+0 | Heading 1 / Heading 2 / Body |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
-| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
-| Ctrl+A | Select all |
-| Ctrl+S / Ctrl+O / Ctrl+N | Save / open / new |
-| Ctrl+= / Ctrl+- | Zoom in / out |
-| Shift+arrows, Ctrl+arrows | Select; jump by word |
+| Gen+B / Gen+I / Gen+U | Bold / italic / underline |
+| Gen+E / Gen+L / Gen+R | Centre / left / right align |
+| Gen+1 / Gen+2 / Gen+0 | Heading 1 / Heading 2 / Body |
+| Gen+Z / Gen+Y | Undo / redo |
+| Gen+X / Gen+C / Gen+V | Cut / copy / paste |
+| Gen+A | Select all |
+| Gen+S / Gen+O / Gen+N | Save / open / new |
+| Gen+= / Gen+- | Zoom in / out |
+| Shift+arrows; Gen+← / → or Aux+← / → | Select; jump by word |
 | Enter on an empty list item | End the list |
 
 ### Saving, importing and exporting
 
 | | Format | What Hyda Scripts does |
 |---|---|---|
-| **Save** | `.hyds` | The only format it saves to your storage. **Ctrl+S** saves; a new document is named after its first line and goes in Documents. Click the name at the top to rename it. Closing the window saves your changes. |
+| **Save** | `.hyds` | The only format it saves to your storage. **Gen+S** saves; a new document is named after its first line and goes in Documents. Click the name at the top to rename it. Closing the window saves your changes. |
 | **Import** | `.docx`, `.txt`, `.md` | Opens the file so you can read and edit it. The status bar says "Viewing a Word file". Saving writes a **new `.hyds` next to it** (e.g. `Budget.docx` → `Budget.hyds`); the original is never changed. |
 | **Export** | `.docx`, `.txt`, `.md` | File › Export writes a copy for sharing, next to the document. It never replaces an existing file; the document you're editing stays `.hyds`. |
 
@@ -158,12 +160,12 @@ A starter sheet, *Budget*, is in Documents.
 | Shift+arrows | Select |
 | F2 / Esc | Edit the cell / cancel editing |
 | Delete / Backspace | Clear / clear and edit |
-| Ctrl+B / Ctrl+I | Bold / italic |
-| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
-| Ctrl+A | Select everything |
-| Ctrl+Home / Ctrl+End | First cell / last used cell |
-| Ctrl+S / Ctrl+O / Ctrl+N | Save / open / new |
+| Gen+B / Gen+I | Bold / italic |
+| Gen+X / Gen+C / Gen+V | Cut / copy / paste |
+| Gen+Z / Gen+Y | Undo / redo |
+| Gen+A | Select everything |
+| Gen+Home / Gen+End | First cell / last used cell |
+| Gen+S / Gen+O / Gen+N | Save / open / new |
 
 ### Saving, importing and exporting
 
@@ -293,7 +295,7 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
   computer).
 
 - **Undo and redo** (100 steps), cut, copy and paste of text or whole shapes
-  (pictures included), duplicate (**Ctrl+D**).
+  (pictures included), duplicate (**Gen+D**).
 - **On a phone** the slide strip folds away: ‹ › in the status bar move between
   slides, and the slideshow fills the phone's screen.
 
@@ -306,20 +308,20 @@ sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
 | F5 / Shift+F5 | Play from the start / from this slide |
 | V (in the slideshow) | Presenter view / audience view |
 | Home / End (in the slideshow) | First / last slide |
-| Ctrl+M | New slide (like the current one) |
-| Ctrl+D | Duplicate the shape, or the slide |
+| Gen+M | New slide (like the current one) |
+| Gen+D | Duplicate the shape, or the slide |
 | Delete | Delete the shape (a placeholder empties), or with nothing selected the slide |
 | Enter / F2 | Edit the selected shape's text; with nothing selected, a new slide |
 | Esc | Stop editing text, then deselect |
 | Tab / Shift+Tab | In a table: next / previous cell (Tab adds a row at the end). While editing a list: indent / outdent. Otherwise: select the next / previous shape |
 | Arrows | Nudge the shape (Shift: finely); with nothing selected, go to the previous / next slide |
-| Ctrl+↑ / Ctrl+↓ | Move the slide up / down |
-| Ctrl+B / Ctrl+I / Ctrl+U | Bold / italic / underline |
-| Ctrl+L / Ctrl+E / Ctrl+R | Left / centre / right align |
-| Ctrl+[ / Ctrl+] | Smaller / bigger text |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
-| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
-| Ctrl+S / Ctrl+O / Ctrl+N | Save / open / new |
+| Gen+↑ / Gen+↓ | Move the slide up / down |
+| Gen+B / Gen+I / Gen+U | Bold / italic / underline |
+| Gen+L / Gen+E / Gen+R | Left / centre / right align |
+| Gen+[ / Gen+] | Smaller / bigger text |
+| Gen+Z / Gen+Y | Undo / redo |
+| Gen+X / Gen+C / Gen+V | Cut / copy / paste |
+| Gen+S / Gen+O / Gen+N | Save / open / new |
 
 ### Saving, importing and exporting
 

@@ -1133,7 +1133,7 @@ impl App for Grids {
         }
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         if let Overlay::Rename(e) = &mut self.overlay {
             match k {
                 Key::Enter => {
@@ -1155,7 +1155,7 @@ impl App for Grids {
             return;
         }
         let shift = crate::input::shift();
-        if ctrl {
+        if gen {
             match k {
                 Key::Char(c) => match c.to_ascii_lowercase() {
                     'b' => self.toggle_bold(),
@@ -1267,14 +1267,14 @@ impl App for Grids {
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
             0 => vec![
-                ("New Sheet", C_NEW),
-                ("Open…", C_OPEN),
-                ("Save", C_SAVE),
+                ("New Sheet\tGen+N", C_NEW),
+                ("Open…\tGen+O", C_OPEN),
+                ("Save\tGen+S", C_SAVE),
                 ("Export as Excel (.xlsx)", C_EXPORT_XLSX),
                 ("Export as CSV (.csv)", C_EXPORT_CSV),
                 ("Rename…", C_RENAME),
             ],
-            1 => vec![("Undo", C_UNDO), ("Redo", C_REDO), ("Cut", C_CUT), ("Copy", C_COPY), ("Paste", C_PASTE), ("Clear", C_CLEAR), ("Select All", C_ALL)],
+            1 => vec![("Undo\tGen+Z", C_UNDO), ("Redo\tGen+Y", C_REDO), ("Cut\tGen+X", C_CUT), ("Copy\tGen+C", C_COPY), ("Paste\tGen+V", C_PASTE), ("Clear\tDelete", C_CLEAR), ("Select All\tGen+A", C_ALL)],
             _ => vec![],
         }
     }

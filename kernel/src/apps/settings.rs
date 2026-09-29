@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 10] = ["Profile", "Accounts", "Appearance", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
+pub const SECTIONS: [&str; 11] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -61,6 +61,62 @@ impl Settings {
             None => (0, false),
         };
         Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+    }
+
+    /// The Keyboard section: the Gen and Aux keys.
+    fn render_keyboard(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::shell::keys::keycaps;
+        let t = ui.t;
+        // a paragraph, then "<key> is the <a> key, or <b> on an Apple keyboard"
+        let intro = |ui: &mut Ui, y: i32, title: &str, about: &str, key: &str, pc: &str, apple: &str| -> i32 {
+            ui.text(m.x + 16, y + 30, Face::Semibold, 15, title, t.text);
+            let mut ly = y + 52;
+            for line in ui.wrap(Face::Regular, 13, about, m.w - 32) {
+                ui.text(m.x + 16, ly, Face::Regular, 13, &line, t.text2);
+                ly += 19;
+            }
+            let cy = ly + 12;
+            let mut x = m.x + 16;
+            x += keycaps(ui, x, cy, key, 13) + 10;
+            x += ui.text(x, cy + 5, Face::Regular, 13, "is the", t.text2) + 10;
+            x += keycaps(ui, x, cy, pc, 13) + 8;
+            x += ui.text(x, cy + 5, Face::Regular, 13, "key, or", t.text2) + 10;
+            x += keycaps(ui, x, cy, apple, 13) + 8;
+            ui.text(x, cy + 5, Face::Regular, 13, "on an Apple keyboard", t.text2);
+            cy + 24
+        };
+        // Gen
+        let top = m.y;
+        card(ui, Rect::new(m.x, top, m.w, 204));
+        let gen_about = "Gen is HydatekOS's shortcut key, like Ctrl on Windows and Command on a Mac. Hold it and press a letter: Gen+S saves, Gen+C copies, Gen+Space opens an app.";
+        let y = intro(ui, top, "The Gen key", gen_about, "Gen", "⊞", "⌘");
+        ui.rect(Rect::new(m.x + 16, y + 2, m.w - 32, 1), t.line);
+        let sub = if sys.ctrl_gen { "Ctrl+S saves, like Gen+S" } else { "Ctrl is left to apps: in Terminal, Ctrl+C cancels a line" };
+        row(ui, Rect::new(m.x + 16, y, m.w - 32, 60), y + 8, "Ctrl works as Gen", sub);
+        ui.switch(m.r() - 54, y + 16, sys.ctrl_gen, Action::App(inst, C_CTRL_GEN));
+
+        // Aux
+        let top = top + 218;
+        card(ui, Rect::new(m.x, top, m.w, 222));
+        let aux_about = "Aux is the second modifier, like Alt on Windows and Option on a Mac. Hold it to type special characters; Aux+Tab switches windows, Aux+← and Aux+→ move by word.";
+        let y = intro(ui, top, "The Aux key", aux_about, "Aux", "Alt", "⌥");
+        let chars = [('N', '₦'), ('E', '€'), ('3', '£'), ('Y', '¥'), ('4', '¢'), ('-', '–'), (';', '…'), ('8', '•'), ('0', '°'), ('G', '©'), ('2', '™'), ('/', '÷')];
+        let per = 6;
+        let cw = (m.w - 32) / per;
+        for (i, (key, ch)) in chars.iter().enumerate() {
+            let x = m.x + 16 + (i as i32 % per) * cw;
+            let cy = y + 14 + (i as i32 / per) * 32;
+            let mut b = [0u8; 4];
+            let w = keycaps(ui, x, cy, key.encode_utf8(&mut b), 12);
+            let mut b2 = [0u8; 4];
+            ui.text(x + w + 10, cy + 6, Face::Semibold, 16, ch.encode_utf8(&mut b2), t.text);
+        }
+
+        let y = top + 238;
+        ui.button(Rect::new(m.x, y, 190, 34), "Show all shortcuts", Action::App(inst, C_SHORTCUTS), true);
+        let mut x = m.x + 204;
+        x += ui.text(x, y + 22, Face::Regular, 13, "or press", t.text3) + 8;
+        keycaps(ui, x, y + 17, "Gen+/", 12);
     }
 
     /// The Accounts section: everyone who uses this computer.
@@ -189,7 +245,7 @@ impl Settings {
             _ => "None: any key or click unlocks",
         };
         row(ui, inner, y + 12, "Sign-in", st);
-        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Sign-in options", Action::App(inst, C_SECTION + 6), false);
+        ui.button(Rect::new(m.r() - 16 - 150, y + 16, 150, 32), "Sign-in options", Action::App(inst, C_SECTION + 7), false);
         y += 78;
         card(ui, Rect::new(m.x, y, m.w, 64));
         let inner = Rect::new(m.x + 16, y, m.w - 32, 64);
@@ -217,6 +273,8 @@ const C_ACC_NAME: u32 = 27;
 const C_ACC_ADD: u32 = 28;
 const C_ACC_ADMIN: u32 = 29;
 const C_ACC_CANCEL: u32 = 30;
+const C_CTRL_GEN: u32 = 31;
+const C_SHORTCUTS: u32 = 32;
 const C_PICK: u32 = 1000;
 /// + account index
 const C_ACC_TYPE: u32 = 1100;
@@ -289,6 +347,7 @@ impl App for Settings {
         match self.sec {
             0 => self.render_profile(ui, m, sys, inst),
             1 => self.render_accounts(ui, m, sys, inst),
+            3 => self.render_keyboard(ui, m, sys, inst),
             2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
@@ -323,7 +382,7 @@ impl App for Settings {
                 row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
                 ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
             }
-            3 => {
+            4 => {
                 let n = &sys.net;
                 card(ui, Rect::new(m.x, m.y, m.w, 210));
                 let (status, sub) = match (n.present, n.ip) {
@@ -343,7 +402,7 @@ impl App for Settings {
                 row(ui, Rect::new(m.x + 16, m.y + 224, m.w - 32, 64), m.y + 236, "Wi-Fi", "Wi-Fi adapter drivers are not included yet; use Ethernet");
                 ui.switch(sw_x, m.y + 244, sys.wifi, Action::App(inst, C_WIFI));
             }
-            4 => {
+            5 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 64));
                 row(ui, Rect::new(m.x + 16, m.y, m.w, 64), m.y + 12, "Bluetooth", if sys.bt { "On" } else { "Off" });
                 ui.switch(sw_x, m.y + 20, sys.bt, Action::App(inst, C_BT));
@@ -355,7 +414,7 @@ impl App for Settings {
                     ui.text(m.x + 16, m.y + 128 + i as i32 * 20, Face::Regular, 13, &l, t.text2);
                 }
             }
-            5 => {
+            6 => {
                 let l = &sys.link;
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let st = match l.source {
@@ -383,7 +442,7 @@ impl App for Settings {
                     ui.button(Rect::new(m.x + 160, m.y + 146, 110, 32), "Unpair", Action::App(inst, C_UNPAIR), false);
                 }
             }
-            6 => {
+            7 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 124));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 124);
                 row(ui, inner, m.y + 12, "Show at startup", "Lock the screen when HydatekOS starts");
@@ -439,7 +498,7 @@ impl App for Settings {
                 ui.button(Rect::new(m.x, top + 202, 130, 32), "Lock now", Action::App(inst, C_LOCK_NOW), true);
                 ui.text(m.x + 142, top + 222, Face::Regular, 12, "or press F12", t.text3);
             }
-            7 => {
+            8 => {
                 use crate::web::engines::ENGINES;
                 ui.text(m.x, m.y + 14, Face::Semibold, 14, "Search engine", t.text);
                 let tip = ui.fit(Face::Regular, 12, "For searches typed in the address bar. Add !d, !g, !w... to a search to use another once.", m.w);
@@ -464,7 +523,7 @@ impl App for Settings {
                     ui.zone(rr, a);
                 }
             }
-            8 => {
+            9 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 130));
                 let (w, h, s) = sys.screen;
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
@@ -498,6 +557,16 @@ impl App for Settings {
             self.acc_confirm = None;
         }
         match code {
+            C_CTRL_GEN => {
+                sys.ctrl_gen = !sys.ctrl_gen;
+                crate::input::set_ctrl_is_gen(sys.ctrl_gen);
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_SHORTCUTS => {
+                sys.reqs.push(Req::Shortcuts);
+                return;
+            }
             C_ACC_NAME | C_ACC_CANCEL => return,
             C_ACC_ADMIN => {
                 self.acc_admin = !self.acc_admin;
@@ -686,7 +755,7 @@ impl App for Settings {
         }
     }
 
-    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
         if self.focus == C_ACC_NAME {
             match k {
                 Key::Char(c) if !c.is_control() && self.acc_name.chars().count() < crate::profile::NAME_MAX => self.acc_name.push(c),

@@ -404,7 +404,7 @@ impl App for Files {
         }
     }
 
-    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
         match &mut self.focus {
             Focus::Search => {
                 if k == Key::Esc || k == Key::Enter {
@@ -469,7 +469,7 @@ impl App for Files {
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
             0 => {
-                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename", C_RENAME), ("Send to Phone", C_SEND_PHONE), ("Move to Bin", C_DELETE)];
+                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename\tF2", C_RENAME), ("Send to Phone", C_SEND_PHONE), ("Move to Bin\tDelete", C_DELETE)];
                 if self.path == "/trash" {
                     v = vec![("Restore", C_RESTORE), ("Delete Permanently", C_DELETE), ("Empty Bin", C_EMPTY_BIN)];
                 }

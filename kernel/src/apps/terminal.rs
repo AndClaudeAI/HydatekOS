@@ -307,16 +307,21 @@ impl App for Terminal {
         ui.zone(body, Action::App(inst, 0));
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         self.scroll = 0;
         match k {
-            Key::Char('l') if ctrl => self.out.clear(),
-            Key::Char('c') if ctrl => {
+            Key::Char('l') | Key::Ctrl('l') if gen || matches!(k, Key::Ctrl(_)) => self.out.clear(),
+            Key::Char('v') if gen => {
+                let clip: String = sys.clipboard.chars().filter(|c| !c.is_control()).collect();
+                self.input.push_str(&clip);
+            }
+            Key::Ctrl('u') => self.input.clear(),
+            Key::Char('c') | Key::Ctrl('c') if gen || matches!(k, Key::Ctrl(_)) => {
                 let p = self.prompt();
                 self.out.push(format!("{}{}^C", p, self.input));
                 self.input.clear();
             }
-            Key::Char(c) if !c.is_control() && !ctrl => self.input.push(c),
+            Key::Char(c) if !c.is_control() && !gen => self.input.push(c),
             Key::Backspace => {
                 self.input.pop();
             }

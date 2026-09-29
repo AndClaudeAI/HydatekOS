@@ -1252,7 +1252,7 @@ impl App for Scripts {
         }
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         if let Overlay::Rename(e) = &mut self.overlay {
             match k {
                 Key::Enter => {
@@ -1274,7 +1274,7 @@ impl App for Scripts {
             return;
         }
         let shift = crate::input::shift();
-        if ctrl {
+        if gen {
             match k {
                 Key::Char(c) => match c.to_ascii_lowercase() {
                     'b' => self.toggle(BOLD),
@@ -1299,7 +1299,7 @@ impl App for Scripts {
                     '2' => self.set_style(Style::H2),
                     _ => {}
                 },
-                // Ctrl+I arrives as Tab (0x09) without the extended keyboard protocol
+                // Gen+I arrives as Tab (0x09) on firmware without the extended keyboard protocol
                 Key::Tab => self.toggle(ITALIC),
                 Key::Left => self.move_to(self.step(self.cur, false, true), shift),
                 Key::Right => self.move_to(self.step(self.cur, true, true), shift),
@@ -1376,16 +1376,16 @@ impl App for Scripts {
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
             0 => vec![
-                ("New Document", C_NEW),
-                ("Open…", C_OPEN),
-                ("Save", C_SAVE),
+                ("New Document\tGen+N", C_NEW),
+                ("Open…\tGen+O", C_OPEN),
+                ("Save\tGen+S", C_SAVE),
                 ("Export as Word (.docx)", C_EXPORT_DOCX),
                 ("Export as Text (.txt)", C_EXPORT_TXT),
                 ("Export as Markdown (.md)", C_EXPORT_MD),
                 ("Rename…", C_RENAME),
             ],
-            1 => vec![("Undo", C_UNDO), ("Redo", C_REDO), ("Cut", C_CUT), ("Copy", C_COPY), ("Paste", C_PASTE), ("Select All", C_ALL)],
-            2 => vec![("Zoom In", C_ZOOM_IN), ("Zoom Out", C_ZOOM_OUT), ("Fit Page Width", C_FIT)],
+            1 => vec![("Undo\tGen+Z", C_UNDO), ("Redo\tGen+Y", C_REDO), ("Cut\tGen+X", C_CUT), ("Copy\tGen+C", C_COPY), ("Paste\tGen+V", C_PASTE), ("Select All\tGen+A", C_ALL)],
+            2 => vec![("Zoom In\tGen+=", C_ZOOM_IN), ("Zoom Out\tGen+−", C_ZOOM_OUT), ("Fit Page Width", C_FIT)],
             _ => vec![],
         }
     }

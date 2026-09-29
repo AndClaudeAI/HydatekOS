@@ -10,7 +10,7 @@ index and crawler. None of it comes from another browser or search engine.
 ## The browser
 
 - **Address bar:** type an address (`example.com`, `http://10.0.2.2:8080/`) or
-  words to search. Ctrl+L selects the address.
+  words to search. Gen+L selects the address.
 - **Back, forward, reload / stop, home** (Hyda Search), a loading bar, and the
   link under the pointer in the status bar. Backspace goes back; Space and Page
   Up/Down scroll.

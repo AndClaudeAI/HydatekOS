@@ -389,7 +389,7 @@ impl App for PhoneLink {
         }
     }
 
-    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
         if self.tab == 4 && self.clip_focus {
             match k {
                 Key::Enter => self.action(C_CLIP_SEND, false, sys),

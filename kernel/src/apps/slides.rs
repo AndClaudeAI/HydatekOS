@@ -2236,13 +2236,13 @@ impl Slides {
         }
     }
 
-    fn notes_key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn notes_key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         let Some(mut c) = self.notes else { return };
         let mut text: Vec<char> = self.slide().notes.chars().collect();
         c = c.min(text.len());
         let mut changed = false;
         match k {
-            Key::Char(ch) if ctrl && ch.to_ascii_lowercase() == 'v' => {
+            Key::Char(ch) if gen && ch.to_ascii_lowercase() == 'v' => {
                 let p: Vec<char> = sys.clipboard.chars().filter(|c| *c != '\r').collect();
                 for (j, ch) in p.iter().enumerate() {
                     text.insert(c + j, *ch);
@@ -2250,7 +2250,7 @@ impl Slides {
                 c += p.len();
                 changed = true;
             }
-            Key::Char(_) if ctrl => {}
+            Key::Char(_) if gen => {}
             Key::Char(ch) if !ch.is_control() => {
                 text.insert(c, ch);
                 c += 1;
@@ -2697,7 +2697,7 @@ impl Slides {
         self.touch();
     }
 
-    fn data_key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn data_key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         let shift = crate::input::shift();
         let Overlay::ChartData(de) = &mut self.overlay else { return };
         match k {
@@ -2705,11 +2705,11 @@ impl Slides {
                 self.data_commit();
                 self.overlay = Overlay::None;
             }
-            Key::Char(c) if ctrl && c.to_ascii_lowercase() == 'v' => {
+            Key::Char(c) if gen && c.to_ascii_lowercase() == 'v' => {
                 let t = sys.clipboard.lines().next().unwrap_or("").to_string();
                 de.text.get_or_insert_with(String::new).push_str(&t);
             }
-            Key::Char(c) if !ctrl && !c.is_control() => {
+            Key::Char(c) if !gen && !c.is_control() => {
                 de.text.get_or_insert_with(String::new).push(c);
             }
             Key::Backspace => {
@@ -3273,7 +3273,7 @@ impl App for Slides {
         }
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         let shift = crate::input::shift();
         if self.show.is_some() {
             match k {
@@ -3324,7 +3324,7 @@ impl App for Slides {
             return;
         }
         if matches!(self.overlay, Overlay::ChartData(_)) {
-            self.data_key(k, ctrl, sys);
+            self.data_key(k, gen, sys);
             return;
         }
         if let Overlay::Footer(dlg) = &mut self.overlay {
@@ -3348,10 +3348,10 @@ impl App for Slides {
             return;
         }
         if self.notes.is_some() {
-            self.notes_key(k, ctrl, sys);
+            self.notes_key(k, gen, sys);
             return;
         }
-        if ctrl {
+        if gen {
             match k {
                 Key::Char(c) => match c.to_ascii_lowercase() {
                     'b' => self.toggle_fmt(BOLD),
@@ -3712,10 +3712,10 @@ impl App for Slides {
 
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
-            0 => vec![("New Presentation", C_NEW), ("Open…", C_OPEN), ("Save", C_SAVE), ("Export as PowerPoint (.pptx)", C_EXPORT), ("Export as PDF", C_PDF), ("Export Notes Pages (PDF)", C_PDF_NOTES), ("Print…", C_PDF), ("Rename…", C_RENAME)],
-            1 => vec![("Undo", C_UNDO), ("Redo", C_REDO), ("Cut", C_CUT), ("Copy", C_COPY), ("Paste", C_PASTE), ("Duplicate", C_DUP), ("Delete", C_DELETE), ("Select All", C_ALL), ("Bring to Front", C_FRONT), ("Send to Back", C_BACK), ("Rotate Right 90°", C_ROT_R), ("Rotate Left 90°", C_ROT_L), ("Flip Horizontal", C_FLIP_H), ("Flip Vertical", C_FLIP_V)],
-            2 => vec![("Play from Start", C_PLAY_START), ("Play from This Slide", C_PLAY), ("Presenter View", C_PRESENTER), ("Insert Text Box", C_TEXTBOX), ("Insert Shape…", C_RECT), ("Insert Table…", C_TABLE), ("Insert Chart…", C_CHART), ("Insert Picture…", C_PICTURE), ("Header & Footer…", C_FOOTER)],
-            3 => vec![("New Slide", C_ADD_SLIDE), ("Duplicate Slide", C_DUP_SLIDE), ("Delete Slide", C_DEL_SLIDE), ("Move Slide Up", C_SLIDE_UP), ("Move Slide Down", C_SLIDE_DOWN), ("Previous Slide", C_PREV), ("Next Slide", C_NEXT)],
+            0 => vec![("New Presentation\tGen+N", C_NEW), ("Open…\tGen+O", C_OPEN), ("Save\tGen+S", C_SAVE), ("Export as PowerPoint (.pptx)", C_EXPORT), ("Export as PDF", C_PDF), ("Export Notes Pages (PDF)", C_PDF_NOTES), ("Print…", C_PDF), ("Rename…", C_RENAME)],
+            1 => vec![("Undo\tGen+Z", C_UNDO), ("Redo\tGen+Y", C_REDO), ("Cut\tGen+X", C_CUT), ("Copy\tGen+C", C_COPY), ("Paste\tGen+V", C_PASTE), ("Duplicate\tGen+D", C_DUP), ("Delete\tDelete", C_DELETE), ("Select All\tGen+A", C_ALL), ("Bring to Front", C_FRONT), ("Send to Back", C_BACK), ("Rotate Right 90°", C_ROT_R), ("Rotate Left 90°", C_ROT_L), ("Flip Horizontal", C_FLIP_H), ("Flip Vertical", C_FLIP_V)],
+            2 => vec![("Play from Start\tF5", C_PLAY_START), ("Play from This Slide\tShift+F5", C_PLAY), ("Presenter View", C_PRESENTER), ("Insert Text Box", C_TEXTBOX), ("Insert Shape…", C_RECT), ("Insert Table…", C_TABLE), ("Insert Chart…", C_CHART), ("Insert Picture…", C_PICTURE), ("Header & Footer…", C_FOOTER)],
+            3 => vec![("New Slide\tGen+M", C_ADD_SLIDE), ("Duplicate Slide", C_DUP_SLIDE), ("Delete Slide", C_DEL_SLIDE), ("Move Slide Up\tGen+↑", C_SLIDE_UP), ("Move Slide Down\tGen+↓", C_SLIDE_DOWN), ("Previous Slide", C_PREV), ("Next Slide", C_NEXT)],
             _ => vec![],
         }
     }

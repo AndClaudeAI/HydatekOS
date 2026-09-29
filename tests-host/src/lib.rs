@@ -20,6 +20,8 @@ pub mod pdf;
 pub mod profile;
 #[path = "../../kernel/src/accounts.rs"]
 pub mod accounts;
+#[path = "../../kernel/src/keymap.rs"]
+pub mod keymap;
 #[path = "../../kernel/src/grid.rs"]
 pub mod grid;
 #[path = "../../kernel/src/gridio.rs"]
@@ -57,6 +59,8 @@ mod deck_tests;
 mod profile_tests;
 #[cfg(test)]
 mod accounts_tests;
+#[cfg(test)]
+mod keymap_tests;
 #[cfg(test)]
 mod web_tests;
 #[cfg(test)]

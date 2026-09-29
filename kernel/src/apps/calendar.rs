@@ -183,7 +183,7 @@ impl App for Calendar {
         }
     }
 
-    fn key(&mut self, k: Key, _ctrl: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
         if let Some(f) = self.focus {
             match k {
                 Key::Enter => self.add(sys),

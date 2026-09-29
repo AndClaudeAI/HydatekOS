@@ -8,12 +8,44 @@ use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTe
 use crate::ui::Key;
 use alloc::vec::Vec;
 
-static SHIFT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-/// Shift was held for the most recent key (for Shift+arrow selection). Only
-/// firmware with the extended text input protocol reports it.
+/// Modifiers held for the most recent key (only firmware with the extended
+/// text input protocol reports them).
+static MODS: AtomicU32 = AtomicU32::new(0);
+const M_SHIFT: u32 = 1;
+const M_CTRL: u32 = 2;
+/// Alt, or ⌥ Option on an Apple keyboard: HydatekOS's Aux key
+const M_AUX: u32 = 4;
+const M_LOGO: u32 = 8;
+/// Ctrl works as the Gen key (a per-account setting; on by default).
+static CTRL_IS_GEN: AtomicBool = AtomicBool::new(true);
+
+fn held(m: u32) -> bool {
+    MODS.load(Ordering::Relaxed) & m != 0
+}
+
+/// Shift was held for the most recent key (for Shift+arrow selection).
 pub fn shift() -> bool {
-    SHIFT.load(core::sync::atomic::Ordering::Relaxed)
+    held(M_SHIFT)
+}
+
+/// Aux (Alt, or ⌥ Option) was held for the most recent key.
+pub fn aux() -> bool {
+    held(M_AUX)
+}
+
+/// The logo key (⊞ Windows, ⌘ Command) was held for the most recent key.
+pub fn logo() -> bool {
+    held(M_LOGO)
+}
+
+pub fn set_ctrl_is_gen(on: bool) {
+    CTRL_IS_GEN.store(on, Ordering::Relaxed);
+}
+
+pub fn ctrl_is_gen() -> bool {
+    CTRL_IS_GEN.load(Ordering::Relaxed)
 }
 
 pub enum Ev {
@@ -194,12 +226,44 @@ impl Input {
                     (d, 0)
                 }
             };
-            let ctrl_state = shift & efi::SHIFT_STATE_VALID != 0 && shift & (efi::LEFT_CONTROL | efi::RIGHT_CONTROL) != 0;
-            SHIFT.store(shift & efi::SHIFT_STATE_VALID != 0 && shift & (efi::LEFT_SHIFT | efi::RIGHT_SHIFT) != 0, core::sync::atomic::Ordering::Relaxed);
-            if let Some((k, ctrl)) = map_key(key, ctrl_state) {
-                out.push(Ev::Key(k, ctrl));
+            let valid = shift & efi::SHIFT_STATE_VALID != 0;
+            let has = |bits: u32| valid && shift & bits != 0;
+            let mut mods = 0;
+            for (bits, m) in [(efi::LEFT_SHIFT | efi::RIGHT_SHIFT, M_SHIFT), (efi::LEFT_CONTROL | efi::RIGHT_CONTROL, M_CTRL), (efi::LEFT_ALT | efi::RIGHT_ALT, M_AUX), (efi::LEFT_LOGO | efi::RIGHT_LOGO, M_LOGO)] {
+                if has(bits) {
+                    mods |= m;
+                }
             }
+            // Ctrl+letter arrives as a control character even without the
+            // extended protocol
+            let Some((k, ctrl_char)) = map_key(key, mods & M_CTRL != 0) else { continue };
+            if ctrl_char {
+                mods |= M_CTRL;
+            }
+            MODS.store(mods, Ordering::Relaxed);
+            out.push(gen_key(k, mods));
         }
+    }
+}
+
+/// The event for a key and the modifiers held (see keymap.rs): the Gen key
+/// is the logo key, or Ctrl while Ctrl works as Gen. Otherwise Ctrl+letter is
+/// `Key::Ctrl`, so it never types the letter. Aux+key types a special
+/// character, or is `Key::Aux`; Aux+← and Aux+→ move by word, as Gen+← does.
+fn gen_key(k: Key, mods: u32) -> Ev {
+    let ctrl = mods & M_CTRL != 0;
+    let aux = mods & M_AUX != 0;
+    let gen = mods & M_LOGO != 0 || (ctrl && ctrl_is_gen());
+    match k {
+        // Gen+Shift+Z and Gen+z are the same shortcut
+        Key::Char(c) if gen => Ev::Key(Key::Char(c.to_ascii_lowercase()), true),
+        Key::Char(c) if ctrl && c.is_ascii_alphabetic() => Ev::Key(Key::Ctrl(c.to_ascii_lowercase()), false),
+        Key::Char(c) if aux => match crate::keymap::aux_char(c) {
+            Some(special) => Ev::Key(Key::Char(special), false),
+            None => Ev::Key(Key::Aux(c.to_ascii_lowercase()), false),
+        },
+        Key::Left | Key::Right if aux => Ev::Key(k, true),
+        k => Ev::Key(k, gen),
     }
 }
 

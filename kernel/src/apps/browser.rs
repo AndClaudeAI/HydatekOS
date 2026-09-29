@@ -1251,8 +1251,8 @@ impl App for Browser {
         }
     }
 
-    fn key(&mut self, k: Key, ctrl: bool, sys: &mut Sys) {
-        if ctrl {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
+        if gen {
             match k {
                 Key::Char('l') | Key::Char('L') => self.action(C_URL, false, sys),
                 Key::Char('r') | Key::Char('R') => self.action(C_RELOAD, false, sys),

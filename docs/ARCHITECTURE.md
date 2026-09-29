@@ -151,7 +151,7 @@ If the boot volume is read-only, HydatekOS runs as a live session.
 
 ## Input (`input.rs`, `ps2.rs`)
 
-The keyboard goes through Simple Text Input Ex (which carries Ctrl state). Pointers come
+The keyboard goes through Simple Text Input Ex, which carries the modifier state. `input.rs` turns it into HydatekOS's modifiers: **Gen** (the logo key, and Ctrl unless turned off) arrives as the `gen` flag of `Ev::Key`, and **Aux** (Alt / Option) types special characters or arrives as `Key::Aux` (see [KEYBOARD.md](KEYBOARD.md)). Pointers come
 from every firmware Simple/Absolute Pointer. When the firmware binds no mouse driver,
 HydatekOS drives the i8042 auxiliary port itself (`ps2.rs`), including the IntelliMouse
 wheel. It only consumes bytes flagged as AUX, so the firmware keyboard driver keeps
