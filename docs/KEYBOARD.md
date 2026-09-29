@@ -1,12 +1,13 @@
 # The keyboard
 
-HydatekOS names its two modifier keys after what they do, not after another
+HydatekOS names its modifier keys after what they do, not after another
 system's keyboards:
 
 | HydatekOS | What it does | On a PC keyboard | On an Apple keyboard | Windows / macOS call it |
 |---|---|---|---|---|
-| **Gen** (general) | Shortcuts: Gen+S saves, Gen+C copies | Ctrl (the Hydatek key works too) | ⌘ Command, and Control | Ctrl / Command |
+| **Gen** (general) | Shortcuts: Gen+S saves, Gen+C copies | Ctrl | ⌘ Command | Ctrl / Command |
 | **Aux** (auxiliary) | Special characters, switching windows, moving by word | Alt | ⌥ Option | Alt / Option |
+| **Hydatek key** | The system: start menu, Files, lock, desktop, snapping windows | the logo key (⊞) | — | Windows key |
 
 ![Settings › Keyboard](screenshots/keyboard-settings.png)
 
@@ -19,17 +20,12 @@ and **Gen+/** shows all of them:
 |---|---|
 | ![A menu with shortcuts](screenshots/keyboard-menu.png) | ![Keyboard shortcuts](screenshots/keyboard-shortcuts.png) |
 
-**Gen is the Ctrl key**: the key Windows calls Ctrl and a Mac calls ⌘ Command
-is HydatekOS's Gen key, and the keyboard tester shows it as Gen.
-
-Beside it is the **Hydatek key**, where Windows keyboards print ⊞: HydatekOS
-shows it with the Hydatek Systems wordmark, on the keyboard tester's picture and
-in Settings. It works as Gen too. In Settings › Keyboard you can switch off
-"Ctrl is the Gen key": then only the Hydatek key is Gen, and Ctrl belongs to
-the apps. The Terminal uses it as a Unix shell does:
-**Ctrl+C** cancels the line, **Ctrl+L** clears the screen and **Ctrl+U**
-clears what you've typed. Everywhere else, a Ctrl+letter that means nothing
-types nothing. The setting is kept for each account.
+**Gen is the Ctrl key**, always: the key Windows calls Ctrl and a Mac calls ⌘
+Command is HydatekOS's Gen key, and the keyboard tester shows it as Gen. In the
+Terminal, Gen does what Ctrl does in a Unix shell:
+- **Gen+C** cancels the line and **Gen+L** clears the screen.
+- **Gen+A** / **Gen+E** go to the line's start / end.
+- **Gen+U** / **Gen+K** cut to the start / end.
 
 ### Everywhere
 
@@ -44,8 +40,8 @@ types nothing. The setting is kept for each account.
 | F11 | Maximise the front window, or put it back |
 | F12 | Lock the screen |
 
-Window switching needs the Hydatek key or Aux: some firmware reports Ctrl+I as
-Tab, and Ctrl+Tab has to stay Gen+I (italic) there.
+Aux+Tab and Hydatek+Tab switch windows too. Gen+Tab can't always: some
+firmware reports Ctrl+I as Tab, and it has to stay Gen+I (italic) there.
 
 ### In apps
 
@@ -63,6 +59,37 @@ Tab, and Ctrl+Tab has to stay Gen+I (italic) there.
 
 Every app's own list is in [HYDA_WORKSPACE.md](HYDA_WORKSPACE.md) and
 [BROWSER.md](BROWSER.md). Gen+Shift+letter counts as Gen+letter.
+
+## The Hydatek key
+
+The key beside Gen, where Windows keyboards print ⊞, is the **Hydatek key**.
+HydatekOS shows it with the Hydatek Systems wordmark, on the keyboard tester's
+picture, in Settings and on the shortcuts sheet. It's the system key, as the
+Windows key is on Windows:
+
+| Keys | Action |
+|---|---|
+| Hydatek (tap it) | The start menu: every app, and a search box. Tap again to close it. On the phone layout, home |
+| Hydatek+Space, +R, +S | The start menu, ready to search |
+| Hydatek+E | Files |
+| Hydatek+I | Settings |
+| Hydatek+C | Claude, the assistant |
+| Hydatek+L | Lock the screen |
+| Hydatek+D | Show the desktop; press again to bring the windows back |
+| Hydatek+M | Minimise every window |
+| Hydatek+↑ / ↓ | Maximise the front window / put it back (↓ again minimises it) |
+| Hydatek+← / → | Snap the front window to the left / right half of the screen |
+| Hydatek+Tab | Next window (with Shift, the one before) |
+| Hydatek+X | The HydatekOS menu: profile, lock, sign out, restart, shut down |
+| Hydatek+1 … 9 | The dock's apps, in order (Hydatek+1 is Claude) |
+| Hydatek+/ | Keyboard shortcuts |
+
+A tap only counts when the key is let go without another key pressed with it,
+so Hydatek+E never flashes the start menu. HydatekOS asks the firmware to report
+modifier keys on their own (UEFI's "partial keys") and to say which are held
+between strokes. Firmware that doesn't say when a key is let go gets the start
+menu a third of a second after a lone press. Apps never see the Hydatek key:
+its shortcuts are the system's.
 
 ## Aux
 
@@ -147,7 +174,8 @@ arrive depends on its firmware. The tester shows which ones do.
 
 | Part | Where |
 |---|---|
-| Reading the modifiers from the firmware; Gen, Ctrl and Aux | `kernel/src/input.rs` (`gen_key`) |
+| Reading the modifiers from the firmware; Gen, Aux and the Hydatek key (taps and shortcuts) | `kernel/src/input.rs` (`gen_key`, `Ev::Hydatek`, `Ev::HydatekTap`) |
+| What the Hydatek key does | `kernel/src/shell/mod.rs` (`hydatek`, `hydatek_tap`) |
 | Scan codes (F13–F24, volume, brightness, power), lock keys, the tester's record of strokes | `kernel/src/input.rs` (`map_key`, `raw_since`) |
 | Key names and the tester's keyboard picture | `kernel/src/keymap.rs` (`key_name`, `LAYOUT`) |
 | The line editor behind every text box | `kernel/src/lineedit.rs` |
@@ -158,9 +186,9 @@ arrive depends on its firmware. The tester shows which ones do.
 | ⊞ ⌘ ⌥ ↑ ↓ − in the font | `tools/fontgen.py` |
 | The Hydatek key's wordmark (shared with the boot screen) | `kernel/src/brand.rs`, `Ui::brand` |
 
-Apps receive `key(k, gen, sys)`: `gen` is true while Gen is held. `Key::Ctrl`
-(Ctrl while it isn't Gen) and `Key::Aux` (Aux with no character) exist so that
-neither ever types a letter by accident.
+Apps receive `key(k, gen, sys)`: `gen` is true while Gen (Ctrl) is held.
+`Key::Aux` (Aux with no character) exists so that Aux never types a letter by
+accident.
 
 `tools/test.sh` checks:
 - what Aux types (Shift, capitals, keys with nothing);
@@ -170,4 +198,6 @@ neither ever types a letter by accident.
 - the line editor (`lineedit_tests.rs`). The firmware's reports were checked in
 QEMU: Ctrl (Gen), the Hydatek key, Alt (Aux) and Shift each arrive as their own
 flag with the key. So were the shortcuts, the sheet, the menu hints, window switching, typing
-with Aux, and the Terminal's Ctrl keys with Ctrl not working as Gen.
+with Aux, and the Hydatek key: OVMF reports it tapped alone and says when it's
+let go, so a tap opens the start menu and Hydatek+E, +C, +←, +→, +D and +X do
+what the table says.

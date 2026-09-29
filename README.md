@@ -67,11 +67,13 @@ Windows, macOS or Linux.
   and new people set up their own picture and PIN the first time they sign in.
   The lock screen shows everyone's picture to choose from, and inside HydatekOS
   nobody can reach anyone else's files. Details: [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
-- **Gen and Aux keys:** HydatekOS's own modifiers. **Gen** is the shortcut key
-  (the Ctrl key, or ⌘ on a Mac; the Hydatek key beside it works too): Gen+S saves, Gen+Space opens an app, Gen+/ shows
+- **Gen, Aux and the Hydatek key:** HydatekOS's own keys. **Gen** is the shortcut
+  key (the Ctrl key, or ⌘ on a Mac): Gen+S saves, Gen+Space opens an app, Gen+/ shows
   every shortcut, and menus show each one. **Aux** (Alt, or ⌥ Option) types
   special characters (Aux+N ₦, Aux+E €, Aux+- –) and switches windows with
-  Aux+Tab. The volume, brightness and sleep keys work, F11 maximises a window,
+  Aux+Tab. The **Hydatek key** (where Windows keyboards print ⊞) is the system
+  key: tap it for the start menu, or hold it for Hydatek+E (Files), +L (lock),
+  +D (desktop), +← / +→ (snap a window) and more. The volume, brightness and sleep keys work, F11 maximises a window,
   password boxes warn when Caps Lock is on, and every text box shares one line
   editor (word moves, Gen+Backspace, paste). Settings › Keyboard has a **key
   tester** that shows what each key sends. Details: [docs/KEYBOARD.md](docs/KEYBOARD.md).
@@ -192,7 +194,7 @@ covers putting HydatekOS on the internal disk next to another OS.
 
 | Action | How |
 |---|---|
-| Open any app | Grid button in the dock, the search icon in the menu bar, **Gen+Space** or **F1** |
+| Open any app | Tap the **Hydatek key**, the grid button in the dock, the search icon in the menu bar, **Gen+Space** or **F1** |
 | Ask Claude | The ✳ button first in the dock, or **Gen+Space** and type *Claude* |
 | Move / maximise a window | Drag the header / double-click it |
 | Resize a window | Drag the bottom-right corner |
@@ -203,9 +205,11 @@ covers putting HydatekOS on the internal disk next to another OS.
 | Save a note or document | **Gen+S** |
 | Bold / italic / underline in Hyda Scripts | **Gen+B** / **Gen+I** / **Gen+U** |
 | Rename / delete a file | **F2** / **Delete** (File menu has the same actions) |
-| Maximise a window | **F11**, or double-click its header |
+| Maximise a window | **F11**, **Hydatek+↑**, or double-click its header |
+| Snap a window to half the screen | **Hydatek+←** / **Hydatek+→** |
+| Show the desktop | **Hydatek+D** (again brings the windows back) |
 | Volume / brightness | Their keys, or `volume up` / `brightness down` in Terminal |
-| Lock the screen | **F12**, the Sleep key, the logo menu, or `lock` in Terminal |
+| Lock the screen | **F12**, **Hydatek+L**, the Sleep key, the logo menu, or `lock` in Terminal |
 | Switch account / sign out | Lock the screen and choose another picture / profile menu › **Sign Out** |
 | Shell commands | Open Terminal and type `help` |
 | Restart / shut down | HydatekOS logo menu, or Settings › About |

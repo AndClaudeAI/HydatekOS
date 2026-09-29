@@ -1,9 +1,10 @@
 //! HydatekOS's modifier keys, and what Aux types.
 //!
-//! - **Gen** (general) is the shortcut key: the key Windows calls Ctrl and a
-//!   Mac calls Command (⌘). The Hydatek key (the logo key beside it, which
-//!   carries the Hydatek Systems wordmark) works as Gen too. Settings ›
-//!   Keyboard can leave Ctrl to apps instead, and then the Hydatek key is Gen.
+//! - **Gen** (general) is the shortcut key: the Ctrl key (Command, ⌘, on a
+//!   Mac).
+//! - The **Hydatek key** (where Windows keyboards print ⊞) is the system
+//!   key, as the Windows key is: tapped it opens the start menu; held with
+//!   another key it runs a system shortcut (shell/mod.rs `hydatek`).
 //! - **Aux** (auxiliary) is the second modifier, like Alt on Windows and
 //!   Option on a Mac: the Alt key (⌥ Option on an Apple keyboard). Held with a
 //!   key it types a special character, following the Mac's Option layout where

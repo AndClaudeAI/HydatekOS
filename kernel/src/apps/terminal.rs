@@ -344,26 +344,24 @@ impl App for Terminal {
             Key::PageDown => return self.scroll = (self.scroll - 10).max(0),
             _ => self.scroll = 0,
         }
-        let ctrl = |c: char| k == Key::Ctrl(c);
+        let gen_key = |c: char| gen && k == Key::Char(c);
         match k {
-            Key::Char('l') if gen => self.out.clear(),
-            _ if ctrl('l') => self.out.clear(),
-            Key::Char('c') if gen => self.cancel_line(),
-            _ if ctrl('c') => self.cancel_line(),
-            // the Unix shell's Ctrl keys (when Ctrl isn't Gen): line start
-            // and end, cut to the start / end, and the word before
-            _ if ctrl('a') => self.input.home(),
-            _ if ctrl('e') => self.input.end(),
-            _ if ctrl('u') => {
+            // the Unix shell's Ctrl keys, on Gen (which is Ctrl): clear the
+            // screen, cancel the line, line start and end, cut to the start /
+            // end (Gen+W closes the window, so the word goes with Gen+Backspace)
+            _ if gen_key('l') => self.out.clear(),
+            _ if gen_key('c') => self.cancel_line(),
+            _ if gen_key('a') => self.input.home(),
+            _ if gen_key('e') => self.input.end(),
+            _ if gen_key('u') => {
                 let rest = self.input.text[self.input.before_caret().len()..].to_string();
                 self.input.set(rest);
                 self.input.home();
             }
-            _ if ctrl('k') => {
+            _ if gen_key('k') => {
                 let keep = self.input.before_caret().to_string();
                 self.input.set(keep);
             }
-            _ if ctrl('w') => self.input.backspace(true),
             Key::Esc => self.input.clear(),
             Key::Enter => {
                 let line = core::mem::take(&mut self.input.text);

@@ -8,7 +8,7 @@ use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTe
 use crate::ui::{Key, Media};
 use alloc::vec::Vec;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Modifiers held for the most recent key (only firmware with the extended
 /// text input protocol reports them).
@@ -17,9 +17,8 @@ const M_SHIFT: u32 = 1;
 const M_CTRL: u32 = 2;
 /// Alt, or ⌥ Option on an Apple keyboard: HydatekOS's Aux key
 const M_AUX: u32 = 4;
+/// the Hydatek key (where Windows keyboards print ⊞): HydatekOS's system key
 const M_LOGO: u32 = 8;
-/// Ctrl works as the Gen key (a per-account setting; on by default).
-static CTRL_IS_GEN: AtomicBool = AtomicBool::new(true);
 /// Caps, Num and Scroll Lock as the firmware last reported them (efi.rs
 /// TOGGLE_* bits; 0 until a key says)
 static TOGGLES: AtomicU32 = AtomicU32::new(0);
@@ -106,26 +105,18 @@ pub fn aux() -> bool {
     held(M_AUX)
 }
 
-/// The logo key (⊞ Windows, ⌘ Command) was held for the most recent key.
-pub fn logo() -> bool {
-    held(M_LOGO)
-}
-
-pub fn set_ctrl_is_gen(on: bool) {
-    CTRL_IS_GEN.store(on, Ordering::Relaxed);
-}
-
-pub fn ctrl_is_gen() -> bool {
-    CTRL_IS_GEN.load(Ordering::Relaxed)
-}
-
 pub enum Ev {
     Move,
     Down,
     Up,
     RightDown,
     Scroll(i32),
+    /// a key and whether Gen (Ctrl) is held
     Key(Key, bool),
+    /// a key pressed with the Hydatek key held (lower case): a system shortcut
+    Hydatek(Key),
+    /// the Hydatek key pressed and let go on its own: the start menu
+    HydatekTap,
 }
 
 enum Ptr {
@@ -146,6 +137,14 @@ pub struct Input {
     right: bool,
     acc: (i32, i32),
     scroll_acc: i32,
+    /// the Hydatek key is down: Some(true) once another key was pressed with it
+    hydatek: Option<bool>,
+    /// the firmware reports which modifiers are held between key strokes
+    held_known: bool,
+    /// polls since starting, and the last poll a lone Hydatek key stroke came
+    /// in (firmware that only reports strokes)
+    polls: u64,
+    lone: Option<u64>,
 }
 
 impl Input {
@@ -185,7 +184,17 @@ impl Input {
         }
         log!("pointers: {} (firmware abs {}, simple {})", ptrs.len(), abs, simple);
         let kbd_ex = efi::handle_protocol::<SimpleTextInputEx>(st.console_in_handle, &efi::TEXT_INPUT_EX_GUID);
-        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0 }
+        if let Some(k) = kbd_ex {
+            // ask for strokes of modifiers alone (the Hydatek key tapped on its
+            // own), keeping the lock keys as they are
+            let mut d = efi::KeyData::default();
+            unsafe { ((*k).read_key_stroke_ex)(k, &mut d) };
+            let locks = if d.state.toggle_state & efi::TOGGLE_STATE_VALID != 0 { d.state.toggle_state & 0x07 } else { 0 };
+            let mut t = efi::TOGGLE_STATE_VALID | efi::KEY_STATE_EXPOSED | locks;
+            let st = unsafe { ((*k).set_state)(k, &mut t) };
+            log!("input: partial keys {}", if st == efi::SUCCESS { "reported" } else { "not supported" });
+        }
+        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None }
     }
 
     pub fn pointer_count(&self) -> usize {
@@ -280,11 +289,18 @@ impl Input {
             out.push(Ev::Scroll(z.signum()));
         }
         // keyboard
+        self.polls += 1;
+        // is the Hydatek key held? (when the firmware says between strokes)
+        let mut logo_held: Option<bool> = None;
         for _ in 0..16 {
             let (key, shift, toggles) = match self.kbd_ex {
                 Some(k) => {
                     let mut d = efi::KeyData::default();
                     if unsafe { ((*k).read_key_stroke_ex)(k, &mut d) } != efi::SUCCESS {
+                        // UEFI 2.3.1+: the modifiers held come back with NOT_READY
+                        if d.state.shift_state & efi::SHIFT_STATE_VALID != 0 {
+                            logo_held = Some(d.state.shift_state & (efi::LEFT_LOGO | efi::RIGHT_LOGO) != 0);
+                        }
                         break;
                     }
                     if d.state.toggle_state & efi::TOGGLE_STATE_VALID != 0 {
@@ -309,6 +325,17 @@ impl Input {
                 }
             }
             record(key.scan_code, key.unicode_char, mods, toggles);
+            if mods & M_LOGO != 0 {
+                logo_held = Some(true);
+            }
+            if key.scan_code == 0 && key.unicode_char == 0 {
+                // a modifier alone: note a lone Hydatek key
+                if mods & M_LOGO != 0 {
+                    self.hydatek.get_or_insert(false);
+                    self.lone = Some(self.polls);
+                }
+                continue;
+            }
             // Ctrl+letter arrives as a control character even without the
             // extended protocol
             let Some((k, ctrl_char)) = map_key(key, mods & M_CTRL != 0) else { continue };
@@ -316,23 +343,60 @@ impl Input {
                 mods |= M_CTRL;
             }
             MODS.store(mods, Ordering::Relaxed);
+            if mods & M_LOGO != 0 {
+                self.hydatek = Some(true);
+                self.lone = None;
+            }
             out.push(gen_key(k, mods));
+        }
+        // the Hydatek key tapped on its own opens the start menu
+        match logo_held {
+            Some(true) => {
+                self.hydatek.get_or_insert(false);
+            }
+            Some(false) => {
+                if !self.held_known {
+                    self.held_known = true;
+                    log!("input: firmware reports held modifiers");
+                }
+                if self.hydatek.take() == Some(false) {
+                    out.push(Ev::HydatekTap);
+                }
+                self.lone = None;
+            }
+            None => {}
+        }
+        // firmware that doesn't say when it's let go: a lone stroke with
+        // nothing after it for a third of a second
+        if !self.held_known {
+            if let Some(at) = self.lone {
+                if self.polls > at + 30 {
+                    self.lone = None;
+                    if self.hydatek.take() == Some(false) {
+                        out.push(Ev::HydatekTap);
+                    }
+                }
+            }
         }
     }
 }
 
-/// The event for a key and the modifiers held (see keymap.rs): the Gen key
-/// is the logo key, or Ctrl while Ctrl works as Gen. Otherwise Ctrl+letter is
-/// `Key::Ctrl`, so it never types the letter. Aux+key types a special
-/// character, or is `Key::Aux`; Aux+← and Aux+→ move by word, as Gen+← does.
+/// The event for a key and the modifiers held (see keymap.rs): Gen is Ctrl.
+/// With the Hydatek key held it's a system shortcut (`Ev::Hydatek`). Aux+key
+/// types a special character, or is `Key::Aux`; Aux+← and Aux+→ move by
+/// word, as Gen+← does.
 fn gen_key(k: Key, mods: u32) -> Ev {
-    let ctrl = mods & M_CTRL != 0;
+    let gen = mods & M_CTRL != 0;
     let aux = mods & M_AUX != 0;
-    let gen = mods & M_LOGO != 0 || (ctrl && ctrl_is_gen());
+    if mods & M_LOGO != 0 {
+        return Ev::Hydatek(match k {
+            Key::Char(c) => Key::Char(c.to_ascii_lowercase()),
+            k => k,
+        });
+    }
     match k {
         // Gen+Shift+Z and Gen+z are the same shortcut
         Key::Char(c) if gen => Ev::Key(Key::Char(c.to_ascii_lowercase()), true),
-        Key::Char(c) if ctrl && c.is_ascii_alphabetic() => Ev::Key(Key::Ctrl(c.to_ascii_lowercase()), false),
         Key::Char(c) if aux => match crate::keymap::aux_char(c) {
             Some(special) => Ev::Key(Key::Char(special), false),
             None => Ev::Key(Key::Aux(c.to_ascii_lowercase()), false),
@@ -341,7 +405,7 @@ fn gen_key(k: Key, mods: u32) -> Ev {
         // the PC's old editing keys: Shift+Insert pastes, Gen+Insert copies,
         // Shift+Delete cuts
         Key::Insert if mods & M_SHIFT != 0 => Ev::Key(Key::Char('v'), true),
-        Key::Insert if gen || ctrl => Ev::Key(Key::Char('c'), true),
+        Key::Insert if gen => Ev::Key(Key::Char('c'), true),
         Key::Delete if mods & M_SHIFT != 0 && !gen => Ev::Key(Key::Char('x'), true),
         k => Ev::Key(k, gen),
     }

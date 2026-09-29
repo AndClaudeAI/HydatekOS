@@ -172,6 +172,8 @@ pub struct Shell {
     sheet: bool,
     /// the volume or brightness level showing after its key, until a tick
     osd: Option<(Osd, u64)>,
+    /// windows Hydatek+D put away, to bring back on the next Hydatek+D
+    peeked: Vec<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,6 +215,7 @@ impl Shell {
             signed_out: false,
             sheet: false,
             osd: None,
+            peeked: vec![],
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -664,6 +667,98 @@ impl Shell {
                 self.dirty = true;
                 self.key(k, gen);
             }
+            // the keyboard tester shows these; otherwise they're the system's
+            Ev::HydatekTap if !self.sys.key_test => {
+                self.dirty = true;
+                self.hydatek_tap();
+            }
+            Ev::Hydatek(k) if !self.sys.key_test => {
+                self.dirty = true;
+                self.hydatek(k);
+            }
+            Ev::HydatekTap | Ev::Hydatek(_) => {}
+        }
+    }
+
+    /// The Hydatek key on its own: the start menu (the app launcher), as the
+    /// Windows key opens Start. On the phone layout it goes home.
+    fn hydatek_tap(&mut self) {
+        self.sheet = false;
+        self.menu = None;
+        if self.mobile_mode() {
+            return self.local.act(MobileAct::Home, &mut self.sys);
+        }
+        self.launcher = if self.launcher.is_some() { None } else { Some(Default::default()) };
+    }
+
+    /// Hydatek+key: the system's shortcuts, as the Windows key's are.
+    fn hydatek(&mut self, k: Key) {
+        self.sheet = false;
+        self.menu = None;
+        match k {
+            Key::Char(' ') | Key::Char('r') | Key::Char('s') => self.launcher = Some(Default::default()),
+            Key::Char('e') => self.open_app(AppKind::Files),
+            Key::Char('i') => self.open_app(AppKind::Settings),
+            Key::Char('c') => self.open_app(AppKind::Assistant),
+            Key::Char('l') => self.lock_now(),
+            Key::Char('x') => {
+                // the HydatekOS menu: profile, lock, sign out, restart, shut down
+                self.launcher = None;
+                self.menu = Some(0);
+            }
+            Key::Char('/') => self.sheet = true,
+            Key::Char(c @ '1'..='9') => {
+                if let Some(app) = DOCK_APPS.get(c as usize - '1' as usize) {
+                    self.open_app(*app);
+                }
+            }
+            _ if self.mobile_mode() => {}
+            Key::Char('d') => {
+                // show the desktop; again brings the windows back
+                let open: Vec<u32> = self.wins.iter().filter(|w| !w.min).map(|w| w.id).collect();
+                if open.is_empty() {
+                    for id in core::mem::take(&mut self.peeked) {
+                        if let Some(i) = self.win_idx(id) {
+                            self.wins[i].min = false;
+                        }
+                    }
+                } else {
+                    for w in self.wins.iter_mut() {
+                        w.min = true;
+                    }
+                    self.peeked = open;
+                }
+            }
+            Key::Char('m') => {
+                for w in self.wins.iter_mut() {
+                    w.min = true;
+                }
+                self.peeked.clear();
+            }
+            Key::Tab => self.cycle_windows(crate::input::shift()),
+            Key::Up => {
+                if let Some(i) = self.top() {
+                    self.wins[i].max = true;
+                }
+            }
+            Key::Down => {
+                if let Some(i) = self.top() {
+                    let w = &mut self.wins[i];
+                    if w.max { w.max = false } else { w.min = true }
+                }
+            }
+            Key::Left | Key::Right => {
+                // snap the front window to half the screen
+                let wa = self.work_area();
+                if let Some(i) = self.top() {
+                    let half = wa.w / 2;
+                    let x = if k == Key::Left { wa.x } else { wa.x + wa.w - half };
+                    let w = &mut self.wins[i];
+                    w.max = false;
+                    w.r = Rect::new(x, wa.y, half, wa.h + 10);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1000,7 +1095,7 @@ impl Shell {
         if !self.mobile_mode() {
             // window switching: the logo key or Aux (Ctrl+Tab stays with the
             // app: some firmware sends Ctrl+I as Tab)
-            if k == Key::Tab && (crate::input::logo() || crate::input::aux()) {
+            if k == Key::Tab && crate::input::aux() {
                 return self.cycle_windows(crate::input::shift());
             }
             match (k, gen) {
@@ -1366,7 +1461,9 @@ impl Shell {
         ui.rect(Rect::new(0, 0, self.w, self.h), Color::rgba(0x100e18, 90));
         ui.zone(Rect::new(0, 0, self.w, self.h), Action::Background);
         let pw = 580.min(self.w - 40);
-        let panel = Rect::new((self.w - pw) / 2, (self.h - 440) / 2, pw, 400);
+        // room for every app (rows of five) and the hint under them
+        let ph = 84 + (DESKTOP_APPS.len() as i32 + 4) / 5 * 108 + 36;
+        let panel = Rect::new((self.w - pw) / 2, (self.h - ph - 40) / 2, pw, ph);
         ui.shadow(panel, 24, 20, 10, 90);
         ui.rrect(panel, 24, t.surface);
         ui.zone(panel, Action::Swallow);
@@ -1551,7 +1648,7 @@ impl Shell {
         ui.shadow(panel, 24, 20, 10, 90);
         ui.rrect(panel, 24, t.surface);
         ui.text(panel.x + 32, panel.y + 46, Face::Semibold, 22, "Keyboard shortcuts", t.text);
-        let what = if crate::input::ctrl_is_gen() { "Gen is the Ctrl key, or ⌘ on a Mac (the Hydatek key works too). Aux is Alt, or ⌥ Option." } else { "Gen is the Hydatek key, or ⌘ on a Mac. Aux is Alt, or ⌥ Option." };
+        let what = "Gen is the Ctrl key (⌘ on a Mac). Aux is Alt, or ⌥ Option. Tap the Hydatek key for the start menu.";
         let what = ui.fit(Face::Regular, 13, what, pw - 64);
         ui.text(panel.x + 32, panel.y + 70, Face::Regular, 13, &what, t.text2);
         let cw = (pw - 64) / cols as i32;

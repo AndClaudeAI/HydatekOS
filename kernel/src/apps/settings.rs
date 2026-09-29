@@ -102,6 +102,13 @@ impl Tester {
             if !name.is_empty() && !self.seen.contains(&name) {
                 self.seen.push(name);
             }
+            // a modifier pressed on its own comes first when it's held for a
+            // key: show the pair once ("Gen+C", not "Gen" then "Gen+C")
+            let alone = |r: &crate::input::Raw| r.scan == 0 && r.unicode == 0;
+            let carries = |l: &crate::input::Raw| (!l.shift || r.shift) && (!l.ctrl || r.ctrl) && (!l.aux || r.aux) && (!l.logo || r.logo);
+            if self.log.last().map_or(false, |l| alone(l) && carries(l)) {
+                self.log.pop();
+            }
             self.log.push(r);
             if self.log.len() > 5 {
                 self.log.remove(0);
@@ -111,12 +118,10 @@ impl Tester {
     }
 }
 
-/// "Gen+Shift+S": a stroke with its modifiers.
-/// The Ctrl key is Gen (and the Hydatek key too), unless Ctrl is left to apps.
-fn stroke_label(r: &crate::input::Raw, ctrl_gen: bool) -> String {
+/// "Gen+Shift+S": a stroke with its modifiers (Ctrl is Gen).
+fn stroke_label(r: &crate::input::Raw) -> String {
     let mut s = String::new();
-    let gen = r.logo || (r.ctrl && ctrl_gen);
-    for (on, name) in [(gen, "Gen"), (r.ctrl && !ctrl_gen, "Ctrl"), (r.aux, "Aux"), (r.shift, "Shift")] {
+    for (on, name) in [(r.logo, "Hydatek"), (r.ctrl, "Gen"), (r.aux, "Aux"), (r.shift, "Shift")] {
         if on {
             s.push_str(name);
             s.push('+');
@@ -173,11 +178,14 @@ impl Settings {
         let top = m.y;
         card(ui, Rect::new(m.x, top, m.w, 204));
         let gen_about = "Gen is HydatekOS's shortcut key: the key Windows calls Ctrl and a Mac calls Command. Hold it and press a letter: Gen+S saves, Gen+C copies, Gen+Space opens an app.";
-        let y = intro(ui, top, "The Gen key", gen_about, "Gen", if sys.ctrl_gen { "Ctrl" } else { "Hydatek" }, "⌘");
+        let y = intro(ui, top, "The Gen key", gen_about, "Gen", "Ctrl", "⌘");
         ui.rect(Rect::new(m.x + 16, y + 2, m.w - 32, 1), t.line);
-        let sub = if sys.ctrl_gen { "The Hydatek key beside it works as Gen too" } else { "Off: only the Hydatek key is Gen, and apps get Ctrl (Terminal: Ctrl+C cancels a line)" };
-        row(ui, Rect::new(m.x + 16, y, m.w - 32, 60), y + 8, "Ctrl is the Gen key", sub);
-        ui.switch(m.r() - 54, y + 16, sys.ctrl_gen, Action::App(inst, C_CTRL_GEN));
+        // the Hydatek key, beside Gen
+        let hw = keycaps(ui, m.x + 16, y + 30, "Hydatek", 13);
+        let hx = m.x + 16 + hw + 12;
+        ui.text(hx, y + 26, Face::Semibold, 13, "The Hydatek key: HydatekOS's system key", t.text);
+        let about = ui.fit(Face::Regular, 12, "Tap: start menu. Hold: +E Files, +L lock, +D desktop.", m.r() - 16 - hx);
+        ui.text(hx, y + 44, Face::Regular, 12, &about, t.text2);
 
         // Aux
         let top = top + 218;
@@ -207,7 +215,7 @@ impl Settings {
 
     /// The keyboard tester: a picture of the keyboard lighting up, the lock
     /// keys and the last strokes as the firmware reported them.
-    fn render_tester(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+    fn render_tester(&mut self, ui: &mut Ui, m: Rect, _sys: &Sys, inst: u32) {
         let Some(ts) = self.tester.as_ref() else { return };
         let t = ui.t;
         ui.text(m.x, m.y + 18, Face::Semibold, 15, "Keyboard test", t.text);
@@ -248,8 +256,6 @@ impl Settings {
                     (t.chip, t.text2)
                 };
                 ui.rrect(r, 5, bg);
-                // the Ctrl key is Gen, unless it's left to apps
-                let label = if *name == "Ctrl" && !sys.ctrl_gen { &"Ctrl" } else { label };
                 if *label == "Hydatek" {
                     ui.brand(Rect::new(r.x + 2, r.y + 3, r.w - 4, r.h - 6), fg);
                 } else if !label.is_empty() {
@@ -288,7 +294,7 @@ impl Settings {
         }
         for (i, r) in ts.log.iter().rev().enumerate() {
             let ry = y + 4 + i as i32 * rh;
-            let label = ui.fit(Face::Semibold, 13, &stroke_label(r, sys.ctrl_gen), m.w - 230);
+            let label = ui.fit(Face::Semibold, 13, &stroke_label(r), m.w - 230);
             ui.text(m.x + 16, ry + 20, Face::Semibold, 13, &label, if i == 0 { t.text } else { t.text2 });
             let code = format!("scan {:#06x}  char {:#06x}", r.scan, r.unicode);
             let cw = ui.tw(Face::Mono, 11, &code);
@@ -522,7 +528,6 @@ const C_ACC_NAME: u32 = 27;
 const C_ACC_ADD: u32 = 28;
 const C_ACC_ADMIN: u32 = 29;
 const C_ACC_CANCEL: u32 = 30;
-const C_CTRL_GEN: u32 = 31;
 const C_SHORTCUTS: u32 = 32;
 const C_CLAUDE_KEY: u32 = 33;
 const C_CLAUDE_SAVE: u32 = 34;
@@ -826,12 +831,6 @@ impl App for Settings {
             C_KEY_TEST_DONE => {
                 self.tester = None;
                 sys.key_test = false;
-                return;
-            }
-            C_CTRL_GEN => {
-                sys.ctrl_gen = !sys.ctrl_gen;
-                crate::input::set_ctrl_is_gen(sys.ctrl_gen);
-                sys.reqs.push(Req::SaveSettings);
                 return;
             }
             C_SHORTCUTS => {

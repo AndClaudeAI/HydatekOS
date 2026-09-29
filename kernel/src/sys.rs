@@ -71,8 +71,6 @@ pub struct Sys {
     pub focus: bool,
     pub mobile_shell: bool,
     pub pointer_speed: i32,
-    /// Ctrl works as the Gen key (the logo key always does)
-    pub ctrl_gen: bool,
     /// the address bar's search engine (an id from web::engines)
     pub search_engine: String,
     pub fs: Vfs,
@@ -197,7 +195,6 @@ impl Sys {
             focus: false,
             mobile_shell: false,
             pointer_speed: 3,
-            ctrl_gen: true,
             search_engine: String::from(crate::web::engines::HYDA),
             fs,
             now,
@@ -290,7 +287,6 @@ impl Sys {
         self.focus = false;
         self.mobile_shell = false;
         self.pointer_speed = 3;
-        self.ctrl_gen = true;
         self.search_engine = String::from(crate::web::engines::HYDA);
         self.lock_on_boot = true;
         self.lock_idle = 10;
@@ -492,19 +488,17 @@ impl Sys {
                 "lockboot" => self.lock_on_boot = b,
                 "lockidle" => self.lock_idle = v.parse().unwrap_or(10),
                 "engine" => self.search_engine = crate::web::engines::by_id(v).id.to_string(),
-                "ctrlgen" => self.ctrl_gen = b,
                 "volume" => self.volume = v.parse::<u8>().unwrap_or(50).min(100),
                 "muted" => self.muted = b,
                 "brightness" => self.brightness = v.parse::<u8>().unwrap_or(100).clamp(MIN_BRIGHTNESS, 100),
                 _ => {}
             }
         }
-        crate::input::set_ctrl_is_gen(self.ctrl_gen);
     }
 
     pub fn save_settings(&mut self) {
         let s = format!(
-            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nctrlgen={}\nvolume={}\nmuted={}\nbrightness={}\n",
+            "dark={}\naccent={}\nwifi={}\nbluetooth={}\nfocus={}\nmobile={}\npointer={}\ndemo={}\nlockboot={}\nlockidle={}\nengine={}\nvolume={}\nmuted={}\nbrightness={}\n",
             self.dark as u8,
             self.accent,
             self.wifi as u8,
@@ -516,7 +510,6 @@ impl Sys {
             self.lock_on_boot as u8,
             self.lock_idle,
             self.search_engine,
-            self.ctrl_gen as u8,
             self.volume,
             self.muted as u8,
             self.brightness

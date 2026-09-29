@@ -2,10 +2,10 @@
 //! keycaps for drawing them.
 //!
 //! **Gen** is HydatekOS's shortcut key, like Ctrl on Windows and Command on a
-//! Mac: the Ctrl key (⌘ on Apple keyboards). The Hydatek key beside it (⊞ on
-//! Windows keyboards; drawn with the Hydatek Systems wordmark, keycap
-//! "Hydatek") works as Gen too, and is the only Gen when Settings › Keyboard
-//! leaves Ctrl to apps.
+//! Mac: the Ctrl key (⌘ on Apple keyboards). The **Hydatek key** beside it
+//! (⊞ on Windows keyboards; drawn with the Hydatek Systems wordmark, keycap
+//! "Hydatek") is the system key, as the Windows key is: tapped it opens the
+//! start menu, held it runs Hydatek+E, +L, +D and the others below.
 
 use crate::font::Face;
 use crate::gfx::Rect;
@@ -75,6 +75,20 @@ pub const SHEET: &[Group] = &[
             ("Aux+8", "•  bullet (0 °)"),
             ("Aux+[", "“  quotes (Shift: ”)"),
             ("Aux+G", "©  (R ®, 2 ™)"),
+        ],
+    },
+    Group {
+        title: "Hydatek key",
+        keys: &[
+            ("Hydatek", "Start menu (tap it)"),
+            ("Hydatek+E", "Files"),
+            ("Hydatek+C", "Claude"),
+            ("Hydatek+L", "Lock the screen"),
+            ("Hydatek+D", "Show the desktop"),
+            ("Hydatek+←", "Snap left (→ right)"),
+            ("Hydatek+↑", "Maximise (↓ restore)"),
+            ("Hydatek+X", "HydatekOS menu"),
+            ("Hydatek+1", "Dock apps (1 to 9)"),
         ],
     },
 ];

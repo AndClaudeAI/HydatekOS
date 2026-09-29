@@ -168,7 +168,7 @@ pub struct SimpleTextInputEx {
     pub reset: extern "efiapi" fn(*mut SimpleTextInputEx, bool) -> Status,
     pub read_key_stroke_ex: extern "efiapi" fn(*mut SimpleTextInputEx, *mut KeyData) -> Status,
     pub wait_for_key_ex: Event,
-    pub set_state: Fp,
+    pub set_state: extern "efiapi" fn(*mut SimpleTextInputEx, *mut u8) -> Status,
     pub register_key_notify: Fp,
     pub unregister_key_notify: Fp,
 }
@@ -185,6 +185,8 @@ pub const RIGHT_LOGO: u32 = 0x40;
 pub const LEFT_LOGO: u32 = 0x80;
 /// KeyState.toggle_state bits
 pub const TOGGLE_STATE_VALID: u8 = 0x80;
+/// report keys that make no character (a modifier pressed alone)
+pub const KEY_STATE_EXPOSED: u8 = 0x40;
 pub const SCROLL_LOCK: u8 = 0x01;
 pub const NUM_LOCK: u8 = 0x02;
 pub const CAPS_LOCK: u8 = 0x04;
