@@ -12,7 +12,7 @@ use alloc::boxed::Box;
 
 use super::wallpaper;
 
-const GRID: [AppKind; 8] = [AppKind::Files, AppKind::Browser, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Music, AppKind::Camera, AppKind::Settings];
+const GRID: [AppKind; 8] = [AppKind::Files, AppKind::Browser, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Music, AppKind::Assistant, AppKind::Settings];
 const DOCK: [AppKind; 4] = [AppKind::Phone, AppKind::Messages, AppKind::Browser, AppKind::Camera];
 
 pub struct Mobile {

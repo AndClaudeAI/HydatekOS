@@ -28,6 +28,10 @@ Windows, macOS or Linux.
 |---|---|---|
 | ![Choosing an account](docs/screenshots/accounts-chooser.png) | ![Settings › Accounts](docs/screenshots/accounts-settings.png) | ![Welcome](docs/screenshots/accounts-welcome.png) |
 
+| Meeting Claude, the assistant | Asking Claude | Settings › Assistant |
+|---|---|---|
+| ![Meet Claude](docs/screenshots/assistant-setup.png) | ![Claude](docs/screenshots/assistant-chat.png) | ![Settings › Assistant](docs/screenshots/assistant-settings.png) |
+
 | Setup assistant | Choosing a profile picture | Settings › Profile |
 |---|---|---|
 | ![Setup assistant](docs/screenshots/setup-welcome.png) | ![Picture](docs/screenshots/setup-picture.png) | ![Settings › Profile](docs/screenshots/settings-profile.png) |
@@ -51,6 +55,12 @@ Windows, macOS or Linux.
   menu bar, the desktop greets you, and documents you make carry your name as
   their author (in Word, Excel, PowerPoint and PDF files too). Change it all in
   Settings › Profile. Details: [docs/PROFILE.md](docs/PROFILE.md).
+- **Claude, the assistant:** HydatekOS's assistant is Claude, made by Anthropic.
+  The setup assistant introduces it and takes your Anthropic API key, or you can
+  add the key later in Settings › Assistant. Then ask Claude anything from its app,
+  first in the dock. Requests go straight to Anthropic's API over HydatekOS's own
+  TLS, carrying only what you type. It uses the newest Opus model your key can
+  use. Details: [docs/ASSISTANT.md](docs/ASSISTANT.md).
 - **Accounts:** several people can share the computer, each with their own home
   folder, Bin, settings, sign-in, calendar and search. A Shared folder is common
   to all. Administrators add, remove and promote accounts in Settings › Accounts,
@@ -180,6 +190,7 @@ covers putting HydatekOS on the internal disk next to another OS.
 | Action | How |
 |---|---|
 | Open any app | Grid button in the dock, the search icon in the menu bar, **Gen+Space** or **F1** |
+| Ask Claude | The ✳ button first in the dock, or **Gen+Space** and type *Claude* |
 | Move / maximise a window | Drag the header / double-click it |
 | Resize a window | Drag the bottom-right corner |
 | Close the front window | **Gen+W** or the orange button |

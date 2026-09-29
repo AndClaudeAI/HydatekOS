@@ -16,7 +16,7 @@ pub const ACCEPT_CSS: &str = "text/css,*/*;q=0.1";
 /// Image requests ask for the formats HydatekOS decodes.
 pub const ACCEPT_IMAGE: &str = "image/png,image/jpeg,image/gif,image/bmp;q=0.9,image/*;q=0.5,*/*;q=0.3";
 
-pub fn request(method: &str, url: &Url, body: &[u8], content_type: &str, cookies: &str, accept: &str, referer: &str) -> Vec<u8> {
+pub fn request(method: &str, url: &Url, body: &[u8], content_type: &str, cookies: &str, accept: &str, referer: &str, extra: &[(String, String)]) -> Vec<u8> {
     let mut h = format!(
         "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {}\r\nAccept-Language: en\r\nAccept-Encoding: gzip, deflate\r\nConnection: close\r\n",
         method,
@@ -33,6 +33,12 @@ pub fn request(method: &str, url: &Url, body: &[u8], content_type: &str, cookies
     }
     if method == "POST" {
         h.push_str(&format!("Content-Type: {}\r\nContent-Length: {}\r\n", content_type, body.len()));
+    }
+    for (k, v) in extra {
+        // a header can't carry a line break
+        if !k.contains(['\r', '\n', ':']) && !v.contains(['\r', '\n']) {
+            h.push_str(&format!("{}: {}\r\n", k, v));
+        }
     }
     h.push_str("\r\n");
     let mut out = h.into_bytes();

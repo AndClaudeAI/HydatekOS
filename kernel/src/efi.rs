@@ -183,6 +183,11 @@ pub const LEFT_ALT: u32 = 0x20;
 /// the Windows (⊞) key, or Command (⌘) on an Apple keyboard
 pub const RIGHT_LOGO: u32 = 0x40;
 pub const LEFT_LOGO: u32 = 0x80;
+/// KeyState.toggle_state bits
+pub const TOGGLE_STATE_VALID: u8 = 0x80;
+pub const SCROLL_LOCK: u8 = 0x01;
+pub const NUM_LOCK: u8 = 0x02;
+pub const CAPS_LOCK: u8 = 0x04;
 
 #[repr(C)]
 pub struct GopModeInfo {

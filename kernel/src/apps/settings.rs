@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 11] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "About"];
+pub const SECTIONS: [&str; 12] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -52,6 +52,12 @@ pub struct Settings {
     /// focused field: C_PIN_FIELD, C_PW_FIELD or 0
     focus: u32,
     pin_msg: String,
+    /// Assistant: the API key being typed, the models the key can use (once
+    /// asked for), the request asking, and the last message
+    claude_key: super::LineEdit,
+    models: Vec<crate::web::claude::Model>,
+    listing: Option<u32>,
+    claude_msg: String,
 }
 
 impl Settings {
@@ -60,7 +66,7 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new() }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new() }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
@@ -117,6 +123,74 @@ impl Settings {
         let mut x = m.x + 204;
         x += ui.text(x, y + 22, Face::Regular, 13, "or press", t.text3) + 8;
         keycaps(ui, x, y + 17, "Gen+/", 12);
+    }
+
+    /// The Assistant section: Claude, its API key and model.
+    fn render_assistant(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::web::claude;
+        let t = ui.t;
+        // about
+        card(ui, Rect::new(m.x, m.y, m.w, 104));
+        let badge = Rect::new(m.x + 16, m.y + 16, 40, 40);
+        ui.rrect(badge, 12, t.accent);
+        ui.icon_in(crate::icons::Icon::Spark, badge, 22, t.on_accent);
+        ui.text(m.x + 70, m.y + 32, Face::Semibold, 15, "Claude", t.text);
+        ui.text(m.x + 70, m.y + 50, Face::Regular, 12, "HydatekOS's assistant, made by Anthropic", t.text2);
+        let about = "Your messages go to Anthropic's API with your own key. Nothing else on this computer is sent.";
+        let about = ui.fit(Face::Regular, 12, about, m.w - 32);
+        ui.text(m.x + 16, m.y + 86, Face::Regular, 12, &about, t.text3);
+
+        // the key
+        let top = m.y + 118;
+        card(ui, Rect::new(m.x, top, m.w, 64));
+        let inner = Rect::new(m.x + 16, top, m.w - 32, 64);
+        let right = inner.r();
+        if self.focus == C_CLAUDE_KEY {
+            row(ui, inner, top + 6, "API key", "");
+            let f = Rect::new(right - 88 - 240, top + 16, 240, 32);
+            let dots: String = self.claude_key.text.chars().map(|_| '•').collect();
+            let before: String = self.claude_key.before_caret().chars().map(|_| '•').collect();
+            ui.field_at(f, &dots, &before, "Paste with Gen+V", true, Action::App(inst, C_CLAUDE_KEY));
+            ui.button(Rect::new(right - 80, top + 16, 80, 32), "Save", Action::App(inst, C_CLAUDE_SAVE), true);
+        } else if sys.has_claude() {
+            row(ui, inner, top + 6, "API key", &claude::key_hint(&sys.claude_key));
+            ui.button(Rect::new(right - 88 - 90, top + 16, 90, 32), "Change", Action::App(inst, C_CLAUDE_KEY), false);
+            ui.button(Rect::new(right - 80, top + 16, 80, 32), "Remove", Action::App(inst, C_CLAUDE_REMOVE), false);
+        } else {
+            row(ui, inner, top + 6, "API key", "Not set up: make one at console.anthropic.com");
+            ui.button(Rect::new(right - 110, top + 16, 110, 32), "Add key", Action::App(inst, C_CLAUDE_KEY), true);
+        }
+
+        // the model
+        let top = top + 78;
+        let n = self.models.len().min(6) as i32;
+        let h = 64 + if n > 0 { n * 36 + 8 } else { 0 };
+        card(ui, Rect::new(m.x, top, m.w, h));
+        let inner = Rect::new(m.x + 16, top, m.w - 32, 64);
+        let chosen = if sys.claude_model.is_empty() { String::from("The newest Opus your key can use") } else { sys.claude_model.clone() };
+        row(ui, inner, top + 6, "Model", &chosen);
+        if sys.has_claude() {
+            let label = if self.listing.is_some() { "Checking…" } else if self.models.is_empty() { "Choose…" } else { "Refresh" };
+            ui.button(Rect::new(inner.r() - 110, top + 16, 110, 32), label, Action::App(inst, C_CLAUDE_MODELS), false);
+        }
+        for (i, (id, name)) in self.models.iter().take(6).enumerate() {
+            let y = top + 64 + i as i32 * 36;
+            let rr = Rect::new(m.x + 4, y, m.w - 8, 34);
+            let a = Action::App(inst, C_MODEL + i as u32);
+            if ui.hot(a) {
+                ui.rrect(rr, 10, t.hover);
+            }
+            let on = sys.claude_model == *id;
+            ui.circle(m.x + 26, y + 17, 9, if on { t.accent } else { t.line });
+            ui.circle(m.x + 26, y + 17, if on { 4 } else { 7 }, if on { Color::rgb(0xFFFFFF) } else { t.surface });
+            let label = ui.fit(Face::Medium, 13, name, m.w - 70);
+            ui.text(m.x + 46, y + 22, Face::Medium, 13, &label, t.text);
+            ui.zone(rr, a);
+        }
+        let msg = if self.claude_msg.is_empty() { "Open Claude from the dock, or press Gen+Space and type Claude." } else { self.claude_msg.as_str() };
+        let msg = ui.fit(Face::Regular, 12, msg, m.w - 16);
+        ui.text(m.x + 8, top + h + 22, Face::Regular, 12, &msg, t.text2);
+        ui.button(Rect::new(m.x, top + h + 36, 130, 32), "Open Claude", Action::App(inst, C_CLAUDE_OPEN), true);
     }
 
     /// The Accounts section: everyone who uses this computer.
@@ -275,7 +349,14 @@ const C_ACC_ADMIN: u32 = 29;
 const C_ACC_CANCEL: u32 = 30;
 const C_CTRL_GEN: u32 = 31;
 const C_SHORTCUTS: u32 = 32;
+const C_CLAUDE_KEY: u32 = 33;
+const C_CLAUDE_SAVE: u32 = 34;
+const C_CLAUDE_REMOVE: u32 = 35;
+const C_CLAUDE_MODELS: u32 = 36;
+const C_CLAUDE_OPEN: u32 = 37;
 const C_PICK: u32 = 1000;
+/// + model index
+const C_MODEL: u32 = 1400;
 /// + account index
 const C_ACC_TYPE: u32 = 1100;
 const C_ACC_REMOVE: u32 = 1200;
@@ -348,6 +429,7 @@ impl App for Settings {
             0 => self.render_profile(ui, m, sys, inst),
             1 => self.render_accounts(ui, m, sys, inst),
             3 => self.render_keyboard(ui, m, sys, inst),
+            10 => self.render_assistant(ui, m, sys, inst),
             2 => {
                 card(ui, Rect::new(m.x, m.y, m.w, 190));
                 let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
@@ -549,7 +631,7 @@ impl App for Settings {
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
         let was = self.focus;
-        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN].contains(&code) { code } else { 0 };
+        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN, C_CLAUDE_KEY].contains(&code) { code } else { 0 };
         if self.focus == C_ACC_ADMIN {
             self.focus = C_ACC_NAME;
         }
@@ -618,6 +700,54 @@ impl App for Settings {
                         Ok(()) => format!("Removed {}'s account and files.", name),
                         Err(e) => String::from(e),
                     };
+                }
+                return;
+            }
+            C_CLAUDE_KEY => {
+                if was != C_CLAUDE_KEY {
+                    self.claude_key.clear();
+                }
+                return;
+            }
+            C_CLAUDE_SAVE => {
+                let k = String::from(self.claude_key.text.trim());
+                if crate::web::claude::key_ok(&k) {
+                    sys.claude_key = k;
+                    sys.claude_model.clear();
+                    sys.save_assistant();
+                    self.claude_key.clear();
+                    self.models.clear();
+                    self.claude_msg = String::from("Key saved. Claude is ready.");
+                } else {
+                    self.focus = C_CLAUDE_KEY;
+                    self.claude_msg = String::from("That isn't an Anthropic API key: they start with sk-ant-");
+                }
+                return;
+            }
+            C_CLAUDE_REMOVE => {
+                sys.claude_key.clear();
+                sys.claude_model.clear();
+                sys.save_assistant();
+                self.models.clear();
+                self.claude_msg = String::from("Key removed from this computer.");
+                return;
+            }
+            C_CLAUDE_MODELS => {
+                if sys.has_claude() && self.listing.is_none() {
+                    self.listing = Some(sys.web.get_api(crate::web::claude::MODELS_URL, crate::web::claude::headers(&sys.claude_key)));
+                    self.claude_msg.clear();
+                }
+                return;
+            }
+            C_CLAUDE_OPEN => {
+                sys.reqs.push(Req::Open(AppKind::Assistant));
+                return;
+            }
+            c if (C_MODEL..C_MODEL + 6).contains(&c) => {
+                if let Some(m) = self.models.get((c - C_MODEL) as usize) {
+                    sys.claude_model = m.0.clone();
+                    sys.save_assistant();
+                    self.claude_msg = format!("Claude will use {}.", m.1);
                 }
                 return;
             }
@@ -755,7 +885,18 @@ impl App for Settings {
         }
     }
 
-    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
+        if self.focus == C_CLAUDE_KEY {
+            match k {
+                Key::Enter => self.action(C_CLAUDE_SAVE, false, sys),
+                Key::Esc => self.focus = 0,
+                Key::Char(' ') => {}
+                _ => {
+                    self.claude_key.key_sys(k, gen, sys);
+                }
+            }
+            return;
+        }
         if self.focus == C_ACC_NAME {
             match k {
                 Key::Char(c) if !c.is_control() && self.acc_name.chars().count() < crate::profile::NAME_MAX => self.acc_name.push(c),
@@ -801,6 +942,19 @@ impl App for Settings {
     }
 
     fn tick(&mut self, sys: &mut Sys) {
+        if let Some(id) = self.listing {
+            if let Some(res) = sys.web.take(id) {
+                self.listing = None;
+                match res.and_then(|r| crate::web::claude::models(r.status, &r.body)) {
+                    // Claude models only, newest first
+                    Ok(list) => {
+                        self.models = list.into_iter().filter(|m| m.0.starts_with("claude")).collect();
+                        self.claude_msg = String::from("Choose a model. The newest Opus is the default.");
+                    }
+                    Err(e) => self.claude_msg = e,
+                }
+            }
+        }
         if let Some(i) = sys.settings_page.take() {
             self.sec = i.min(SECTIONS.len() - 1);
             self.page = true;

@@ -16,7 +16,8 @@ pub struct Terminal {
     login: String,
     cwd: String,
     out: Vec<String>,
-    input: String,
+    /// the command being typed
+    input: super::LineEdit,
     history: Vec<String>,
     hpos: usize,
     scroll: i32,
@@ -45,7 +46,7 @@ impl Terminal {
             login: if first.is_empty() { sys.user.clone() } else { first },
             cwd: "/home".to_string(),
             out: vec!["HydatekOS shell (hsh) 0.1 — type 'help' for commands.".to_string(), String::new()],
-            input: String::new(),
+            input: super::LineEdit::default(),
             history: vec![],
             hpos: 0,
             scroll: 0,
@@ -71,6 +72,13 @@ impl Terminal {
             }
         }
         format!("/{}", parts.join("/"))
+    }
+
+    /// Abandon the line being typed (Ctrl+C in a Unix shell).
+    fn cancel_line(&mut self) {
+        let p = self.prompt();
+        self.out.push(format!("{}{}^C", p, self.input.text));
+        self.input.clear();
     }
 
     fn prompt(&self) -> String {
@@ -290,43 +298,59 @@ impl App for Terminal {
         let old = ui.clip_in(inner);
         let mut y = inner.y + 13;
         let fg = Color::rgb(0xECE5DA);
+        let prompt_col = Color::rgb(0xE4B783);
+        let prompt = self.prompt();
+        let mark = format!("{}@hydatek:", self.login);
         for l in self.out.iter().skip(first).take(rows as usize) {
-            let col = if l.starts_with("hydatek:") { Color::rgb(0xE4B783) } else { fg };
+            // earlier command lines (they start with the prompt)
+            let col = if l.starts_with(&mark) { prompt_col } else { fg };
             ui.text(inner.x, y, Face::Mono, 13, l, col);
             y += lh;
         }
         if self.scroll == 0 {
-            let p = self.prompt();
-            let w = ui.text(inner.x, y, Face::Mono, 13, &p, Color::rgb(0xE4B783));
-            let w2 = ui.text(inner.x + w, y, Face::Mono, 13, &self.input, fg);
+            let w = ui.text(inner.x, y, Face::Mono, 13, &prompt, prompt_col);
+            // a block caret where the caret is, the text over it
             if (ui.ticks / 50) % 2 == 0 {
-                ui.rect(Rect::new(inner.x + w + w2 + 1, y - 12, 8, 15), t.accent);
+                let cx = ui.tw(Face::Mono, 13, self.input.before_caret());
+                ui.rect(Rect::new(inner.x + w + cx, y - 12, 8, 15), t.accent.with_alpha(210));
             }
+            ui.text(inner.x + w, y, Face::Mono, 13, &self.input.text, fg);
         }
         ui.set_clip(old);
         ui.zone(body, Action::App(inst, 0));
     }
 
     fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
-        self.scroll = 0;
+        // Page Up / Page Down scroll back through what's been printed
         match k {
-            Key::Char('l') | Key::Ctrl('l') if gen || matches!(k, Key::Ctrl(_)) => self.out.clear(),
-            Key::Char('v') if gen => {
-                let clip: String = sys.clipboard.chars().filter(|c| !c.is_control()).collect();
-                self.input.push_str(&clip);
+            Key::PageUp => return self.scroll += 10,
+            Key::PageDown => return self.scroll = (self.scroll - 10).max(0),
+            _ => self.scroll = 0,
+        }
+        let ctrl = |c: char| k == Key::Ctrl(c);
+        match k {
+            Key::Char('l') if gen => self.out.clear(),
+            _ if ctrl('l') => self.out.clear(),
+            Key::Char('c') if gen => self.cancel_line(),
+            _ if ctrl('c') => self.cancel_line(),
+            // the Unix shell's Ctrl keys (when Ctrl isn't Gen): line start
+            // and end, cut to the start / end, and the word before
+            _ if ctrl('a') => self.input.home(),
+            _ if ctrl('e') => self.input.end(),
+            _ if ctrl('u') => {
+                let rest = self.input.text[self.input.before_caret().len()..].to_string();
+                self.input.set(rest);
+                self.input.home();
             }
-            Key::Ctrl('u') => self.input.clear(),
-            Key::Char('c') | Key::Ctrl('c') if gen || matches!(k, Key::Ctrl(_)) => {
-                let p = self.prompt();
-                self.out.push(format!("{}{}^C", p, self.input));
-                self.input.clear();
+            _ if ctrl('k') => {
+                let keep = self.input.before_caret().to_string();
+                self.input.set(keep);
             }
-            Key::Char(c) if !c.is_control() && !gen => self.input.push(c),
-            Key::Backspace => {
-                self.input.pop();
-            }
+            _ if ctrl('w') => self.input.backspace(true),
+            Key::Esc => self.input.clear(),
             Key::Enter => {
-                let line = core::mem::take(&mut self.input);
+                let line = core::mem::take(&mut self.input.text);
+                self.input.clear();
                 self.run(&line, sys);
                 if self.out.len() > 500 {
                     self.out.drain(0..100);
@@ -334,12 +358,12 @@ impl App for Terminal {
             }
             Key::Up if self.hpos > 0 => {
                 self.hpos -= 1;
-                self.input = self.history[self.hpos].clone();
+                self.input.set(self.history[self.hpos].clone());
             }
             Key::Down => {
                 if self.hpos + 1 < self.history.len() {
                     self.hpos += 1;
-                    self.input = self.history[self.hpos].clone();
+                    self.input.set(self.history[self.hpos].clone());
                 } else {
                     self.hpos = self.history.len();
                     self.input.clear();
@@ -347,18 +371,22 @@ impl App for Terminal {
             }
             Key::Tab => {
                 // complete the last word against the current directory
-                let word_start = self.input.rfind(' ').map(|i| i + 1).unwrap_or(0);
-                let word = self.input[word_start..].to_string();
+                self.input.end();
+                let word_start = self.input.text.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                let word = self.input.text[word_start..].to_string();
                 let (dir, stem) = match word.rfind('/') {
                     Some(i) => (self.resolve(&word[..i + 1]), word[i + 1..].to_string()),
                     None => (self.cwd.clone(), word.clone()),
                 };
                 let m: Vec<String> = sys.fs.list(&dir).into_iter().filter(|e| e.0.starts_with(&stem)).map(|e| e.0).collect();
                 if m.len() == 1 {
-                    self.input.push_str(&m[0][stem.len()..]);
+                    self.input.insert(&m[0][stem.len()..]);
                 }
             }
-            _ => {}
+            // typing and editing: ← → Home End Delete Backspace, Gen+V
+            _ => {
+                self.input.key_sys(k, gen, sys);
+            }
         }
     }
 

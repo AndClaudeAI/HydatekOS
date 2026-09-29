@@ -1738,7 +1738,7 @@ impl Slides {
                 ui.zone(m, Action::App(inst, C_DLG_TEXT));
                 ui.text(m.x + 20, m.y + 34, Face::Semibold, 16, "Header & footer", t.text);
                 ui.text(m.x + 20, m.y + 66, Face::Medium, 13, "Footer text", t.text2);
-                ui.field(Rect::new(m.x + 20, m.y + 76, m.w - 40, 34), &dlg.text.text, "e.g. Hydatek · Lagos", true, Action::App(inst, C_DLG_TEXT));
+                ui.line(Rect::new(m.x + 20, m.y + 76, m.w - 40, 34), &dlg.text, "e.g. Hydatek · Lagos", true, Action::App(inst, C_DLG_TEXT));
                 ui.text(m.x + 20, m.y + 142, Face::Medium, 13, "Slide numbers", t.text);
                 ui.switch(m.r() - 70, m.y + 126, dlg.numbers, Action::App(inst, C_DLG_NUMBERS));
                 ui.text(m.x + 20, m.y + 172, Face::Regular, 12, "Shown on every slide except title slides.", t.text3);
@@ -2941,8 +2941,7 @@ impl App for Slides {
         let tr = Rect::new(title_x + 26, r.y + 7, bx - title_x - 34, 30);
         match &self.overlay {
             Overlay::Rename(e) => {
-                let text = e.text.clone();
-                ui.field(tr, &text, "Presentation name", true, Action::App(inst, C_RENAME));
+                ui.line(tr, e, "Presentation name", true, Action::App(inst, C_RENAME));
             }
             _ => {
                 let mut title = self.title();
@@ -3155,7 +3154,7 @@ impl App for Slides {
                     self.open_menu(MenuKind::Anim, code);
                 }
             }
-            C_FOOTER => self.overlay = Overlay::Footer(FooterDlg { text: LineEdit { text: self.deck.footer.clone() }, numbers: self.deck.numbers || self.deck.footer.is_empty() }),
+            C_FOOTER => self.overlay = Overlay::Footer(FooterDlg { text: LineEdit::new(self.deck.footer.clone()), numbers: self.deck.numbers || self.deck.footer.is_empty() }),
             C_PDF => self.export_pdf(sys, false),
             C_PDF_NOTES => self.export_pdf(sys, true),
             C_PRESENTER => {
@@ -3190,7 +3189,7 @@ impl App for Slides {
             C_RENAME => {
                 if !matches!(self.overlay, Overlay::Rename(_)) {
                     self.stop_edit();
-                    self.overlay = Overlay::Rename(LineEdit { text: self.title() });
+                    self.overlay = Overlay::Rename(LineEdit::new(self.title()));
                 }
             }
             C_CUT => {
@@ -3318,7 +3317,7 @@ impl App for Slides {
                 }
                 Key::Esc => self.overlay = Overlay::None,
                 _ => {
-                    e.key(k);
+                    e.key_sys(k, gen, sys);
                 }
             }
             return;
@@ -3332,7 +3331,7 @@ impl App for Slides {
                 Key::Enter => self.action(C_DLG_OK, false, sys),
                 Key::Esc => self.overlay = Overlay::None,
                 _ => {
-                    dlg.text.key(k);
+                    dlg.text.key_sys(k, gen, sys);
                 }
             }
             return;

@@ -111,6 +111,10 @@ pub struct Sys {
     pub user: String,
     /// every account as the lock screen shows it
     pub people: Vec<Person>,
+    /// the assistant (Claude): this account's Anthropic API key, empty if none
+    pub claude_key: String,
+    /// the Claude model chosen (empty: the newest Opus the key can use)
+    pub claude_model: String,
 }
 
 /// A PIN or password: (salt, stretched hash).
@@ -208,6 +212,8 @@ impl Sys {
             accounts: Default::default(),
             user: String::from(crate::accounts::FIRST),
             people: Vec::new(),
+            claude_key: String::new(),
+            claude_model: String::new(),
         };
         s.load_accounts();
         s.user = if s.accounts.last.is_empty() { String::from(crate::accounts::FIRST) } else { s.accounts.last.clone() };
@@ -257,6 +263,7 @@ impl Sys {
         self.load_lock();
         self.load_events();
         self.load_search();
+        self.load_assistant();
     }
 
     /// Forget the signed-in account's things (before loading another's).
@@ -279,6 +286,38 @@ impl Sys {
         self.search = crate::web::search::Search::default();
         self.clipboard.clear();
         self.settings_page = None;
+        self.claude_key.clear();
+        self.claude_model.clear();
+    }
+
+    // ---- the assistant (Claude) ----------------------------------------------------
+
+    fn load_assistant(&mut self) {
+        let Some(d) = self.fs.read_raw(&self.sys_file("assistant.txt")) else { return };
+        for line in String::from_utf8_lossy(&d).lines() {
+            match line.split_once('=') {
+                Some(("key", v)) => self.claude_key = v.trim().to_string(),
+                Some(("model", v)) => self.claude_model = v.trim().to_string(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Keep the API key and model (in the account's system folder, which
+    /// apps and other accounts can't read).
+    pub fn save_assistant(&mut self) {
+        let f = self.sys_file("assistant.txt");
+        if self.claude_key.is_empty() && self.claude_model.is_empty() {
+            self.fs.remove_raw(&f);
+        } else {
+            let s = format!("key={}\nmodel={}\n", self.claude_key, self.claude_model);
+            self.fs.write_raw(&f, s.as_bytes());
+        }
+    }
+
+    /// Claude is set up for this account.
+    pub fn has_claude(&self) -> bool {
+        !self.claude_key.is_empty()
     }
 
     /// Sign `id` in (the shell closes the previous account's apps first).

@@ -1097,8 +1097,7 @@ impl App for Scripts {
         let tr = Rect::new(title_x + 26, r.y + 7, bx - title_x - 34, 30);
         match &self.overlay {
             Overlay::Rename(e) => {
-                let text = e.text.clone();
-                ui.field(tr, &text, "Document name", true, Action::App(inst, C_RENAME));
+                ui.line(tr, e, "Document name", true, Action::App(inst, C_RENAME));
             }
             _ => {
                 let mut title = self.title();
@@ -1208,7 +1207,7 @@ impl App for Scripts {
             C_RENAME => {
                 if !matches!(self.overlay, Overlay::Rename(_)) {
                     let name = if self.path.is_empty() { self.suggested_name() } else { self.title() };
-                    self.overlay = Overlay::Rename(LineEdit { text: name });
+                    self.overlay = Overlay::Rename(LineEdit::new(name));
                 }
             }
             C_CUT => {
@@ -1262,7 +1261,7 @@ impl App for Scripts {
                 }
                 Key::Esc => self.overlay = Overlay::None,
                 _ => {
-                    e.key(k);
+                    e.key_sys(k, gen, sys);
                 }
             }
             return;

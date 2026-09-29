@@ -985,7 +985,10 @@ impl App for Browser {
         };
         let shown = if focus || !text.starts_with("hydatek://start") { text } else { String::new() };
         let hint = format!("Search with {} or type an address", engines::by_id(&sys.search_engine).name);
-        ui.field(bar, &shown, &hint, focus, Action::App(inst, C_URL));
+        match &self.edit {
+            Some(e) => ui.line(bar, e, &hint, true, Action::App(inst, C_URL)),
+            None => ui.field(bar, &shown, &hint, false, Action::App(inst, C_URL)),
+        }
         if focus && self.fresh && !shown.is_empty() {
             // show the address as selected
             let w = ui.tw(Face::Regular, 13, &shown).min(bar.w - 24);
@@ -1173,7 +1176,7 @@ impl App for Browser {
                     let cur = self.current_url();
                     let text = if cur.starts_with("hydatek://start") { String::new() } else { cur };
                     self.fresh = !text.is_empty();
-                    self.edit = Some(LineEdit { text });
+                    self.edit = Some(LineEdit::new(text));
                 }
             }
             C_BACK => {
@@ -1252,24 +1255,27 @@ impl App for Browser {
     }
 
     fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
-        if gen {
-            match k {
-                Key::Char('l') | Key::Char('L') => self.action(C_URL, false, sys),
-                Key::Char('r') | Key::Char('R') => self.action(C_RELOAD, false, sys),
-                _ => {}
-            }
-            return;
+        if k == Key::F(5) {
+            return self.action(C_RELOAD, false, sys);
+        }
+        if gen && matches!(k, Key::Char('l') | Key::Char('r')) {
+            return self.action(if k == Key::Char('l') { C_URL } else { C_RELOAD }, false, sys);
         }
         if let Some(e) = &mut self.edit {
             if self.fresh {
+                // the whole address is selected: typing, pasting or deleting replaces it
                 self.fresh = false;
                 match k {
-                    Key::Char(c) if !c.is_control() => e.text.clear(),
+                    Key::Char(c) if !c.is_control() && (!gen || c == 'v' || c == 'x') => e.clear(),
                     Key::Backspace | Key::Delete => {
-                        e.text.clear();
+                        e.clear();
                         return;
                     }
+                    Key::Left | Key::Home => e.home(),
                     _ => {}
+                }
+                if matches!(k, Key::Left | Key::Home) {
+                    return;
                 }
             }
             match k {
@@ -1283,8 +1289,17 @@ impl App for Browser {
                 }
                 Key::Esc => self.edit = None,
                 _ => {
-                    e.key(k);
+                    e.key_sys(k, gen, sys);
                 }
+            }
+            return;
+        }
+        if gen && self.focus_field.is_none() {
+            // Gen+← / Gen+→ (and Aux, as elsewhere): back and forward
+            match k {
+                Key::Left => self.action(C_BACK, false, sys),
+                Key::Right => self.action(C_FWD, false, sys),
+                _ => {}
             }
             return;
         }
@@ -1307,7 +1322,8 @@ impl App for Browser {
                 Key::Backspace => {
                     v.pop();
                 }
-                Key::Char(ch) if !ch.is_control() => v.push(ch),
+                Key::Char('v') if gen => v.extend(sys.clipboard.chars().filter(|c| !c.is_control())),
+                Key::Char(ch) if !gen && !ch.is_control() => v.push(ch),
                 _ => return,
             }
             if let Some(c) = &mut self.cur {
@@ -1319,6 +1335,8 @@ impl App for Browser {
         match k {
             Key::Down => self.scroll += 48,
             Key::Up => self.scroll -= 48,
+            // Space pages down, Shift+Space up
+            Key::Char(' ') if crate::input::shift() => self.scroll -= self.area.h - 60,
             Key::PageDown | Key::Char(' ') => self.scroll += self.area.h - 60,
             Key::PageUp => self.scroll -= self.area.h - 60,
             Key::Home => self.scroll = 0,

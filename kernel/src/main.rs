@@ -31,6 +31,7 @@ mod pdf;
 mod profile;
 mod accounts;
 mod keymap;
+mod lineedit;
 mod avatar;
 mod link;
 mod linksrv;
@@ -277,6 +278,13 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             sh.event(ev, input.x, input.y);
         }
         sh.tick(ticks);
+        if net.is_none() && !sh.sys.web.queue.is_empty() {
+            // no network adapter: every request fails at once
+            for r in core::mem::take(&mut sh.sys.web.queue) {
+                sh.sys.web.done.push((r.id, Err(alloc::string::String::from("There's no network. Connect an Ethernet cable and try again."))));
+            }
+            sh.dirty = true;
+        }
         if let (Some(n), Some(srv)) = (net.as_mut(), server.as_mut()) {
             n.poll(ticks * 10);
             if srv.poll(n, &mut sh.sys) {

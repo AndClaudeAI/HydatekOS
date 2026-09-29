@@ -295,7 +295,7 @@ impl App for PhoneLink {
             4 => {
                 // share text; list what went back and forth
                 let f = Rect::new(body.x + 16, body.y + 14, body.w - 120, 34);
-                ui.field(f, &self.clip.text, "Type text to send to your phone", self.clip_focus, Action::App(inst, C_CLIP_FIELD));
+                ui.line(f, &self.clip, "Type text to send to your phone", self.clip_focus, Action::App(inst, C_CLIP_FIELD));
                 ui.button(Rect::new(f.r() + 8, f.y, 80, 34), "Send", Action::App(inst, C_CLIP_SEND), true);
                 let hint = ui.fit(Face::Regular, 12, "To send a file, select it in Files and choose File › Send to Phone.", body.w - 32);
                 ui.text(body.x + 16, f.b() + 22, Face::Regular, 12, &hint, t.text3);
@@ -389,19 +389,19 @@ impl App for PhoneLink {
         }
     }
 
-    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         if self.tab == 4 && self.clip_focus {
             match k {
                 Key::Enter => self.action(C_CLIP_SEND, false, sys),
                 Key::Esc => self.clip_focus = false,
                 _ => {
-                    self.clip.key(k);
+                    self.clip.key_sys(k, gen, sys);
                 }
             }
             return;
         }
         if self.tab == 0 && sys.link.paired {
-            self.msgs.key(k, sys);
+            self.msgs.key(k, gen, sys);
         }
     }
 

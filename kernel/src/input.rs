@@ -5,7 +5,7 @@
 //! hardware without HydatekOS drivers. Native drivers come in milestone 2.
 
 use crate::efi::{self, AbsolutePointer, SimplePointer, SimpleTextInput, SimpleTextInputEx};
-use crate::ui::Key;
+use crate::ui::{Key, Media};
 use alloc::vec::Vec;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,6 +20,34 @@ const M_AUX: u32 = 4;
 const M_LOGO: u32 = 8;
 /// Ctrl works as the Gen key (a per-account setting; on by default).
 static CTRL_IS_GEN: AtomicBool = AtomicBool::new(true);
+/// Caps, Num and Scroll Lock as the firmware last reported them (efi.rs
+/// TOGGLE_* bits; 0 until a key says)
+static TOGGLES: AtomicU32 = AtomicU32::new(0);
+
+fn toggle(bit: u8) -> Option<bool> {
+    let t = TOGGLES.load(Ordering::Relaxed) as u8;
+    (t & efi::TOGGLE_STATE_VALID != 0).then_some(t & bit != 0)
+}
+
+/// Caps Lock is on (None: the firmware hasn't said).
+pub fn caps_lock() -> Option<bool> {
+    toggle(efi::CAPS_LOCK)
+}
+
+/// Num Lock is on (None: the firmware hasn't said).
+pub fn num_lock() -> Option<bool> {
+    toggle(efi::NUM_LOCK)
+}
+
+/// Scroll Lock is on (None: the firmware hasn't said).
+pub fn scroll_lock() -> Option<bool> {
+    toggle(efi::SCROLL_LOCK)
+}
+
+/// Ctrl was held for the most recent key.
+pub fn ctrl() -> bool {
+    held(M_CTRL)
+}
 
 fn held(m: u32) -> bool {
     MODS.load(Ordering::Relaxed) & m != 0
@@ -216,6 +244,9 @@ impl Input {
                     if unsafe { ((*k).read_key_stroke_ex)(k, &mut d) } != efi::SUCCESS {
                         break;
                     }
+                    if d.state.toggle_state & efi::TOGGLE_STATE_VALID != 0 {
+                        TOGGLES.store(d.state.toggle_state as u32, Ordering::Relaxed);
+                    }
                     (d.key, d.state.shift_state)
                 }
                 None => {
@@ -263,6 +294,11 @@ fn gen_key(k: Key, mods: u32) -> Ev {
             None => Ev::Key(Key::Aux(c.to_ascii_lowercase()), false),
         },
         Key::Left | Key::Right if aux => Ev::Key(k, true),
+        // the PC's old editing keys: Shift+Insert pastes, Gen+Insert copies,
+        // Shift+Delete cuts
+        Key::Insert if mods & M_SHIFT != 0 => Ev::Key(Key::Char('v'), true),
+        Key::Insert if gen || ctrl => Ev::Key(Key::Char('c'), true),
+        Key::Delete if mods & M_SHIFT != 0 && !gen => Ev::Key(Key::Char('x'), true),
         k => Ev::Key(k, gen),
     }
 }
@@ -275,6 +311,7 @@ fn map_key(k: efi::InputKey, ctrl: bool) -> Option<(Key, bool)> {
         0x04 => Key::Left,
         0x05 => Key::Home,
         0x06 => Key::End,
+        0x07 => Key::Insert,
         0x08 => Key::Delete,
         0x09 => Key::PageUp,
         0x0a => Key::PageDown,
@@ -282,6 +319,18 @@ fn map_key(k: efi::InputKey, ctrl: bool) -> Option<(Key, bool)> {
         0x15 => Key::F(11),
         0x16 => Key::F(12),
         0x17 => Key::Esc,
+        0x48 => Key::Pause,
+        0x68..=0x73 => Key::F((k.scan_code - 0x68 + 13) as u8),
+        0x7f => Key::Media(Media::Mute),
+        0x80 => Key::Media(Media::VolumeUp),
+        0x81 => Key::Media(Media::VolumeDown),
+        0x100 => Key::Media(Media::BrightnessUp),
+        0x101 => Key::Media(Media::BrightnessDown),
+        0x102 => Key::Media(Media::Sleep),
+        0x103 => Key::Media(Media::Hibernate),
+        0x104 => Key::Media(Media::Display),
+        0x105 => Key::Media(Media::Recovery),
+        0x106 => Key::Media(Media::Eject),
         0 => match k.unicode_char {
             0 => return None,
             0x08 => Key::Backspace,
@@ -291,7 +340,8 @@ fn map_key(k: efi::InputKey, ctrl: bool) -> Option<(Key, bool)> {
             c @ 1..=26 => return Some((Key::Char((b'a' + c as u8 - 1) as char), true)),
             c => Key::Char(char::from_u32(c as u32)?),
         },
-        _ => return None,
+        // shown by the keyboard tester; apps leave it alone
+        code => Key::Other(code),
     };
     Some((key, ctrl))
 }

@@ -138,7 +138,7 @@ impl App for Calendar {
         ui.label(p.x + 18, y, 10, "NEW EVENT", t.accent);
         let labels = ["Title", "Time (HH:MM)", "Place"];
         for k in 0..3 {
-            ui.field(Rect::new(p.x + 12, y + 10 + k as i32 * 36, p.w - 24, 30), &self.fields[k].text, labels[k], self.focus == Some(k), Action::App(inst, C_FIELD + k as u32));
+            ui.line(Rect::new(p.x + 12, y + 10 + k as i32 * 36, p.w - 24, 30), &self.fields[k], labels[k], self.focus == Some(k), Action::App(inst, C_FIELD + k as u32));
         }
         ui.button(Rect::new(p.x + 12, y + 118, p.w - 24, 30), "Add event", Action::App(inst, C_ADD), true);
     }
@@ -183,14 +183,15 @@ impl App for Calendar {
         }
     }
 
-    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         if let Some(f) = self.focus {
             match k {
                 Key::Enter => self.add(sys),
-                Key::Tab => self.focus = Some((f + 1) % 3),
+                // Tab: next box; Shift+Tab: the one before
+                Key::Tab => self.focus = Some(if crate::input::shift() { (f + 2) % 3 } else { (f + 1) % 3 }),
                 Key::Esc => self.focus = None,
                 _ => {
-                    self.fields[f].key(k);
+                    self.fields[f].key_sys(k, gen, sys);
                 }
             }
             return;

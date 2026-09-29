@@ -40,10 +40,12 @@ const C_ITEM: u32 = 1000;
 enum Focus {
     None,
     Search,
-    Rename(String),
+    Rename(LineEdit),
 }
 
 pub struct Files {
+    /// icons per row, as last drawn (for ↑ and ↓)
+    cols: usize,
     path: String,
     back: Vec<String>,
     fwd: Vec<String>,
@@ -76,7 +78,7 @@ pub fn file_icon(name: &str, dir: bool) -> Icon {
 
 impl Files {
     pub fn new() -> Files {
-        Files { path: "/home/Documents".to_string(), back: vec![], fwd: vec![], sel: None, search: LineEdit::default(), focus: Focus::None, scroll: 0, items: vec![] }
+        Files { cols: 1, path: "/home/Documents".to_string(), back: vec![], fwd: vec![], sel: None, search: LineEdit::default(), focus: Focus::None, scroll: 0, items: vec![] }
     }
 
     fn go(&mut self, p: &str) {
@@ -201,10 +203,16 @@ impl App for Files {
                 let ph = ui.fit(Face::Regular, 13, &ph, tr.w);
                 ui.text_in(tr, Face::Regular, 13, &ph, t.text3, 0);
             }
-            let w = ui.text_in(tr, Face::Regular, 13, &self.search.text, t.text, 0);
+            // the caret where it is; long text scrolls to keep it in view
+            let cx = ui.tw(Face::Regular, 13, self.search.before_caret());
+            let shift = (cx - (tr.w - 4)).max(0);
+            let old = ui.clip_in(tr);
+            let tw = ui.tw(Face::Regular, 13, &self.search.text);
+            ui.text_in(Rect::new(tr.x - shift, tr.y, tw + 4, tr.h), Face::Regular, 13, &self.search.text, t.text, 0);
             if focused && (ui.ticks / 50) % 2 == 0 {
-                ui.rect(Rect::new(tr.x + w + 1, sr.y + 7, 1, 14), t.text);
+                ui.rect(Rect::new(tr.x - shift + cx, sr.y + 7, 1, 14), t.text);
             }
+            ui.set_clip(old);
             ui.zone(sr, Action::App(inst, C_SEARCH));
         }
 
@@ -252,6 +260,7 @@ impl App for Files {
         ui.zone(area, Action::App(inst, C_BG));
         let old = ui.clip_in(Rect::new(area.x, area.y, area.w, area.h - 30));
         let cols = ((area.w - 24) / if compact { 92 } else { 110 }).max(1);
+        self.cols = cols as usize;
         let cw = (area.w - 24) / cols;
         let rows = (self.items.len() as i32 + cols - 1) / cols;
         let max_scroll = (rows * 118 + 24 - (area.h - 30)).max(0);
@@ -269,16 +278,17 @@ impl App for Files {
             let ic = file_icon(name, *dir);
             ui.icon_in(ic, tile, 22, if *dir { t.accent } else { t.text });
             let label = match &self.focus {
-                Focus::Rename(s) if sel => s.clone(),
+                Focus::Rename(s) if sel => s.text.clone(),
                 _ => ui.fit(Face::Regular, 13, display_name(name), cw - 12),
             };
             let lr = Rect::new(cell.x + 4, cell.y + 74, cw - 8, 22);
-            if matches!(self.focus, Focus::Rename(_)) && sel {
+            if let (Focus::Rename(e), true) = (&self.focus, sel) {
                 ui.rrect(lr, 6, t.surface);
                 ui.stroke(lr, 6, 1, t.accent);
                 let w = ui.text_in(lr, Face::Regular, 13, &label, t.text, 1);
                 if (ui.ticks / 50) % 2 == 0 {
-                    ui.rect(Rect::new(lr.x + (lr.w + w) / 2 + 1, lr.y + 4, 1, 14), t.text);
+                    let cx = ui.tw(Face::Regular, 13, e.before_caret());
+                    ui.rect(Rect::new(lr.x + (lr.w - w) / 2 + cx, lr.y + 4, 1, 14), t.text);
                 }
             } else {
                 ui.text_in(lr, Face::Regular, 13, &label, t.text, 1);
@@ -345,12 +355,12 @@ impl App for Files {
                 };
                 self.refresh(sys);
                 self.sel = self.items.iter().position(|i| i.0 == basename(&p));
-                self.focus = Focus::Rename(display_name(basename(&p)).to_string());
+                self.focus = Focus::Rename(LineEdit::new(display_name(basename(&p))));
             }
             C_DELETE => self.delete(sys),
             C_RENAME => {
                 if let Some(p) = self.selected_path() {
-                    self.focus = Focus::Rename(display_name(basename(&p)).to_string());
+                    self.focus = Focus::Rename(LineEdit::new(display_name(basename(&p))));
                 }
             }
             C_OPEN => {
@@ -404,12 +414,12 @@ impl App for Files {
         }
     }
 
-    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         match &mut self.focus {
             Focus::Search => {
                 if k == Key::Esc || k == Key::Enter {
                     self.focus = Focus::None;
-                } else if self.search.key(k) {
+                } else if self.search.key_sys(k, gen, sys) {
                     self.sel = None;
                 }
                 return;
@@ -417,7 +427,7 @@ impl App for Files {
             Focus::Rename(s) => {
                 match k {
                     Key::Enter => {
-                        let new = s.trim().to_string();
+                        let new = s.text.trim().to_string();
                         self.focus = Focus::None;
                         if let Some(p) = self.selected_path() {
                             let old = basename(&p).to_string();
@@ -431,20 +441,31 @@ impl App for Files {
                         }
                     }
                     Key::Esc => self.focus = Focus::None,
-                    Key::Backspace => {
-                        s.pop();
+                    // no slashes in names
+                    Key::Char('/') | Key::Char('\\') if !gen => {}
+                    Key::Char(_) if !gen && s.text.chars().count() >= 60 => {}
+                    _ => {
+                        s.key_sys(k, gen, sys);
+                        s.text.retain(|c| c != '/' && c != '\\');
                     }
-                    Key::Char(c) if !c.is_control() && c != '/' && c != '\\' && s.len() < 60 => s.push(c),
-                    _ => {}
                 }
                 return;
             }
             Focus::None => {}
         }
         let n = self.items.len();
+        let cols = self.cols.max(1);
+        let at = |sel: Option<usize>, to: usize| Some(sel.map(|_| to).unwrap_or(0).min(n.saturating_sub(1)));
         match k {
             Key::Right | Key::Tab if n > 0 => self.sel = Some(self.sel.map(|i| (i + 1).min(n - 1)).unwrap_or(0)),
             Key::Left if n > 0 => self.sel = Some(self.sel.map(|i| i.saturating_sub(1)).unwrap_or(0)),
+            // a row at a time; Page keys three rows
+            Key::Down if n > 0 => self.sel = at(self.sel, self.sel.map_or(0, |i| if i + cols < n { i + cols } else { i })),
+            Key::Up if n > 0 => self.sel = at(self.sel, self.sel.map_or(0, |i| if i >= cols { i - cols } else { i })),
+            Key::PageDown if n > 0 => self.sel = at(self.sel, self.sel.map_or(0, |i| (i + 3 * cols).min(n - 1))),
+            Key::PageUp if n > 0 => self.sel = at(self.sel, self.sel.map_or(0, |i| i.saturating_sub(3 * cols))),
+            Key::Home if n > 0 => self.sel = Some(0),
+            Key::End if n > 0 => self.sel = Some(n - 1),
             Key::Enter => {
                 if let Some(i) = self.sel {
                     self.open(i, sys);
@@ -453,10 +474,10 @@ impl App for Files {
             Key::Delete => self.delete(sys),
             Key::Backspace => self.action(C_BACK, false, sys),
             Key::F(2) => self.action(C_RENAME, false, sys),
-            Key::Char(c) if !c.is_control() => {
+            // typing starts a search (not while Gen is held: that's a shortcut)
+            Key::Char(c) if !gen && !c.is_control() => {
                 self.focus = Focus::Search;
                 self.search.key(k);
-                let _ = c;
             }
             _ => {}
         }

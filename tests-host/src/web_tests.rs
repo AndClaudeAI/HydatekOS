@@ -106,7 +106,7 @@ fn http_responses() {
     let mut p = http::Parser::default();
     p.feed(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc").unwrap();
     assert!(p.finish("u").is_err());
-    let req = String::from_utf8(http::request("GET", &url::Url::parse("http://a.ng:8080/x?y").unwrap(), b"", "", "", http::ACCEPT_PAGE, "")).unwrap();
+    let req = String::from_utf8(http::request("GET", &url::Url::parse("http://a.ng:8080/x?y").unwrap(), b"", "", "", http::ACCEPT_PAGE, "", &[])).unwrap();
     assert!(req.starts_with("GET /x?y HTTP/1.1\r\nHost: a.ng:8080\r\n"), "{}", req);
 }
 

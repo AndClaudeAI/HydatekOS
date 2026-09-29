@@ -30,6 +30,8 @@ struct Job {
     content_type: String,
     accept: &'static str,
     referer: String,
+    headers: Vec<(String, String)>,
+    patience: u64,
     redirects: u32,
     step: Step,
     ip: [u8; 4],
@@ -180,6 +182,8 @@ impl Fetcher {
                     content_type: r.content_type,
                     accept: r.accept,
                     referer: r.referer,
+                    headers: r.headers,
+                    patience: if r.patience == 0 { TIMEOUT_MS } else { r.patience },
                     redirects: 0,
                     step: Step::Resolve,
                     ip: [0; 4],
@@ -222,6 +226,7 @@ impl Fetcher {
                                 match loc.and_then(|l| j.url.join(&l)) {
                                     Some(next) if next.scheme == "http" || next.scheme == "https" => {
                                         let keep = matches!(resp.status, 307 | 308);
+                                        let same_site = next.host == j.url.host;
                                         self.jobs.push(Job {
                                             id: j.id,
                                             url: next,
@@ -230,6 +235,9 @@ impl Fetcher {
                                             content_type: j.content_type,
                                             accept: j.accept,
                                             referer: j.referer,
+                                            // the headers go to the same site only
+                                            headers: if same_site { j.headers } else { Vec::new() },
+                                            patience: j.patience,
                                             redirects: j.redirects + 1,
                                             step: Step::Resolve,
                                             ip: [0; 4],
@@ -258,7 +266,7 @@ impl Fetcher {
     }
 
     fn step(&mut self, net: &mut Net, k: usize, q: &mut WebQueue, now: u64) -> Option<Result<http::Response, String>> {
-        if now > self.jobs[k].started + TIMEOUT_MS {
+        if now > self.jobs[k].started + self.jobs[k].patience {
             return Some(Err(format!("{} took too long to answer", self.jobs[k].url.host)));
         }
         if let Some(c) = self.jobs[k].conn {
@@ -330,7 +338,7 @@ impl Fetcher {
                 let j = &mut self.jobs[k];
                 let c = j.conn?;
                 if !j.sent {
-                    let req = http::request(j.method, &j.url, &j.body, &j.content_type, &cookies, j.accept, &j.referer);
+                    let req = http::request(j.method, &j.url, &j.body, &j.content_type, &cookies, j.accept, &j.referer, &j.headers);
                     match j.tls.as_mut() {
                         Some(t) => {
                             t.write(&req);

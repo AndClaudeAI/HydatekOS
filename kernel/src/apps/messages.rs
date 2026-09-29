@@ -97,7 +97,7 @@ impl MsgView {
         }
         ui.set_clip(old);
         let ir = Rect::new(c.x + 16, c.b() - 46, c.w - 70, 34);
-        ui.field(ir, &self.input.text, "Text message", self.focus, Action::App(inst, base + M_INPUT));
+        ui.line(ir, &self.input, "Text message", self.focus, Action::App(inst, base + M_INPUT));
         let sb = Rect::new(c.r() - 48, c.b() - 46, 34, 34);
         let a = Action::App(inst, base + M_SEND);
         ui.rrect(sb, 17, if ui.hot(a) { t.accent.mix(t.text, 40) } else { t.accent });
@@ -133,13 +133,14 @@ impl MsgView {
         self.input.text.clear();
     }
 
-    pub fn key(&mut self, k: Key, sys: &mut Sys) {
+    pub fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
         match k {
             Key::Enter => self.send(sys),
             Key::Esc => self.focus = false,
             _ => {
-                self.focus = true;
-                self.input.key(k);
+                if self.input.key_sys(k, gen, sys) {
+                    self.focus = true;
+                }
             }
         }
     }
@@ -190,8 +191,8 @@ impl App for Messages {
         self.view.action(code, sys);
     }
 
-    fn key(&mut self, k: Key, _gen: bool, sys: &mut Sys) {
-        self.view.key(k, sys);
+    fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) {
+        self.view.key(k, gen, sys);
     }
 
     fn animating(&self) -> bool {

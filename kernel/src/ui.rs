@@ -49,6 +49,38 @@ pub struct Zone {
     pub a: Action,
 }
 
+/// Keys found on laptops and multimedia keyboards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Media {
+    Mute,
+    VolumeUp,
+    VolumeDown,
+    BrightnessUp,
+    BrightnessDown,
+    Sleep,
+    Hibernate,
+    Display,
+    Recovery,
+    Eject,
+}
+
+impl Media {
+    pub fn name(self) -> &'static str {
+        match self {
+            Media::Mute => "Mute",
+            Media::VolumeUp => "Volume up",
+            Media::VolumeDown => "Volume down",
+            Media::BrightnessUp => "Brightness up",
+            Media::BrightnessDown => "Brightness down",
+            Media::Sleep => "Sleep",
+            Media::Hibernate => "Hibernate",
+            Media::Display => "Display",
+            Media::Recovery => "Recovery",
+            Media::Eject => "Eject",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
     Char(char),
@@ -56,6 +88,12 @@ pub enum Key {
     Ctrl(char),
     /// Aux+key that types no special character (lower case)
     Aux(char),
+    Insert,
+    Pause,
+    /// volume, brightness and power keys
+    Media(Media),
+    /// a key the firmware reported that HydatekOS doesn't know (scan code)
+    Other(u16),
     Enter,
     Backspace,
     Delete,
@@ -260,6 +298,17 @@ impl<'a> Ui<'a> {
 
     /// Single-line text field. `focused` draws a caret.
     pub fn field(&mut self, r: Rect, value: &str, placeholder: &str, focused: bool, a: Action) {
+        self.field_at(r, value, value, placeholder, focused, a);
+    }
+
+    /// A text box showing a line editor, with its caret where it is.
+    pub fn line(&mut self, r: Rect, e: &crate::lineedit::LineEdit, placeholder: &str, focused: bool, a: Action) {
+        self.field_at(r, &e.text, e.before_caret(), placeholder, focused, a);
+    }
+
+    /// A text box; the caret goes after `before` (the part of `value` before
+    /// it), and long text scrolls to keep the caret in view.
+    pub fn field_at(&mut self, r: Rect, value: &str, before: &str, placeholder: &str, focused: bool, a: Action) {
         let t = self.t;
         self.rrect(r, 10, t.chip);
         if focused {
@@ -267,15 +316,19 @@ impl<'a> Ui<'a> {
         }
         let inner = Rect::new(r.x + 12, r.y, r.w - 24, r.h);
         let old = self.clip_in(inner);
+        let blink = focused && (self.ticks / 50) % 2 == 0;
         if value.is_empty() {
             self.text_in(inner, Face::Regular, 13, placeholder, t.text3, 0);
-            if focused && (self.ticks / 50) % 2 == 0 {
+            if blink {
                 self.rect(Rect::new(inner.x, r.y + 8, 1, r.h - 16), t.text);
             }
         } else {
-            let w = self.text_in(inner, Face::Regular, 13, value, t.text, 0);
-            if focused && (self.ticks / 50) % 2 == 0 {
-                self.rect(Rect::new(inner.x + w + 1, r.y + 8, 1, r.h - 16), t.text);
+            let cx = self.tw(Face::Regular, 13, before);
+            let shift = (cx - (inner.w - 4)).max(0);
+            let w = self.tw(Face::Regular, 13, value);
+            self.text_in(Rect::new(inner.x - shift, inner.y, w + 4, inner.h), Face::Regular, 13, value, t.text, 0);
+            if blink {
+                self.rect(Rect::new(inner.x - shift + cx, r.y + 8, 1, r.h - 16), t.text);
             }
         }
         self.set_clip(old);

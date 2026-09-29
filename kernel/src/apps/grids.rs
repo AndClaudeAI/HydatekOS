@@ -946,8 +946,7 @@ impl App for Grids {
         let tr = Rect::new(title_x + 26, r.y + 7, bx - title_x - 34, 30);
         match &self.overlay {
             Overlay::Rename(e) => {
-                let text = e.text.clone();
-                ui.field(tr, &text, "Sheet name", true, Action::App(inst, C_RENAME));
+                ui.line(tr, e, "Sheet name", true, Action::App(inst, C_RENAME));
             }
             _ => {
                 let mut title = self.title();
@@ -1108,7 +1107,7 @@ impl App for Grids {
             C_RENAME => {
                 if !matches!(self.overlay, Overlay::Rename(_)) {
                     self.commit();
-                    self.overlay = Overlay::Rename(LineEdit { text: self.title() });
+                    self.overlay = Overlay::Rename(LineEdit::new(self.title()));
                 }
             }
             C_CUT => {
@@ -1143,7 +1142,7 @@ impl App for Grids {
                 }
                 Key::Esc => self.overlay = Overlay::None,
                 _ => {
-                    e.key(k);
+                    e.key_sys(k, gen, sys);
                 }
             }
             return;

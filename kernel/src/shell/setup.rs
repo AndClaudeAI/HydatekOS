@@ -1,6 +1,7 @@
 //! The setup assistant: shown the first time HydatekOS starts (and again
 //! from Settings › Profile). It asks for the name of the person using the
-//! computer, a picture, how they sign in and how the desktop looks.
+//! computer, a picture, how they sign in, introduces Claude (HydatekOS's
+//! assistant, made by Anthropic) and asks how the desktop looks.
 
 use super::osk::{Osk, Typed};
 use super::{logo, wallpaper};
@@ -22,6 +23,8 @@ pub enum Step {
     Name,
     Picture,
     SignIn,
+    /// Claude, the assistant: an API key, or later
+    Assistant,
     Look,
     Done,
 }
@@ -52,6 +55,8 @@ const DARK: u16 = 10;
 const KB_TOGGLE: u16 = 11;
 const SWALLOW: u16 = 13;
 const LATER: u16 = 14;
+const F_KEY: u16 = 15;
+const SKIP_KEY: u16 = 16;
 const ACCENT: u16 = 20;
 const PICK: u16 = 100;
 const OSK: u16 = 1000;
@@ -66,7 +71,9 @@ pub struct Setup {
     method: Method,
     secret: String,
     confirm: String,
-    /// focused field: F_NAME, F_SECRET, F_CONFIRM or 0
+    /// the Anthropic API key for Claude (optional)
+    claude: String,
+    /// focused field: F_NAME, F_SECRET, F_CONFIRM, F_KEY or 0
     field: u16,
     error: String,
     /// the computer already has a PIN or password: no sign-in step
@@ -106,6 +113,7 @@ impl Setup {
             method: if touch(sys) { Method::Pin } else { Method::Password },
             secret: String::new(),
             confirm: String::new(),
+            claude: String::new(),
             field: 0,
             error: String::new(),
             secured: sys.secured(),
@@ -122,6 +130,7 @@ impl Setup {
         if !self.secured {
             v.push(Step::SignIn);
         }
+        v.push(Step::Assistant);
         v.push(Step::Look);
         v
     }
@@ -132,6 +141,7 @@ impl Setup {
         self.field = match step {
             Step::Name => F_NAME,
             Step::SignIn if self.method != Method::Nothing => F_SECRET,
+            Step::Assistant => F_KEY,
             _ => 0,
         };
         self.kb.reset();
@@ -162,7 +172,15 @@ impl Setup {
                 }
                 None => self.error = String::from("Type your name to continue"),
             },
-            Step::Picture => self.go(if self.secured { Step::Look } else { Step::SignIn }, sys),
+            Step::Picture => self.go(if self.secured { Step::Assistant } else { Step::SignIn }, sys),
+            Step::Assistant => {
+                let k = self.claude.trim();
+                if k.is_empty() || crate::web::claude::key_ok(k) {
+                    self.go(Step::Look, sys);
+                } else {
+                    self.error = String::from("That isn't an Anthropic API key: they start with sk-ant-");
+                }
+            }
             Step::SignIn => {
                 let too_short = match self.method {
                     Method::Pin if !Sys::pin_ok(&self.secret) => Some("Use 4 to 8 digits"),
@@ -180,7 +198,7 @@ impl Setup {
                     self.confirm.clear();
                     self.field = F_CONFIRM;
                 } else {
-                    self.go(Step::Look, sys);
+                    self.go(Step::Assistant, sys);
                 }
             }
             Step::Look => {
@@ -197,8 +215,9 @@ impl Setup {
             Step::Name => Step::Welcome,
             Step::Picture => Step::Name,
             Step::SignIn => Step::Picture,
-            Step::Look if self.secured => Step::Picture,
-            Step::Look => Step::SignIn,
+            Step::Assistant if self.secured => Step::Picture,
+            Step::Assistant => Step::SignIn,
+            Step::Look => Step::Assistant,
             _ => return,
         };
         self.go(prev, sys);
@@ -231,6 +250,12 @@ impl Setup {
         }
         self.secret.clear();
         self.confirm.clear();
+        let key = self.claude.trim();
+        if crate::web::claude::key_ok(key) {
+            sys.claude_key = String::from(key);
+            sys.save_assistant();
+        }
+        self.claude.clear();
         sys.save_settings();
     }
 
@@ -247,6 +272,8 @@ impl Setup {
         self.error.clear();
         match self.field {
             F_NAME if self.name.chars().count() < profile::NAME_MAX && !c.is_control() => self.name.push(c),
+            // keys are letters, digits, - and _
+            F_KEY if self.claude.len() < 256 && c.is_ascii_graphic() => self.claude.push(c),
             F_SECRET | F_CONFIRM => {
                 let (pin, max) = (self.method == Method::Pin, if self.method == Method::Pin { 8 } else { 64 });
                 let s = if self.field == F_SECRET { &mut self.secret } else { &mut self.confirm };
@@ -269,6 +296,9 @@ impl Setup {
             F_CONFIRM => {
                 self.confirm.pop();
             }
+            F_KEY => {
+                self.claude.pop();
+            }
             _ => {}
         }
     }
@@ -287,7 +317,11 @@ impl Setup {
             NEXT => return self.next(sys),
             BACK => self.back(sys),
             LATER => return Outcome::Finished,
-            F_NAME | F_SECRET | F_CONFIRM => {
+            SKIP_KEY => {
+                self.claude.clear();
+                return self.next(sys);
+            }
+            F_NAME | F_SECRET | F_CONFIRM | F_KEY => {
                 self.field = code;
                 self.osk = self.osk || touch(sys);
             }
@@ -318,8 +352,16 @@ impl Setup {
         Outcome::Stay
     }
 
-    pub fn key(&mut self, k: Key, sys: &mut Sys) -> Outcome {
+    pub fn key(&mut self, k: Key, gen: bool, sys: &mut Sys) -> Outcome {
         match k {
+            // Gen+V pastes (an API key is long to type)
+            Key::Char('v') if gen => {
+                let clip = sys.clipboard.clone();
+                for c in clip.trim().chars() {
+                    self.type_char(c);
+                }
+            }
+            Key::Char(_) if gen => {}
             Key::Enter => return self.enter(sys),
             Key::Esc => self.back(sys),
             Key::Tab if self.step == Step::SignIn && self.method != Method::Nothing => {
@@ -394,6 +436,7 @@ impl Setup {
             Step::Name => self.render_name(ui, body, foot, tall),
             Step::Picture => self.render_picture(ui, body, foot, tall),
             Step::SignIn => self.render_signin(ui, body, foot, tall),
+            Step::Assistant => self.render_assistant(ui, body, foot, tall),
             Step::Look => self.render_look(ui, body, foot, sys, tall),
             Step::Done => self.render_done(ui, body, foot, sys, tall),
         }
@@ -641,6 +684,59 @@ impl Setup {
         self.footer(ui, foot, "Continue", true, tall);
     }
 
+    /// Claude, HydatekOS's assistant: paste an Anthropic API key, or skip.
+    fn render_assistant(&mut self, ui: &mut Ui, body: Rect, foot: Rect, tall: bool) {
+        let t = ui.t;
+        let u = Setup::u(tall, body);
+        let compact = tall && self.osk && self.field != 0;
+        let d = u(if compact { 0 } else if tall { 56 } else { 64 });
+        let mut y = body.y;
+        if d > 0 {
+            let badge = Rect::new(body.x, y, d, d);
+            ui.rrect(badge, d / 4, t.accent);
+            ui.icon_in(Icon::Spark, badge, d * 5 / 9, t.on_accent);
+            y += d + u(8);
+        }
+        let sub = if compact {
+            "Paste your Anthropic API key, or skip."
+        } else {
+            "HydatekOS's assistant is Claude, made by Anthropic. Ask it to explain, write, plan or summarise. It uses your own Anthropic API key, which stays in your account on this computer."
+        };
+        y = Setup::heading(ui, Rect::new(body.x, y, body.w, body.h), "Meet Claude, your assistant", sub, tall, false);
+        let f = Rect::new(body.x, y + u(4), body.w.min(u(460)), u(44));
+        // the key shows as dots but for its start and end
+        let k = self.claude.clone();
+        let shown: String = if k.chars().count() > 14 {
+            let head: String = k.chars().take(7).collect();
+            let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("{}••••••••{}", head, tail)
+        } else {
+            k
+        };
+        self.field(ui, f, &shown, "sk-ant-…", false, F_KEY, tall);
+        let mut ny = f.b() + u(22);
+        if self.error.is_empty() {
+            if !compact {
+                let hint = "Make a key at console.anthropic.com under API keys, then paste it here with Gen+V. You can add it later in Settings › Assistant.";
+                for line in ui.wrap(Face::Regular, u(12), hint, body.w) {
+                    ui.text(body.x, ny, Face::Regular, u(12), &line, t.text3);
+                    ny += u(18);
+                }
+            }
+        } else {
+            self.error_line(ui, body.x, ny, body.w, u(13));
+        }
+        self.footer(ui, foot, if self.claude.trim().is_empty() { "Skip" } else { "Continue" }, true, tall);
+        if !self.claude.trim().is_empty() {
+            // "Skip" beside Back, to go on without the key typed
+            let sr = Rect::new(foot.x + u(108), foot.y, u(96), foot.h);
+            let a = Action::Setup(SKIP_KEY);
+            ui.rrect(sr, foot.h / 2, if ui.hot(a) { t.chip.mix(t.text, 20) } else { t.chip });
+            ui.text_in(sr, Face::Semibold, u(14), "Skip", t.text, 1);
+            ui.zone(sr, a);
+        }
+    }
+
     fn render_look(&mut self, ui: &mut Ui, body: Rect, foot: Rect, sys: &Sys, tall: bool) {
         let t = ui.t;
         let u = Setup::u(tall, body);
@@ -720,7 +816,8 @@ impl Setup {
         } else {
             "No sign-in: any key or click opens your session."
         };
-        let sub = format!("{} Change your profile any time in Settings › Profile.", sign);
+        let claude = if sys.has_claude() { " Claude, your assistant, is first in the dock." } else { "" };
+        let sub = format!("{}{} Change your profile any time in Settings › Profile.", sign, claude);
         Setup::heading(ui, Rect::new(body.x, top + d + u(22), body.w, body.h), &title, &sub, tall, true);
         let label = if self.again { "Done" } else { "Start using HydatekOS" };
         self.footer(ui, foot, label, false, tall);

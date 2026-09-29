@@ -37,7 +37,7 @@ pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
 }
 const LOCAL_INST: u32 = 1_000_000;
 const PHONE_INST: u32 = 1_000_001;
-const DOCK_APPS: [AppKind; 11] = [AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Grids, AppKind::Slides, AppKind::Music, AppKind::Settings];
+const DOCK_APPS: [AppKind; 12] = [AppKind::Assistant, AppKind::Files, AppKind::Browser, AppKind::Messages, AppKind::Mail, AppKind::Calendar, AppKind::Notes, AppKind::Scripts, AppKind::Grids, AppKind::Slides, AppKind::Music, AppKind::Settings];
 const MENUS: [&str; 4] = ["File", "Edit", "View", "Go"];
 /// The linked phone renders at its native size and is scaled into Phone Link.
 const PHONE_W: i32 = 390;
@@ -141,7 +141,8 @@ pub struct Shell {
     next_id: u32,
     phone: Mobile,
     local: Mobile,
-    launcher: Option<String>,
+    /// the app launcher's search, while it's open
+    launcher: Option<crate::lineedit::LineEdit>,
     menu: Option<u8>,
     menu_items: Vec<(String, Cmd)>,
     toasts: Vec<Toast>,
@@ -666,9 +667,9 @@ impl Shell {
                     _ => return,
                 }
             }
-            Ev::Key(k, _) => {
+            Ev::Key(k, gen) => {
                 self.dirty = true;
-                st.key(k, &mut self.sys)
+                st.key(k, gen, &mut self.sys)
             }
             _ => return,
         };
@@ -743,7 +744,7 @@ impl Shell {
                 self.open_app(k);
             }
             Action::ToggleLauncher => {
-                self.launcher = if self.launcher.is_some() { None } else { Some(String::new()) };
+                self.launcher = if self.launcher.is_some() { None } else { Some(Default::default()) };
             }
             Action::Quick(i) => {
                 match i {
@@ -864,7 +865,7 @@ impl Shell {
                 self.sys.mobile_shell = !self.sys.mobile_shell;
                 self.sys.save_settings();
             }
-            Cmd::Launcher => self.launcher = Some(String::new()),
+            Cmd::Launcher => self.launcher = Some(Default::default()),
             Cmd::Open(k) => self.open_app(k),
             Cmd::GoHome => {
                 self.open_app(AppKind::Files);
@@ -881,7 +882,7 @@ impl Shell {
     }
 
     fn launcher_matches(&self) -> Vec<AppKind> {
-        let q = self.launcher.as_deref().unwrap_or("").to_lowercase();
+        let q = self.launcher.as_ref().map_or("", |e| e.text.as_str()).to_lowercase();
         DESKTOP_APPS.iter().copied().filter(|k| k.name().to_lowercase().contains(&q)).collect()
     }
 
@@ -906,12 +907,10 @@ impl Shell {
                         self.open_app(k);
                     }
                 }
-                Key::Backspace => {
-                    q.pop();
-                }
                 Key::Char(' ') if gen => self.launcher = None,
-                Key::Char(c) if !c.is_control() && !gen => q.push(c),
-                _ => {}
+                _ => {
+                    q.key_sys(k, gen, &mut self.sys);
+                }
             }
             return;
         }
@@ -933,7 +932,7 @@ impl Shell {
             match (k, gen) {
                 (Key::Char('w'), true) | (Key::Char('q'), true) => return self.run_cmd(Cmd::CloseWin),
                 (Key::Char(' '), true) | (Key::F(1), _) => {
-                    self.launcher = Some(String::new());
+                    self.launcher = Some(Default::default());
                     return;
                 }
                 (Key::Char(','), true) => return self.sys.reqs.push(Req::Settings(0)),
@@ -1264,7 +1263,9 @@ impl Shell {
         ui.shadow(panel, 24, 20, 10, 90);
         ui.rrect(panel, 24, t.surface);
         ui.zone(panel, Action::Swallow);
-        let q = self.launcher.as_deref().unwrap_or("");
+        let empty = crate::lineedit::LineEdit::default();
+        let e = self.launcher.as_ref().unwrap_or(&empty);
+        let q = e.text.as_str();
         let sr = Rect::new(panel.x + 24, panel.y + 22, panel.w - 48, 38);
         ui.rrect(sr, 12, t.chip);
         ui.icon(Icon::Search, sr.x + 14, sr.y + 11, 16, t.text2);
@@ -1272,9 +1273,10 @@ impl Shell {
         if q.is_empty() {
             ui.text_in(tr, Face::Regular, 15, "Search apps", t.text3, 0);
         }
-        let w = ui.text_in(tr, Face::Regular, 15, q, t.text, 0);
+        ui.text_in(tr, Face::Regular, 15, q, t.text, 0);
         if (ui.ticks / 50) % 2 == 0 {
-            ui.rect(Rect::new(tr.x + w + 1, sr.y + 10, 1, 18), t.text);
+            let cx = ui.tw(Face::Regular, 15, e.before_caret());
+            ui.rect(Rect::new(tr.x + cx, sr.y + 10, 1, 18), t.text);
         }
         let cols = 5;
         let cw = (panel.w - 48) / cols;

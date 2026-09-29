@@ -5,9 +5,9 @@ use crate::icons::Icon;
 use crate::sys::Sys;
 use crate::ui::{Key, Ui};
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::vec::Vec;
 
+pub mod assistant;
 pub mod browser;
 pub mod calendar;
 pub mod files;
@@ -41,9 +41,12 @@ pub enum AppKind {
     Scripts,
     Grids,
     Slides,
+    /// Claude, the assistant
+    Assistant,
 }
 
-pub const DESKTOP_APPS: [AppKind; 13] = [
+pub const DESKTOP_APPS: [AppKind; 14] = [
+    AppKind::Assistant,
     AppKind::Files,
     AppKind::Browser,
     AppKind::Messages,
@@ -77,6 +80,7 @@ impl AppKind {
             AppKind::Scripts => "Hyda Scripts",
             AppKind::Grids => "Hyda Grids",
             AppKind::Slides => "Hyda Slides",
+            AppKind::Assistant => "Claude",
         }
     }
     pub fn icon(self) -> Icon {
@@ -96,11 +100,12 @@ impl AppKind {
             AppKind::Scripts => Icon::Scripts,
             AppKind::Grids => Icon::Sheet,
             AppKind::Slides => Icon::Slides,
+            AppKind::Assistant => Icon::Spark,
         }
     }
     /// Accent-coloured icon (as on the mobile home screen)?
     pub fn warm(self) -> bool {
-        matches!(self, AppKind::Files | AppKind::Calendar)
+        matches!(self, AppKind::Files | AppKind::Calendar | AppKind::Assistant)
     }
     /// Default window size (logical units).
     pub fn size(self) -> (i32, i32) {
@@ -115,6 +120,7 @@ impl AppKind {
             AppKind::Grids => (920, 600),
             AppKind::Slides => (1080, 680),
             AppKind::Browser => (1000, 640),
+            AppKind::Assistant => (560, 600),
             _ => (660, 430),
         }
     }
@@ -176,6 +182,7 @@ pub fn create(kind: AppKind, sys: &mut Sys) -> Box<dyn App> {
         AppKind::Scripts => Box::new(scripts::Scripts::new()),
         AppKind::Grids => Box::new(grids::Grids::new()),
         AppKind::Slides => Box::new(slides::Slides::new()),
+        AppKind::Assistant => Box::new(assistant::Assistant::new(sys)),
     }
 }
 
@@ -196,27 +203,47 @@ pub fn side_item(ui: &mut Ui, r: Rect, label: &str, selected: bool, a: crate::ui
     ui.zone(r, a);
 }
 
-/// Simple line editor used by text fields.
-#[derive(Default, Clone)]
-pub struct LineEdit {
-    pub text: String,
-}
+/// The line editor behind every text box (lineedit.rs).
+pub use crate::lineedit::LineEdit;
 
 impl LineEdit {
+    /// A key without Gen (see `key_gen`).
     pub fn key(&mut self, k: Key) -> bool {
+        self.key_gen(k, false)
+    }
+
+    /// The editing keys: typing, ← → (Gen: by word), Home, End, Backspace
+    /// and Delete (Gen: the word). Returns true if the key was used.
+    pub fn key_gen(&mut self, k: Key, gen: bool) -> bool {
         match k {
-            Key::Char(c) if !c.is_control() => {
-                if self.text.len() < 200 {
-                    self.text.push(c);
-                }
-                true
-            }
-            Key::Backspace => {
-                self.text.pop();
-                true
-            }
-            _ => false,
+            Key::Char(c) if !gen && !c.is_control() => self.insert_char(c),
+            Key::Backspace => self.backspace(gen),
+            Key::Delete => self.delete(gen),
+            Key::Left => self.left(gen),
+            Key::Right => self.right(gen),
+            Key::Home => self.home(),
+            Key::End => self.end(),
+            _ => return false,
         }
+        true
+    }
+
+    /// `key_gen`, plus the clipboard: Gen+V pastes at the caret, Gen+C copies
+    /// the line and Gen+X cuts it (a line has no selection).
+    pub fn key_sys(&mut self, k: Key, gen: bool, sys: &mut Sys) -> bool {
+        match k {
+            Key::Char('v') if gen => {
+                let c = sys.clipboard.clone();
+                self.insert(&c);
+            }
+            Key::Char('c') if gen => sys.clipboard = self.text.clone(),
+            Key::Char('x') if gen => {
+                sys.clipboard = self.text.clone();
+                self.clear();
+            }
+            _ => return self.key_gen(k, gen),
+        }
+        true
     }
 }
 
