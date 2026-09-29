@@ -460,7 +460,11 @@ impl Settings {
         // sound
         card(ui, Rect::new(m.x, m.y, m.w, 110));
         let inner = Rect::new(m.x + 16, m.y, m.w - 32, 110);
-        row(ui, inner, m.y + 6, "Volume", if sys.muted { "Muted" } else { "No sound driver yet" });
+        let dev = match &sys.audio {
+            Some(a) => a.clone(),
+            None => String::from("No sound device found"),
+        };
+        row(ui, inner, m.y + 6, "Volume", if sys.muted { "Muted" } else { &dev });
         let bar = Rect::new(m.r() - 16 - 40 - 150, m.y + 28, 150, 6);
         ui.button(Rect::new(bar.x - 40, m.y + 18, 30, 26), "-", Action::App(inst, C_VOL_DOWN), false);
         ui.rrect(bar, 3, t.chip.mix(t.text, 30));

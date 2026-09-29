@@ -29,6 +29,7 @@ mod gridio;
 mod haptics;
 mod hid;
 mod hidin;
+mod hda;
 mod heap;
 mod hlp;
 mod i2c;
@@ -58,6 +59,7 @@ mod ps2;
 mod qr;
 mod rng;
 mod shell;
+mod sound;
 mod sys;
 mod theme;
 mod touchpad;
@@ -281,6 +283,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
+    // sound
+    let mut audio = hda::start();
+    sh.sys.audio = audio.as_ref().map(|a| alloc::format!("{} · {}", a.name, a.outputs.join(", ")));
     // disks HydatekOS drives itself (not the boot disk)
     let disks = disks::start_all();
     sh.sys.disks = disks.info.clone();
@@ -314,6 +319,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     disp.present(splash.step(100, "Ready"), full);
     sh.render(&mut back, 0);
     disp.crossfade(&splash.frame, &back, &mut scratch);
+    sh.sys.sound(sound::Sound::Startup);
     drop(splash);
     let mut first = true;
     loop {
@@ -348,6 +354,15 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
                 let (w, n, p) = haptics::waveform(h);
                 i.play(w, sh.sys.haptics.strength.percent(), n, p);
             }
+        }
+        // sounds: what the shell asked for, and the ring kept ahead of the hardware
+        if let Some(a) = audio.as_mut() {
+            for snd in core::mem::take(&mut sh.sys.sounds) {
+                a.play(snd);
+            }
+            a.pump(sound::gain(sh.sys.volume, sh.sys.muted));
+        } else {
+            sh.sys.sounds.clear();
         }
         // the battery every 30 s, an ACPI light sensor every second
         if ticks % 3000 == 1 {

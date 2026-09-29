@@ -131,6 +131,9 @@ pub struct Sys {
     pub motors: usize,
     /// what ACPI describes and who drives it: (name, kind, driver)
     pub acpi_devices: Vec<(String, String, String)>,
+    /// the sound device HydatekOS plays to, and the sounds waiting
+    pub audio: Option<String>,
+    pub sounds: Vec<crate::sound::Sound>,
     /// disks HydatekOS drives (NVMe, SATA)
     pub disks: Vec<crate::storage::DiskInfo>,
     /// the battery: percent, charging (None: no battery, a desktop)
@@ -256,6 +259,8 @@ impl Sys {
             haptic_pads: 0,
             motors: 0,
             acpi_devices: Vec::new(),
+            audio: None,
+            sounds: Vec::new(),
             disks: Vec::new(),
             battery: None,
             lux: None,
@@ -503,9 +508,22 @@ impl Sys {
         Ok(())
     }
 
+    /// Play a system sound (when sound is on).
+    pub fn sound(&mut self, s: crate::sound::Sound) {
+        if !self.muted && self.sounds.len() < 4 {
+            self.sounds.push(s);
+        }
+    }
+
     /// Haptic feedback (see haptics.rs).
     pub fn feel(&mut self, h: crate::haptics::Haptic) {
         self.haptics.feel(h, crate::arch::ms());
+        // the moments that deserve a sound too
+        match h {
+            crate::haptics::Haptic::Error => self.sound(crate::sound::Sound::Error),
+            crate::haptics::Haptic::Success => self.sound(crate::sound::Sound::Success),
+            _ => {}
+        }
     }
 
     /// The paired phone can play haptic patterns.

@@ -694,11 +694,18 @@ impl Shell {
             Media::Recovery => return,
         }
         let what = if matches!(m, Media::BrightnessUp | Media::BrightnessDown) { Osd::Brightness } else { Osd::Volume };
+        // a tick at the new volume, so it's heard
+        if what == Osd::Volume {
+            self.sys.sound(crate::sound::Sound::Volume);
+        }
         self.osd = Some((what, until));
         self.sys.save_settings();
     }
 
     fn toast(&mut self, title: &str, body: &str) {
+        if !self.sys.focus {
+            self.sys.sound(crate::sound::Sound::Notify);
+        }
         self.toasts.push(Toast { title: title.to_string(), body: body.to_string(), until: self.sys.ticks + 500 });
         if self.toasts.len() > 3 {
             self.toasts.remove(0);
