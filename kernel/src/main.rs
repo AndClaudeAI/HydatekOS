@@ -40,6 +40,7 @@ mod crypto;
 mod doc;
 mod deck;
 mod deckio;
+mod pci;
 mod pdf;
 mod profile;
 mod accounts;
@@ -60,6 +61,7 @@ mod tls;
 mod ui;
 mod usb;
 mod web;
+mod xhci;
 mod zip;
 
 use alloc::vec;
@@ -275,8 +277,12 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
+    // USB controllers HydatekOS drives itself (before the firmware's USB
+    // devices are listed: taking a controller removes them)
+    let xhcis = xhci::start_all();
     let mut input = input::Input::new(disp.w, disp.h);
     input.i2c = Some(i2c);
+    input.xhci = xhcis;
     log!("input: {} pointer device(s)", input.pointer_count());
 
     // 100 Hz periodic timer to pace the loop.
@@ -337,9 +343,13 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
                 sh.sys.lux = Some(ambient::smooth(sh.sys.lux, l));
             }
         }
-        if sh.sys.usb_gen != input.usb.generation {
-            sh.sys.usb_gen = input.usb.generation;
+        let usb_gen = input.usb.generation.wrapping_add(input.xhci.iter().map(|x| x.generation).fold(0u32, |a, g| a.wrapping_add(g)));
+        if sh.sys.usb_gen != usb_gen {
+            sh.sys.usb_gen = usb_gen;
             sh.sys.usb = input.usb.info.clone();
+            for x in &input.xhci {
+                sh.sys.usb.extend(x.info.iter().cloned());
+            }
             sh.sys.haptic_pads = input.usb.haptic_pads() + input.i2c.as_ref().map_or(0, |i| i.haptic_pads());
             sh.sys.motors = input.usb.motors();
             sh.dirty = true;

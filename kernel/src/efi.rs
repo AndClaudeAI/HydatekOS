@@ -26,6 +26,7 @@ pub struct Guid(pub u32, pub u16, pub u16, pub [u8; 8]);
 pub const GOP_GUID: Guid = Guid(0x9042a9de, 0x23dc, 0x4a38, [0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a]);
 pub const SIMPLE_POINTER_GUID: Guid = Guid(0x31878c87, 0x0b75, 0x11d5, [0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d]);
 pub const ABSOLUTE_POINTER_GUID: Guid = Guid(0x8d59d32b, 0xc655, 0x4ae9, [0x9b, 0x15, 0xf2, 0x59, 0x04, 0x99, 0x2a, 0x43]);
+pub const DEVICE_PATH_GUID: Guid = Guid(0x09576e91, 0x6d3f, 0x11d2, [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b]);
 pub const LOADED_IMAGE_GUID: Guid = Guid(0x5b1b31a1, 0x9562, 0x11d2, [0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b]);
 pub const SIMPLE_FS_GUID: Guid = Guid(0x964e5b22, 0x6459, 0x11d2, [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b]);
 pub const SNP_GUID: Guid = Guid(0xa19832b9, 0xac25, 0x11d3, [0x9a, 0x2d, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d]);
@@ -94,7 +95,7 @@ pub struct BootServices {
     pub stall: extern "efiapi" fn(usize) -> Status,
     pub set_watchdog_timer: extern "efiapi" fn(usize, u64, usize, *const u16) -> Status,
     pub connect_controller: extern "efiapi" fn(Handle, *const Handle, *const c_void, bool) -> Status,
-    pub disconnect_controller: Fp,
+    pub disconnect_controller: extern "efiapi" fn(Handle, Handle, Handle) -> Status,
     pub open_protocol: extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void, Handle, Handle, u32) -> Status,
     pub close_protocol: Fp,
     pub open_protocol_information: Fp,
@@ -340,6 +341,49 @@ pub fn rt() -> &'static RuntimeServices {
 }
 pub fn image() -> Handle {
     unsafe { IMAGE }
+}
+
+/// Wait `ms` milliseconds.
+pub fn stall_ms(ms: u64) {
+    (bs().stall)(ms as usize * 1000);
+}
+
+/// Memory a device can reach by DMA: `pages` 4 KiB pages below 4 GiB,
+/// zeroed. The firmware maps memory 1:1, so the address is the pointer.
+pub fn dma(pages: usize) -> Option<usize> {
+    let mut addr: u64 = 0xFFFF_FFFF;
+    // AllocateMaxAddress, EfiBootServicesData
+    if (bs().allocate_pages)(1, 4, pages, &mut addr) != SUCCESS {
+        return None;
+    }
+    unsafe { core::ptr::write_bytes(addr as usize as *mut u8, 0, pages * 4096) };
+    Some(addr as usize)
+}
+
+/// A handle's device path, as bytes (without the end node).
+pub fn device_path(h: Handle) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::new();
+    let Some(p) = handle_protocol::<u8>(h, &DEVICE_PATH_GUID) else { return out };
+    let mut q = p as *const u8;
+    unsafe {
+        for _ in 0..64 {
+            let (t, len) = (*q, u16::from_le_bytes([*q.add(2), *q.add(3)]) as usize);
+            if t == 0x7F || len < 4 {
+                break;
+            }
+            out.extend_from_slice(core::slice::from_raw_parts(q, len));
+            q = q.add(len);
+        }
+    }
+    out
+}
+
+/// The device HydatekOS was started from (the boot disk).
+pub fn boot_device() -> Handle {
+    match handle_protocol::<LoadedImage>(image(), &LOADED_IMAGE_GUID) {
+        Some(li) => unsafe { (*li).device_handle },
+        None => null_mut(),
+    }
 }
 
 pub fn locate<T>(guid: &Guid) -> Option<*mut T> {

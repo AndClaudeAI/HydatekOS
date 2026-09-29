@@ -261,3 +261,40 @@ fn ambient_brightness() {
     assert_eq!(smooth(None, 100), 100);
     assert_eq!(smooth(Some(100), 500), 200);
 }
+
+/// The boot keyboard descriptor (USB HID spec, appendix B.1): modifiers,
+/// a reserved byte, LEDs out, six key slots.
+const KEYBOARD: &[u8] = &[
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01, 0x75, 0x08, 0x81, 0x01, 0x95, 0x05, 0x75, 0x01, 0x05,
+    0x08, 0x19, 0x01, 0x29, 0x05, 0x91, 0x02, 0x95, 0x01, 0x75, 0x03, 0x91, 0x01, 0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0,
+];
+
+#[test]
+fn keyboard() {
+    use crate::hidin::{usage_char, Event, HidInput};
+    let d = Descriptor::parse(KEYBOARD);
+    assert_eq!(describe(&d), "Keyboard");
+    let k = Keyboard::find(&d).expect("a keyboard");
+    // left Shift + 'a' + '1'
+    assert_eq!(k.read(&[0x02, 0, 0x04, 0x1E, 0, 0, 0, 0], d.ids), Some((0x02, vec![0x04, 0x1E])));
+    let mut h = HidInput::new(KEYBOARD, false);
+    let mut out = vec![];
+    h.report(&[0, 0, 0x0B, 0, 0, 0, 0, 0], 0, &mut out);
+    assert_eq!(out, vec![Event::Key { usage: 0x0B, down: true, mods: 0 }]);
+    out.clear();
+    // Ctrl pressed as well, then everything let go
+    h.report(&[0x01, 0, 0x0B, 0, 0, 0, 0, 0], 5, &mut out);
+    assert_eq!(out, vec![Event::Key { usage: 0xE0, down: true, mods: 1 }]);
+    out.clear();
+    h.report(&[0, 0, 0, 0, 0, 0, 0, 0], 9, &mut out);
+    assert_eq!(out, vec![Event::Key { usage: 0x0B, down: false, mods: 0 }, Event::Key { usage: 0xE0, down: false, mods: 0 }]);
+    // the US layout
+    assert_eq!(usage_char(0x04, false), Some('a'));
+    assert_eq!(usage_char(0x1D, true), Some('Z'));
+    assert_eq!(usage_char(0x1F, true), Some('@'));
+    assert_eq!(usage_char(0x27, false), Some('0'));
+    assert_eq!(usage_char(0x34, true), Some('"'));
+    assert_eq!(usage_char(0x38, true), Some('?'));
+    assert_eq!(usage_char(0x62, false), Some('0'));
+    assert_eq!(usage_char(0x28, false), None);
+}

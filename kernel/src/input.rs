@@ -167,7 +167,15 @@ pub struct Input {
     pub usb: crate::usb::UsbHid,
     /// I2C touchpads, touch screens, pens and sensors (i2cdev.rs)
     pub i2c: Option<crate::i2cdev::I2cInput>,
+    /// USB controllers HydatekOS drives itself (xhci.rs)
+    pub xhci: Vec<crate::xhci::Xhci>,
     usb_evs: Vec<crate::usb::Event>,
+    /// keyboards HydatekOS drives itself: Caps Lock, the key repeating
+    /// (key, modifiers, when next), the Hydatek key down (Some(true) once
+    /// another key was pressed with it)
+    caps: bool,
+    rep: Option<(Key, u32, u64)>,
+    usb_logo: Option<bool>,
 }
 
 impl Input {
@@ -218,11 +226,11 @@ impl Input {
             let st = unsafe { ((*k).set_state)(k, &mut t) };
             log!("input: partial keys {}", if st == efi::SUCCESS { "reported" } else { "not supported" });
         }
-        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None, usb, i2c: None, usb_evs: Vec::new() }
+        Input { ptrs, kbd_ex, kbd: st.con_in, x: w / 2, y: h / 2, w, h, left: false, right: false, acc: (0, 0), scroll_acc: 0, hydatek: None, held_known: false, polls: 0, lone: None, usb, i2c: None, xhci: Vec::new(), usb_evs: Vec::new(), caps: false, rep: None, usb_logo: None }
     }
 
     pub fn pointer_count(&self) -> usize {
-        self.ptrs.len() + self.usb.driven() + self.i2c.as_ref().map_or(0, |i| i.driven())
+        self.ptrs.len() + self.usb.driven() + self.i2c.as_ref().map_or(0, |i| i.driven()) + self.xhci.iter().map(|x| x.driven()).sum::<usize>()
     }
 
     pub fn poll(&mut self, speed: i32, out: &mut Vec<Ev>) {
@@ -299,6 +307,9 @@ impl Input {
         if let Some(i) = self.i2c.as_mut() {
             i.poll(crate::arch::ms(), &mut evs);
         }
+        for x in self.xhci.iter_mut() {
+            x.poll(crate::arch::ms(), &mut evs);
+        }
         let mut media = Vec::new();
         let mut keys = Vec::new();
         for e in evs.drain(..) {
@@ -355,6 +366,7 @@ impl Input {
                     PEN_AT.store(crate::arch::ms().max(1), Ordering::Relaxed);
                 }
                 U::Light(lux) => keys.push(Ev::Light(lux)),
+                U::Key { usage, down, mods } => self.usb_key(usage, down, mods, &mut keys),
                 U::Nav(n) => {
                     use crate::gamepad::Nav as N;
                     keys.push(match n {
@@ -386,6 +398,14 @@ impl Input {
             }
         }
         self.usb_evs = evs;
+        // a held key repeats: after half a second, 30 times a second
+        if let Some((k, m, next)) = self.rep {
+            let now = crate::arch::ms();
+            if now >= next {
+                keys.push(gen_key(k, m));
+                self.rep = Some((k, m, now + 33));
+            }
+        }
         for m in media {
             out.push(Ev::Key(Key::Media(m), false));
         }
@@ -498,6 +518,89 @@ impl Input {
                     }
                 }
             }
+        }
+    }
+}
+
+impl Input {
+    /// A key from a keyboard HydatekOS drives (USB through its own xHCI
+    /// driver, or I2C): HID usages, US layout.
+    fn usb_key(&mut self, usage: u8, down: bool, hid_mods: u8, out: &mut Vec<Ev>) {
+        static FIRST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+        if FIRST.swap(false, Ordering::Relaxed) {
+            log!("input: typing on a keyboard HydatekOS drives (HID usage {:#04x})", usage);
+        }
+        let mut mods = 0;
+        for (bits, m) in [(0x22u8, M_SHIFT), (0x11, M_CTRL), (0x44, M_AUX), (0x88, M_LOGO)] {
+            if hid_mods & bits != 0 {
+                mods |= m;
+            }
+        }
+        MODS.store(mods, Ordering::Relaxed);
+        // the Hydatek key (GUI): tapped alone, the start menu
+        if usage == 0xE3 || usage == 0xE7 {
+            if down {
+                self.usb_logo = Some(false);
+            } else if self.usb_logo.take() == Some(false) {
+                out.push(Ev::HydatekTap);
+            }
+            return;
+        }
+        if (0xE0..=0xE7).contains(&usage) {
+            return;
+        }
+        if !down {
+            if matches!(self.rep, Some(_)) {
+                self.rep = None;
+            }
+            return;
+        }
+        if usage == 0x39 {
+            self.caps = !self.caps;
+            TOGGLES.store((efi::TOGGLE_STATE_VALID | if self.caps { efi::CAPS_LOCK } else { 0 }) as u32, Ordering::Relaxed);
+            return;
+        }
+        let shift = mods & M_SHIFT != 0;
+        let k = match usage {
+            0x28 | 0x58 => Key::Enter,
+            0x29 => Key::Esc,
+            0x2A => Key::Backspace,
+            0x2B => Key::Tab,
+            0x3A..=0x45 => Key::F(usage - 0x39),
+            0x68..=0x73 => Key::F(usage - 0x68 + 13),
+            0x48 => Key::Pause,
+            0x49 => Key::Insert,
+            0x4A => Key::Home,
+            0x4B => Key::PageUp,
+            0x4C => Key::Delete,
+            0x4D => Key::End,
+            0x4E => Key::PageDown,
+            0x4F => Key::Right,
+            0x50 => Key::Left,
+            0x51 => Key::Down,
+            0x52 => Key::Up,
+            0x7F => Key::Media(Media::Mute),
+            0x80 => Key::Media(Media::VolumeUp),
+            0x81 => Key::Media(Media::VolumeDown),
+            u => match crate::hidin::usage_char(u, shift) {
+                Some(c) if c.is_ascii_alphabetic() && self.caps => Key::Char(if shift { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() }),
+                Some(c) => Key::Char(c),
+                None => return,
+            },
+        };
+        record(0, match k {
+            Key::Char(c) => c as u16,
+            _ => 0,
+        }, mods, TOGGLES.load(Ordering::Relaxed) as u8);
+        if mods & M_LOGO != 0 {
+            self.usb_logo = Some(true);
+        }
+        out.push(gen_key(k, mods));
+        // letters, digits, arrows and Backspace repeat
+        if !matches!(k, Key::Esc | Key::Tab | Key::Enter | Key::Media(_) | Key::F(_)) && mods & (M_LOGO | M_CTRL) == 0 {
+            self.rep = Some((k, mods, crate::arch::ms() + 500));
+        } else {
+            self.rep = None;
         }
     }
 }

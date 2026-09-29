@@ -22,6 +22,7 @@ pub const fn usage(page: u16, id: u16) -> Usage {
 
 // pages
 pub const GENERIC_DESKTOP: u16 = 0x01;
+pub const KEYBOARD: u16 = 0x07;
 pub const BUTTON: u16 = 0x09;
 pub const CONSUMER: u16 = 0x0C;
 pub const DIGITIZER: u16 = 0x0D;
@@ -425,6 +426,56 @@ impl Mouse {
             pan: self.pan.as_ref().map_or(0, |f| get(f, r, ids)),
             buttons,
         })
+    }
+}
+
+// ---- keyboards ---------------------------------------------------------------------
+
+/// A keyboard: its modifier bits and the array of keys held.
+#[derive(Clone, Debug)]
+pub struct Keyboard {
+    mods: Vec<Field>,
+    keys: Vec<Field>,
+    report_id: u8,
+}
+
+impl Keyboard {
+    pub fn find(d: &Descriptor) -> Option<Keyboard> {
+        let on_page = |f: &&Field| f.kind == Kind::Input && f.app == APP_KEYBOARD && f.usage >> 16 == KEYBOARD as u32;
+        let keys: Vec<Field> = d.fields.iter().filter(on_page).filter(|f| !f.variable).copied().collect();
+        let first = keys.first()?;
+        let report_id = first.report_id;
+        let mods = d.fields.iter().filter(on_page).filter(|f| f.variable && f.report_id == report_id && (0xE0..=0xE7).contains(&(f.usage & 0xFFFF))).copied().collect();
+        Some(Keyboard { mods, keys: keys.into_iter().filter(|f| f.report_id == report_id).collect(), report_id })
+    }
+
+    /// The modifiers (bit 0 left Ctrl … bit 7 right GUI) and the keys held
+    /// (HID usages).
+    pub fn read(&self, r: &[u8], ids: bool) -> Option<(u8, Vec<u8>)> {
+        if report_id(r, ids) != self.report_id {
+            return None;
+        }
+        let mut mods = 0u8;
+        for f in &self.mods {
+            if get(f, r, ids) != 0 {
+                mods |= 1 << ((f.usage & 0xFFFF) - 0xE0);
+            }
+        }
+        let mut keys = Vec::new();
+        for f in &self.keys {
+            let v = get(f, r, ids);
+            if v < f.min || v > f.max {
+                continue;
+            }
+            let u = (f.usage & 0xFFFF) as i32 + (v - f.min);
+            // 0: nothing, 1-3: too many keys / errors
+            if u > 3 && u < 0xE0 {
+                keys.push(u as u8);
+            } else if (0xE0..=0xE7).contains(&u) {
+                mods |= 1 << (u - 0xE0);
+            }
+        }
+        Some((mods, keys))
     }
 }
 

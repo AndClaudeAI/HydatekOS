@@ -8,7 +8,7 @@
 //! start a touchpad or a sensor and play haptic waveforms.
 
 use crate::gamepad::{self, Nav, Navigator};
-use crate::hid::{self, Consumer, Descriptor, HapticController, LightSensor, Mouse, Pen, Touchpad};
+use crate::hid::{self, Consumer, Descriptor, HapticController, Keyboard, LightSensor, Mouse, Pen, Touchpad};
 use crate::touchpad::{Gesture, Gestures};
 use alloc::vec::Vec;
 
@@ -30,6 +30,56 @@ pub enum Event {
     Pen { x: i32, y: i32, pressure: i32, tip: bool, eraser: bool },
     /// ambient light, lux
     Light(u32),
+    /// a key pressed or let go: its HID usage, and the modifiers held
+    /// (bit 0 left Ctrl, 1 left Shift, 2 left Alt, 3 left GUI, 4-7 the right ones)
+    Key { usage: u8, down: bool, mods: u8 },
+}
+
+/// What a key types on a US keyboard (letters, digits, punctuation, space).
+pub fn usage_char(usage: u8, shift: bool) -> Option<char> {
+    const PLAIN: &[u8] = b"1234567890";
+    const SHIFTED: &[u8] = b"!@#$%^&*()";
+    Some(match usage {
+        0x04..=0x1D => {
+            let c = (b'a' + usage - 0x04) as char;
+            if shift {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        }
+        0x1E..=0x27 => (if shift { SHIFTED } else { PLAIN })[(usage - 0x1E) as usize] as char,
+        0x2C => ' ',
+        0x2D..=0x38 if usage != 0x32 => {
+            let (a, b) = match usage {
+                0x2D => ('-', '_'),
+                0x2E => ('=', '+'),
+                0x2F => ('[', '{'),
+                0x30 => (']', '}'),
+                0x31 => ('\\', '|'),
+                0x33 => (';', ':'),
+                0x34 => ('\'', '"'),
+                0x35 => ('`', '~'),
+                0x36 => (',', '<'),
+                0x37 => ('.', '>'),
+                _ => ('/', '?'),
+            };
+            if shift {
+                b
+            } else {
+                a
+            }
+        }
+        // the keypad
+        0x54 => '/',
+        0x55 => '*',
+        0x56 => '-',
+        0x57 => '+',
+        0x59..=0x61 => (b'1' + usage - 0x59) as char,
+        0x62 => '0',
+        0x63 => '.',
+        _ => return None,
+    })
 }
 
 pub enum PadKind {
@@ -47,13 +97,14 @@ pub struct HidInput {
     pub pen: Option<(Pen, bool)>,
     pub light: Option<LightSensor>,
     pub pad_kind: Option<PadKind>,
+    pub kbd: Option<(Keyboard, u8, Vec<u8>)>,
     nav: Navigator,
     pub buttons: u32,
 }
 
 impl HidInput {
     fn empty(desc: Descriptor) -> HidInput {
-        HidInput { desc, mouse: None, pad: None, consumer: None, haptic: None, pen: None, light: None, pad_kind: None, nav: Navigator::new(), buttons: 0 }
+        HidInput { desc, mouse: None, pad: None, consumer: None, haptic: None, pen: None, light: None, pad_kind: None, kbd: None, nav: Navigator::new(), buttons: 0 }
     }
 
     /// From a report descriptor. `sony`: a Sony controller (its button order).
@@ -67,6 +118,7 @@ impl HidInput {
         h.pen = Pen::find(&desc).map(|p| (p, false));
         h.light = LightSensor::find(&desc);
         h.pad_kind = hid::Gamepad::find(&desc).map(|g| PadKind::Hid(g, sony));
+        h.kbd = Keyboard::find(&desc).map(|k| (k, 0, Vec::new()));
         h.desc = desc;
         h
     }
@@ -79,7 +131,7 @@ impl HidInput {
 
     /// Anything HydatekOS can use.
     pub fn useful(&self) -> bool {
-        self.mouse.is_some() || self.pad.is_some() || self.consumer.is_some() || self.haptic.is_some() || self.pad_kind.is_some() || self.pen.is_some() || self.light.is_some()
+        self.kbd.is_some() || self.mouse.is_some() || self.pad.is_some() || self.consumer.is_some() || self.haptic.is_some() || self.pad_kind.is_some() || self.pen.is_some() || self.light.is_some()
     }
 
     pub fn what(&self) -> &'static str {
@@ -154,6 +206,26 @@ impl HidInput {
                 out.push(Event::Nav(n));
             }
             return;
+        }
+        if let Some((k, mods, held)) = self.kbd.as_mut() {
+            if let Some((m, keys)) = k.read(r, ids) {
+                for u in held.iter().filter(|u| !keys.contains(u)) {
+                    out.push(Event::Key { usage: *u, down: false, mods: m });
+                }
+                for u in keys.iter().filter(|u| !held.contains(u)) {
+                    out.push(Event::Key { usage: *u, down: true, mods: m });
+                }
+                // a modifier pressed or let go on its own (the Hydatek key tapped)
+                for bit in 0..8u8 {
+                    let (was, now) = (*mods >> bit & 1, m >> bit & 1);
+                    if was != now {
+                        out.push(Event::Key { usage: 0xE0 + bit, down: now == 1, mods: m });
+                    }
+                }
+                *mods = m;
+                *held = keys;
+                return;
+            }
         }
         if let Some((pen, was_tip)) = self.pen.as_mut() {
             if let Some(p) = pen.read(r, ids) {
