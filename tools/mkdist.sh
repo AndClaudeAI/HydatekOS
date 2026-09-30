@@ -35,4 +35,26 @@ with zipfile.ZipFile(os.path.join(base, name + "-x86_64.zip"), "w", zipfile.ZIP_
             with open(full, "rb") as fh:
                 z.writestr(info, fh.read())
 PY
-ls -la "$ROOT/dist/$NAME-x86_64.zip"
+# and the same system as files to copy onto any FAT32 flash drive
+USB="$ROOT/dist/$NAME-USB"
+rm -rf "$USB" && mkdir -p "$USB/EFI/BOOT" "$USB/HYDATEK"
+cp "$ROOT/kernel/target/x86_64-unknown-uefi/release/hydatek.efi" "$USB/EFI/BOOT/BOOTX64.EFI"
+ARM_EFI="$ROOT/kernel/target/aarch64-unknown-uefi/release/hydatek.efi"
+[ -f "$ARM_EFI" ] && cp "$ARM_EFI" "$USB/EFI/BOOT/BOOTAA64.EFI"
+APK="$ROOT/companion/android/build/hydatek-link.apk"
+[ -f "$APK" ] && mkdir -p "$USB/HYDATEK/apps" && cp "$APK" "$USB/HYDATEK/apps/"
+cp "$ROOT/tools/dist/USB-README.txt" "$USB/README.txt"
+python3 - "$USB/README.txt" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+PY
+(cd "$ROOT/dist" && rm -f "$NAME-USB-files.zip" && python3 -c "
+import os, zipfile, sys
+with zipfile.ZipFile('$NAME-USB-files.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for d, _, fs in os.walk('$NAME-USB'):
+        for f in sorted(fs):
+            full = os.path.join(d, f)
+            z.write(full, os.path.relpath(full, '$NAME-USB'))
+")
+ls -la "$ROOT/dist/$NAME-x86_64.zip" "$ROOT/dist/$NAME-USB-files.zip"

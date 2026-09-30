@@ -13,6 +13,22 @@ HydatekOS 0.1 runs on computers with **UEFI firmware** (almost every PC made sin
   (`\EFI\BOOT\BOOTAA64.EFI`). See [HARDWARE.md](HARDWARE.md) for what works on
   ARM so far.
 
+## The easy way: copy files onto a flash drive
+
+`tools/mkdist.sh` also makes `dist/HydatekOS-0.1-USB-files.zip`. It holds the folders
+`EFI` and `HYDATEK` and a README. **Copy both folders to the top of any FAT32 flash
+drive** and start the PC from it: UEFI firmware starts `\EFI\BOOT\BOOTX64.EFI` (or
+`BOOTAA64.EFI`) from any FAT32 drive, so no imaging tool is needed. Files already on
+the drive stay as they are; HydatekOS keeps yours in `\HYDATEK\` next to them.
+
+Drives of 32 GB or less usually come formatted FAT32. Larger ones often come as exFAT,
+which firmware can't start from. Format those FAT32 with Rufus, which erases them.
+
+Tested in QEMU with a 4 GB drive formatted like Windows does (MBR, one FAT32
+partition) that already held a photo. The PC started from it by itself, and HydatekOS
+saved its files next to the photo. Settings › Install worked from it too, and the PC
+then started from its own disk with the drive removed.
+
 ## 1. Build the disk image
 
 ```sh
