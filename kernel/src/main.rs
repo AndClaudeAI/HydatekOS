@@ -148,12 +148,44 @@ impl Display {
                     ((*gop).set_mode)(gop, m);
                 }
             }
+            Some(Display::adopt(gop))
+        }
+    }
+
+    /// Switch to the firmware mode of `w` × `h`, if it has one: the
+    /// resolution chosen in Settings › Display.
+    fn switch(self, w: u32, h: u32) -> Display {
+        unsafe {
+            let gop = self.gop;
+            let max = (*(*gop).mode).max_mode;
+            for m in 0..max {
+                let mut size = 0usize;
+                let mut inf: *const efi::GopModeInfo = core::ptr::null();
+                if ((*gop).query_mode)(gop, m, &mut size, &mut inf) != efi::SUCCESS {
+                    continue;
+                }
+                if (*inf).hres == w && (*inf).vres == h && (*inf).pixel_format <= 2 {
+                    if ((*gop).set_mode)(gop, m) == efi::SUCCESS {
+                        log!("display: switched to {}x{} (chosen in Settings)", w, h);
+                        return Display::adopt(gop);
+                    }
+                    break;
+                }
+            }
+            log!("display: no {}x{} mode here; staying at {}x{}", w, h, self.w, self.h);
+            self
+        }
+    }
+
+    /// The display as the firmware's current mode has it.
+    fn adopt(gop: *mut efi::Gop) -> Display {
+        unsafe {
             let m = &*(*gop).mode;
             let info = &*m.info;
             // BGRX (1) is HydatekOS's own pixel layout; RGBX (0) swaps two bytes
             let fb = (m.fb_base != 0 && info.pixel_format <= 1).then(|| (m.fb_base as usize, info.pixels_per_scanline as usize, info.pixel_format == 0));
             log!("display: {}", if fb.is_some() { "direct framebuffer, every core" } else { "firmware blits" });
-            Some(Display { gop, w: info.hres as i32, h: info.vres as i32, fb, shown: core::cell::RefCell::new(vec![0x0102_0304; (info.hres * info.vres) as usize]) })
+            Display { gop, w: info.hres as i32, h: info.vres as i32, fb, shown: core::cell::RefCell::new(vec![0x0102_0304; (info.hres * info.vres) as usize]) }
         }
     }
 
@@ -302,7 +334,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     }
     let cores = par::init();
     log!("par: drawing on {} core{}", cores, if cores == 1 { "" } else { "s" });
-    let Some(disp) = Display::init() else {
+    let Some(mut disp) = Display::init() else {
         log!("no graphics output");
         return efi::NOT_FOUND;
     };
@@ -310,8 +342,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     font::init();
 
     // Logical points: desktops at ~1280+ wide, phones/tablets in portrait at ~400-540.
-    let scale = if disp.h > disp.w { (disp.w / 400).max(1) } else if disp.w >= 2560 && disp.h >= 1440 { 2 } else { 1 };
-    let full = Rect::new(0, 0, disp.w, disp.h);
+    let auto_scale = |d: &Display| if d.h > d.w { (d.w / 400).max(1) } else if d.w >= 2560 && d.h >= 1440 { 2 } else { 1 };
+    let mut scale = auto_scale(&disp);
+    let mut full = Rect::new(0, 0, disp.w, disp.h);
     // After the PC maker's logo: black, then the Hydatek Systems wordmark
     // fades in (about a third of a second).
     let mut splash = shell::splash::Splash::new(disp.w, disp.h, scale);
@@ -327,8 +360,21 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     disp.present(splash.step(45, "Loading your files"), full);
     let vfs = fs::Vfs::mount();
     log!("storage: persistent={}", vfs.persistent);
+    // the resolution and size chosen in Settings › Display
+    let screen = vfs.read_raw("/system/screen.txt").map(|d| sys::ScreenChoice::parse(&alloc::string::String::from_utf8_lossy(&d))).unwrap_or_default();
+    if let Some((w, h)) = screen.mode {
+        if (w as i32, h as i32) != (disp.w, disp.h) {
+            disp = disp.switch(w, h);
+            full = Rect::new(0, 0, disp.w, disp.h);
+            splash = shell::splash::Splash::new(disp.w, disp.h, auto_scale(&disp));
+        }
+    }
+    scale = screen.scale_for(disp.w, disp.h).unwrap_or(auto_scale(&disp));
+    log!("display: {}x{} at {}x", disp.w, disp.h, scale);
+    disp.present(splash.step(45, "Loading your files"), full);
     let mut sys = sys::Sys::new(vfs, efi::now());
     sys.rng_source = rng_source;
+    sys.screen_choice = screen;
     disp.present(splash.step(65, "Starting network"), full);
     let mut net = net::Net::up();
     let mut server = net.as_mut().map(linksrv::LinkServer::new);
@@ -366,6 +412,7 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut back = Canvas::new(disp.w, disp.h);
     let cursor = Cursor::new(scale);
     let mut scratch: Vec<u32> = vec![];
+    let mut under: Vec<u32> = vec![];
     // Wi-Fi through the firmware, where it has a driver
     let mut fwifi = uefiwifi::FirmwareWifi::find();
     if let Some(w) = fwifi.as_mut() {
@@ -546,7 +593,11 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             let t0 = arch::us();
             sh.render(&mut back, ticks);
             let t1 = arch::us();
+            // the pointer goes into the frame before it's shown, so the
+            // screen never has a frame without it (no flicker as things animate)
+            cursor.stamp(&mut back, input.x, input.y, &mut under);
             disp.present(&back, back.bounds());
+            cursor.unstamp(&mut back, input.x, input.y, &under);
             let t2 = arch::us();
             // frame times (smoothed) for Settings › Display
             let (r0, p0) = sh.sys.frame_us;
@@ -556,7 +607,6 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
             if sh.sys.frames % 500 == 0 {
                 log!("frame: render {} us, present {} us", sh.sys.frame_us.0, sh.sys.frame_us.1);
             }
-            disp.present_with_cursor(&back, &cursor, input.x, input.y, Rect::new(input.x, input.y, cursor.w, cursor.h), &mut scratch);
             cx = input.x;
             cy = input.y;
         } else if cx != input.x || cy != input.y {

@@ -1090,6 +1090,8 @@ const C_ACC_WALL: u32 = 1590;
 const C_WIDGETS: u32 = 1591;
 const C_PIC: u32 = 1600;
 const C_PHOTO: u32 = 1620;
+const C_RES: u32 = 1700;
+const C_SCALE: u32 = 1740;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -1383,26 +1385,63 @@ impl App for Settings {
                     let iw = ui.tw(Face::Mono, 12, ids);
                     ui.text(m.r() - 16 - iw, y, Face::Mono, 12, ids, t.text3);
                 }
-                // the firmware's screen modes
+                // resolution and size, from the firmware's modes
                 let top = top + 58 + n * 24;
-                ui.text(m.x, top + 14, Face::Semibold, 14, "Screen modes", t.text);
+                ui.text(m.x, top + 14, Face::Semibold, 14, "Resolution", t.text);
+                let modes = screen_modes(&hw.modes, hw.mode);
+                let chosen = sys.screen_choice.mode.unwrap_or(hw.mode);
                 let mut x = m.x;
                 let mut y = top + 26;
-                for &(mw, mh) in hw.modes.iter().take(12) {
+                for (i, &(mw, mh)) in modes.iter().enumerate() {
                     let label = format!("{} × {}", mw, mh);
                     let cw = ui.tw(Face::Medium, 12, &label) + 22;
                     if x + cw > m.r() {
                         x = m.x;
                         y += 32;
                     }
-                    let on = (mw, mh) == hw.mode;
-                    ui.rrect(Rect::new(x, y, cw, 26), 13, if on { t.accent } else { t.chip });
-                    ui.text_in(Rect::new(x, y, cw, 26), Face::Medium, 12, &label, if on { t.on_accent } else { t.text }, 1);
+                    let a = Action::App(inst, C_RES + i as u32);
+                    let r = Rect::new(x, y, cw, 26);
+                    let on = (mw, mh) == chosen;
+                    if (mw, mh) == hw.mode && !on {
+                        // in use now, until the restart
+                        ui.stroke(r, 13, 1, t.accent);
+                    }
+                    ui.rrect(r, 13, if on { t.accent } else if ui.hot(a) { t.hover } else { t.chip });
+                    ui.text_in(r, Face::Medium, 12, &label, if on { t.on_accent } else { t.text }, 1);
+                    ui.zone(r, a);
                     x += cw + 6;
                 }
-                let note = "The firmware's driver draws the screen; the mode is chosen at start-up.";
-                let note = ui.fit(Face::Regular, 12, note, m.w);
-                ui.text(m.x, y + 48, Face::Regular, 12, &note, t.text3);
+                // size: how many pixels to a point
+                let y = y + 40;
+                ui.text(m.x, y + 17, Face::Semibold, 13, "Size", t.text);
+                let (cw_, ch_) = chosen;
+                let big_ok = cw_ as i32 / 2 >= 1024 && ch_ as i32 / 2 >= 600;
+                for (k, (label, v)) in [("Automatic", None), ("Normal", Some(1)), ("Large (2×)", Some(2))].iter().enumerate() {
+                    let a = Action::App(inst, C_SCALE + k as u32);
+                    let on = sys.screen_choice.scale == *v;
+                    let r = Rect::new(m.x + 50 + k as i32 * 112, y, 106, 28);
+                    if *v == Some(2) && !big_ok {
+                        ui.rrect(r, 14, t.chip.with_alpha(120));
+                        ui.text_in(r, Face::Medium, 12, label, t.text3, 1);
+                    } else {
+                        ui.button(r, label, a, on);
+                    }
+                }
+                let wanted = sys.screen_choice.scale_for(cw_ as i32, ch_ as i32).unwrap_or(if cw_ >= 2560 && ch_ >= 1440 { 2 } else { 1 });
+                let pending = chosen != hw.mode || wanted != sys.screen.2;
+                let note = if pending {
+                    format!("{} × {}{} after a restart.", cw_, ch_, if wanted == 2 { ", large" } else { "" })
+                } else if !big_ok {
+                    String::from("Large (2×) needs 2048 × 1200 or more: sharp text at a comfortable size.")
+                } else {
+                    String::from("Large (2×) draws everything with twice the pixels: sharp text on a big screen.")
+                };
+                let note = ui.fit(Face::Regular, 12, &note, m.w - if pending { 130 } else { 0 });
+                ui.text(m.x, y + 56, Face::Regular, 12, &note, if pending { t.text } else { t.text3 });
+                if pending {
+                    ui.button(Rect::new(m.r() - 120, y + 38, 120, 30), "Restart now", Action::App(inst, C_RESTART), true);
+                }
+                let y = y + 30;
                 // brightness and the room's light
                 let top = y + 62;
                 card(ui, Rect::new(m.x, top, m.w, 56));
@@ -1774,6 +1813,19 @@ impl App for Settings {
                 sys.reqs.push(Req::Setup);
                 return;
             }
+            c if (C_RES..C_RES + 32).contains(&c) => {
+                if let Some(&m) = screen_modes(&sys.hw.modes, sys.hw.mode).get((c - C_RES) as usize) {
+                    let mut ch = sys.screen_choice;
+                    ch.mode = Some(m);
+                    sys.set_screen(ch);
+                }
+            }
+            c if (C_SCALE..C_SCALE + 3).contains(&c) => {
+                let mut ch = sys.screen_choice;
+                ch.scale = [None, Some(1), Some(2)][(c - C_SCALE) as usize];
+                sys.set_screen(ch);
+            }
+            C_SHUTDOWN => sys.reqs.push(Req::Shutdown),
             c if c >= C_PICK => {
                 use crate::avatar::{Choice, Picker};
                 use crate::profile::Avatar;
@@ -1861,7 +1913,6 @@ impl App for Settings {
                 return;
             }
             C_RESTART => sys.reqs.push(Req::Reboot),
-            C_SHUTDOWN => sys.reqs.push(Req::Shutdown),
             c if c >= C_ENGINE => {
                 if let Some(e) = crate::web::engines::ENGINES.get((c - C_ENGINE) as usize) {
                     sys.search_engine = alloc::string::ToString::to_string(e.id);
@@ -1995,3 +2046,22 @@ impl App for Settings {
     }
 
 }
+
+/// The firmware's modes worth offering: the common screen sizes it has
+/// (and the one in use), smallest first. Firmware that offers none of them
+/// (a laptop with only its panel's size) gets its own landscape modes.
+fn screen_modes(all: &[(u32, u32)], now: (u32, u32)) -> Vec<(u32, u32)> {
+    const COMMON: [(u32, u32); 12] = [(1024, 768), (1280, 720), (1280, 800), (1366, 768), (1440, 900), (1600, 900), (1680, 1050), (1920, 1080), (1920, 1200), (2560, 1440), (2560, 1600), (3840, 2160)];
+    let mut v: Vec<(u32, u32)> = COMMON.iter().copied().filter(|m| all.contains(m)).collect();
+    if v.len() < 2 {
+        v = all.iter().copied().filter(|&(w, h)| w >= h && w >= 1024 && h >= 600).collect();
+    }
+    v.truncate(15);
+    if now.0 > 0 && !v.contains(&now) {
+        v.push(now);
+    }
+    v.sort_by_key(|&(w, h)| (w, h));
+    v.dedup();
+    v
+}
+

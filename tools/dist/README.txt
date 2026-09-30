@@ -49,5 +49,17 @@ USING IT
 - Something went wrong? hydatekos-log.txt in this folder says what
   HydatekOS was doing. Send it along with a description.
 
+SHARPER PICTURE
+---------------
+HydatekOS starts at 1280 x 800. For a bigger, sharper screen:
+1. In HydatekOS open Settings > Display.
+2. Under Resolution, pick a size that fits your screen, for example
+   1600 x 900 on a laptop, or 1920 x 1080 on a big monitor.
+   On a very big or high-resolution screen, pick 2560 x 1440 or larger
+   and set Size to "Large (2x)" for extra-sharp text.
+3. Click "Restart now".
+If the picture is still blurry on Windows: in the QEMU window's View menu,
+turn off "Zoom To Fit", so QEMU doesn't stretch the picture.
+
 The UEFI firmware in "firmware" is OVMF from the EDK II project (BSD licence,
 see firmware/OVMF-LICENCE.txt).

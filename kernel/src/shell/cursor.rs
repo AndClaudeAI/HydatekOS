@@ -78,4 +78,45 @@ impl Cursor {
         }
         Cursor { w, h, px }
     }
+
+    /// Blend the pointer into `c` with its tip at (x, y), keeping the
+    /// pixels it covers in `under` for `unstamp`.
+    pub fn stamp(&self, c: &mut crate::gfx::Canvas, x: i32, y: i32, under: &mut Vec<u32>) {
+        under.clear();
+        for cy in 0..self.h {
+            for cx in 0..self.w {
+                let (px, py) = (x + cx, y + cy);
+                if px < 0 || py < 0 || px >= c.w || py >= c.h {
+                    continue;
+                }
+                let i = (py * c.w + px) as usize;
+                under.push(c.px[i]);
+                let (col, a) = self.px[(cy * self.w + cx) as usize];
+                if a > 0 {
+                    let d = c.px[i];
+                    let a = a as u32;
+                    let mix = |s: u32, dd: u32| (s * a + dd * (255 - a)) / 255;
+                    c.px[i] = (d & 0xFF00_0000) | mix(col >> 16 & 255, d >> 16 & 255) << 16 | mix(col >> 8 & 255, d >> 8 & 255) << 8 | mix(col & 255, d & 255);
+                }
+            }
+        }
+    }
+
+    /// Put back what `stamp` covered.
+    pub fn unstamp(&self, c: &mut crate::gfx::Canvas, x: i32, y: i32, under: &[u32]) {
+        let mut k = 0;
+        for cy in 0..self.h {
+            for cx in 0..self.w {
+                let (px, py) = (x + cx, y + cy);
+                if px < 0 || py < 0 || px >= c.w || py >= c.h {
+                    continue;
+                }
+                if let Some(v) = under.get(k) {
+                    c.px[(py * c.w + px) as usize] = *v;
+                }
+                k += 1;
+            }
+        }
+    }
 }
+

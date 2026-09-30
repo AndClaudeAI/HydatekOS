@@ -70,6 +70,8 @@ pub struct Sys {
     pub look: crate::personal::Look,
     /// the accent taken from the wallpaper (for light, for dark), once drawn
     pub palette: Option<crate::personal::Palette>,
+    /// the screen chosen in Settings › Display (applied at start-up)
+    pub screen_choice: ScreenChoice,
     pub wifi: bool,
     pub bt: bool,
     pub focus: bool,
@@ -234,6 +236,7 @@ impl Sys {
             accent: 0,
             look: Default::default(),
             palette: None,
+            screen_choice: ScreenChoice::default(),
             wifi: true,
             bt: true,
             focus: false,
@@ -306,6 +309,13 @@ impl Sys {
     // ---- accounts ------------------------------------------------------------------
 
     /// A file in the signed-in account's system folder.
+    /// Keep a new screen choice; it takes effect at the next start.
+    pub fn set_screen(&mut self, c: ScreenChoice) {
+        self.screen_choice = c;
+        let text = c.save();
+        self.fs.write_raw("/system/screen.txt", text.as_bytes());
+    }
+
     fn sys_file(&self, name: &str) -> String {
         alloc::format!("{}/{}", crate::accounts::system_dir(&self.user), name)
     }
@@ -1106,3 +1116,45 @@ impl Sys {
         format!("{} {} {}", &DAYS[weekday(t.year as i32, t.month as i32, t.day as i32)][..3], t.day, &MONTHS[(t.month as usize).max(1) - 1][..3])
     }
 }
+
+/// The screen as chosen in Settings › Display, kept for the whole computer
+/// in /system/screen.txt and applied at start-up: `mode=1920x1080` and
+/// `scale=1`, `2` or `auto`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenChoice {
+    pub mode: Option<(u32, u32)>,
+    /// None: automatic (2x from 2560 × 1440)
+    pub scale: Option<i32>,
+}
+
+impl ScreenChoice {
+    pub fn parse(text: &str) -> ScreenChoice {
+        let mut c = ScreenChoice::default();
+        for line in text.lines() {
+            match line.split_once('=') {
+                Some(("mode", v)) => {
+                    c.mode = v.trim().split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).filter(|(w, h): &(u32, u32)| *w >= 640 && *h >= 480);
+                }
+                Some(("scale", v)) => c.scale = v.trim().parse().ok().filter(|s| *s == 1 || *s == 2),
+                _ => {}
+            }
+        }
+        c
+    }
+
+    pub fn save(&self) -> String {
+        let mut s = String::new();
+        if let Some((w, h)) = self.mode {
+            s += &alloc::format!("mode={}x{}\n", w, h);
+        }
+        s += &alloc::format!("scale={}\n", self.scale.map_or(String::from("auto"), |v| alloc::format!("{}", v)));
+        s
+    }
+
+    /// The chosen size on a screen of `w` × `h`, if it fits: 2x needs at
+    /// least 1024 × 600 points left over.
+    pub fn scale_for(&self, w: i32, h: i32) -> Option<i32> {
+        self.scale.filter(|s| w / s >= 1024 && h / s >= 600)
+    }
+}
+

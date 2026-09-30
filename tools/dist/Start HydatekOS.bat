@@ -17,6 +17,10 @@ if not defined QEMU (
   exit /b 1
 )
 if not exist "firmware\vars.fd" copy "firmware\OVMF_VARS.fd" "firmware\vars.fd" >nul
+rem Windows stretches programs that don't declare they handle display
+rem scaling (125%, 150%...), which blurs everything. This tells it QEMU does,
+rem so each HydatekOS pixel is one screen pixel.
+set "__COMPAT_LAYER=HighDpiAware"
 echo Starting HydatekOS. Close the QEMU window, or use Shut Down in HydatekOS, to stop.
 "%QEMU%" -name HydatekOS -machine q35 -m 1G ^
   -drive if=pflash,format=raw,readonly=on,file=firmware\OVMF_CODE.fd ^
