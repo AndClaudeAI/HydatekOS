@@ -66,6 +66,10 @@ pub struct NetStatus {
 pub struct Sys {
     pub dark: bool,
     pub accent: usize,
+    /// wallpaper, lock screen, theme mode, accent source, widgets (personal.rs)
+    pub look: crate::personal::Look,
+    /// the accent taken from the wallpaper (for light, for dark), once drawn
+    pub accent_rgb: Option<(u32, u32)>,
     pub wifi: bool,
     pub bt: bool,
     pub focus: bool,
@@ -228,6 +232,8 @@ impl Sys {
         let mut s = Sys {
             dark: false,
             accent: 0,
+            look: Default::default(),
+            accent_rgb: None,
             wifi: true,
             bt: true,
             focus: false,
@@ -557,10 +563,15 @@ impl Sys {
     fn load_settings(&mut self) {
         let Some(data) = self.fs.read_raw(&self.sys_file("settings.txt")) else { return };
         let text = String::from_utf8_lossy(&data).to_string();
+        // settings from before the theme mode: dark stays dark
+        let had_mode = text.lines().any(|l| l.starts_with("thememode="));
         for line in text.lines() {
             let mut kv = line.splitn(2, '=');
             let (k, v) = (kv.next().unwrap_or(""), kv.next().unwrap_or("").trim());
             let b = v == "1";
+            if self.look.load(k, v) {
+                continue;
+            }
             match k {
                 "dark" => self.dark = b,
                 "accent" => self.accent = v.parse().unwrap_or(0),
@@ -584,6 +595,10 @@ impl Sys {
                 _ => {}
             }
         }
+        if !had_mode {
+            self.look.mode = if self.dark { crate::personal::Mode::Dark } else { crate::personal::Mode::Light };
+        }
+        self.follow_mode();
     }
 
     pub fn save_settings(&mut self) {
@@ -609,6 +624,7 @@ impl Sys {
             self.haptics.phone as u8,
             self.auto_brightness as u8
         );
+        let s = s + &self.look.save();
         let f = self.sys_file("settings.txt");
         self.fs.write_raw(&f, s.as_bytes());
     }
@@ -1036,6 +1052,30 @@ impl Sys {
         }
         crate::log!("tls: {} built-in authorities, {} added", builtin, roots.anchors.len() - builtin);
         roots
+    }
+
+    /// Minutes since midnight.
+    pub fn minutes(&self) -> u32 {
+        self.now.hour as u32 * 60 + self.now.minute as u32
+    }
+
+    /// Light or dark by hand: the choice sticks (the mode stops being automatic).
+    pub fn set_dark(&mut self, dark: bool) {
+        self.dark = dark;
+        self.look.mode = if dark { crate::personal::Mode::Dark } else { crate::personal::Mode::Light };
+    }
+
+    /// Follow the theme mode (automatic: by the clock). True if it changed.
+    pub fn follow_mode(&mut self) -> bool {
+        let d = self.look.dark_at(self.minutes());
+        let changed = d != self.dark;
+        self.dark = d;
+        changed
+    }
+
+    /// The minutes to draw scenes at, when they follow the time of day.
+    pub fn scene_time(&self) -> Option<u32> {
+        self.look.time_of_day.then(|| self.minutes())
     }
 
     pub fn clock(&self) -> String {

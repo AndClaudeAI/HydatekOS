@@ -248,11 +248,11 @@ impl Terminal {
             }
             "theme" => match args.first().copied() {
                 Some("dark") => {
-                    sys.dark = true;
+                    sys.set_dark(true);
                     sys.reqs.push(Req::SaveSettings);
                 }
                 Some("light") => {
-                    sys.dark = false;
+                    sys.set_dark(false);
                     sys.reqs.push(Req::SaveSettings);
                 }
                 _ => self.print("usage: theme dark|light"),

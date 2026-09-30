@@ -78,7 +78,21 @@ impl Mobile {
             return;
         }
 
-        wallpaper::draw(ui.c, r.scale(ui.s), &t, true);
+        let pr = r.scale(ui.s);
+        let wall = wallpaper::cached(&sys.fs, &sys.look.wall, sys.look.fit, &t, sys.scene_time(), pr.w, pr.h, true);
+        // the phone's screen may sit anywhere: copy row by row into it
+        for y in 0..pr.h.min(wall.h) {
+            let (a, b) = (((pr.y + y) * ui.c.w + pr.x) as usize, (y * wall.w) as usize);
+            if a + pr.w as usize <= ui.c.px.len() {
+                let clip = ui.c.clip;
+                if pr.y + y >= clip.y && pr.y + y < clip.b() {
+                    let (x0, x1) = (clip.x.max(pr.x) - pr.x, clip.r().min(pr.r()) - pr.x);
+                    if x1 > x0 {
+                        ui.c.px[a + x0 as usize..a + x1 as usize].copy_from_slice(&wall.px[b + x0 as usize..b + x1 as usize]);
+                    }
+                }
+            }
+        }
         ui.icon(Icon::Battery, r.r() - u(40), r.y + u(12), u(18), t.text);
         ui.icon(Icon::Wifi, r.r() - u(64), r.y + u(12), u(16), t.text);
         // greeting, date + clock

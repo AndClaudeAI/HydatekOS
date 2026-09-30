@@ -42,6 +42,8 @@ pub mod i2c;
 pub mod hidin;
 #[path = "../../kernel/src/ambient.rs"]
 pub mod ambient;
+#[path = "../../kernel/src/personal.rs"]
+pub mod personal;
 #[path = "../../kernel/src/bt.rs"]
 pub mod bt;
 #[path = "../../kernel/src/wifi.rs"]
@@ -136,6 +138,8 @@ mod sound_tests;
 mod wifi_tests;
 #[cfg(test)]
 mod bt_tests;
+#[cfg(test)]
+mod personal_tests;
 #[cfg(test)]
 mod wifi_vectors;
 #[cfg(test)]

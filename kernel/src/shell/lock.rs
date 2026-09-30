@@ -397,7 +397,10 @@ impl Lock {
     pub fn render(&self, ui: &mut Ui, r: Rect, sys: &Sys, now: u64) {
         let t = ui.t;
         let tall = r.h > r.w;
-        wallpaper::draw(ui.c, r.scale(ui.s), &t, tall);
+        let look = &sys.look;
+        let pr = r.scale(ui.s);
+        let wall = wallpaper::cached(&sys.fs, look.lock.as_ref().unwrap_or(&look.wall), look.fit, &t, sys.scene_time(), pr.w, pr.h, tall);
+        ui.c.copy_from(wall, pr);
         ui.zone(r, Action::Lock(TAP));
         let u = |v: i32| if tall { v * r.w / 390 } else { v };
         // status icons

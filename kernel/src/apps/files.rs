@@ -34,6 +34,7 @@ pub const C_EMPTY_BIN: u32 = 14;
 pub const C_RESTORE: u32 = 15;
 pub const C_OPEN: u32 = 16;
 pub const C_SEND_PHONE: u32 = 17;
+pub const C_SET_WALL: u32 = 19;
 const C_PLACE: u32 = 100;
 const C_ITEM: u32 = 1000;
 
@@ -368,6 +369,17 @@ impl App for Files {
                     self.open(i, sys);
                 }
             }
+            C_SET_WALL => {
+                match self.selected_path() {
+                    Some(p) if crate::shell::wallpaper::picture(&sys.fs, &p).is_some() => {
+                        sys.look.wall = crate::personal::Wall::Picture(p.clone());
+                        sys.save_settings();
+                        sys.toast("Wallpaper", &format!("{} is your wallpaper", basename(&p)));
+                    }
+                    Some(_) => sys.toast("Wallpaper", "That isn't a picture HydatekOS can show"),
+                    None => sys.toast("Files", "Select a picture first"),
+                }
+            }
             C_SEND_PHONE => {
                 match self.selected_path() {
                     Some(p) if !sys.fs.is_dir(&p) => {
@@ -490,7 +502,7 @@ impl App for Files {
     fn menu(&self, idx: usize) -> Vec<(&'static str, u32)> {
         match idx {
             0 => {
-                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename\tF2", C_RENAME), ("Send to Phone", C_SEND_PHONE), ("Move to Bin\tDelete", C_DELETE)];
+                let mut v = vec![("New Folder", C_NEW_FOLDER), ("New Text File", C_NEW_FILE), ("Open", C_OPEN), ("Rename\tF2", C_RENAME), ("Send to Phone", C_SEND_PHONE), ("Set as Wallpaper", C_SET_WALL), ("Move to Bin\tDelete", C_DELETE)];
                 if self.path == "/trash" {
                     v = vec![("Restore", C_RESTORE), ("Delete Permanently", C_DELETE), ("Empty Bin", C_EMPTY_BIN)];
                 }

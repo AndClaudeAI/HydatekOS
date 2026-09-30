@@ -3,7 +3,7 @@
 
 use super::{side_item, App, AppKind, HEADER};
 use crate::font::Face;
-use crate::gfx::{Color, Rect};
+use crate::gfx::{Canvas, Color, Rect};
 use crate::sys::{Req, Sys};
 use crate::theme::ACCENTS;
 use crate::ui::{Action, Key, Ui};
@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 14] = ["Profile", "Accounts", "Appearance", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About"];
+pub const SECTIONS: [&str; 14] = ["Profile", "Accounts", "Personalisation", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -68,6 +68,13 @@ pub struct Settings {
     inking: bool,
     /// Devices: the first row shown (scrolling)
     dev_top: usize,
+    /// Personalisation: the tab (wallpaper, colours, desktop), what a
+    /// wallpaper choice applies to (both, desktop, lock screen), drawn
+    /// thumbnails (what, dark, drawing), and pictures found (path, thumbnail)
+    ptab: u8,
+    apply: u8,
+    thumbs: Vec<(String, bool, Canvas)>,
+    pics: Option<Vec<(String, Canvas)>>,
 }
 
 /// The keyboard tester: every key stroke the firmware reports, as it
@@ -154,7 +161,7 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0 }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0, ptab: 0, apply: 0, thumbs: Vec::new(), pics: None }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
@@ -316,6 +323,266 @@ impl Settings {
 
     /// Sound & haptics: the volume, and haptic feedback with a picture of
     /// each pattern as it plays.
+    /// A wallpaper drawn small (kept until the theme or the time changes).
+    fn thumb(&mut self, sys: &Sys, t: &crate::theme::Theme, w: &crate::personal::Wall, fit: crate::personal::Fit, pw: i32, ph: i32) -> usize {
+        let key = alloc::format!("{}|{}|{}|{}|{}", w.save(), fit.name(), pw, ph, sys.scene_time().map_or(9999, |m| m / 10));
+        if let Some(i) = self.thumbs.iter().position(|x| x.0 == key && x.1 == t.dark) {
+            return i;
+        }
+        let c = crate::shell::wallpaper::thumbnail(&sys.fs, w, fit, t, sys.scene_time(), pw, ph);
+        if self.thumbs.len() > 40 {
+            self.thumbs.clear();
+        }
+        self.thumbs.push((key, t.dark, c));
+        self.thumbs.len() - 1
+    }
+
+    fn draw_thumb(&mut self, ui: &mut Ui, sys: &Sys, w: &crate::personal::Wall, fit: crate::personal::Fit, r: Rect, selected: bool, a: Action) {
+        let t = ui.t;
+        let i = self.thumb(sys, &t, w, fit, r.w * ui.s, r.h * ui.s);
+        if selected {
+            ui.rrect(r.inset(-3), 11, t.accent);
+        }
+        let pr = r.scale(ui.s);
+        ui.c.blit_scaled(&self.thumbs[i].2, pr, 8 * ui.s);
+        if ui.hot(a) && !selected {
+            ui.rrect(r, 8, t.hover);
+        }
+        ui.zone(r, a);
+    }
+
+    /// Settings › Personalisation: wallpaper, colours, the desktop.
+    fn render_personal(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::personal::{Accent, Fit, Mode, Scene, Wall, GRADIENTS, SOLIDS};
+        let t = ui.t;
+        let sw_x = m.r() - 54;
+        // tabs
+        let tabs = ["Wallpaper", "Colours", "Desktop"];
+        let tw = 100;
+        for (i, name) in tabs.iter().enumerate() {
+            ui.button(Rect::new(m.x + i as i32 * (tw + 6), m.y, tw, 28), name, Action::App(inst, C_PTAB + i as u32), self.ptab == i as u8);
+        }
+        let top = m.y + 42;
+        let look = sys.look.clone();
+        match self.ptab {
+            0 => {
+                // choosing one of your pictures
+                if self.pics.is_some() {
+                    ui.text(m.x, top + 14, Face::Semibold, 14, "Your pictures", t.text);
+                    ui.button(Rect::new(m.r() - 70, top, 70, 26), "Back", Action::App(inst, C_PICS_BACK), false);
+                    let pics = self.pics.take().unwrap_or_default();
+                    if pics.is_empty() {
+                        let l = ui.fit(Face::Regular, 13, "Put pictures in Pictures or Downloads (PNG, JPEG, WebP, GIF or BMP) to use one here.", m.w);
+                        ui.text(m.x, top + 50, Face::Regular, 13, &l, t.text2);
+                    }
+                    let (cols, gap) = (3, 10);
+                    let cw = (m.w - gap * (cols - 1)) / cols;
+                    let ch = cw * 10 / 16;
+                    for (i, (path, thumb)) in pics.iter().enumerate() {
+                        let (cx, cy) = (m.x + (i as i32 % cols) * (cw + gap), top + 36 + (i as i32 / cols) * (ch + 30));
+                        if cy + ch > m.b() {
+                            break;
+                        }
+                        let r = Rect::new(cx, cy, cw, ch);
+                        let a = Action::App(inst, C_PIC + i as u32);
+                        ui.c.blit_scaled(thumb, r.scale(ui.s), 8 * ui.s);
+                        if ui.hot(a) {
+                            ui.rrect(r, 8, t.hover);
+                        }
+                        ui.zone(r, a);
+                        let name = ui.fit(Face::Regular, 12, crate::fs::basename(path), cw);
+                        ui.text(cx, cy + ch + 16, Face::Regular, 12, &name, t.text2);
+                    }
+                    self.pics = Some(pics);
+                    return;
+                }
+                // the desktop and the lock screen as they are
+                let pw = (m.w - 12) / 2;
+                let ph = (pw * 10 / 16).min(118);
+                let lock = look.lock.clone().unwrap_or(look.wall.clone());
+                for (k, (w, label)) in [(look.wall.clone(), "Desktop"), (lock, "Lock screen")].iter().enumerate() {
+                    let r = Rect::new(m.x + k as i32 * (pw + 12), top, pw, ph);
+                    let a = Action::App(inst, C_APPLY + 1 + k as u32);
+                    self.draw_thumb(ui, sys, w, look.fit, r, self.apply == 1 + k as u8, a);
+                    let cap = alloc::format!("{} · {}", label, w.name());
+                    let cap = ui.fit(Face::Medium, 12, &cap, pw);
+                    ui.text(r.x, r.b() + 16, Face::Medium, 12, &cap, t.text2);
+                }
+                let mut y = top + ph + 28;
+                // what a choice applies to
+                let applies = ["Both", "Desktop", "Lock screen"];
+                ui.text(m.x, y + 17, Face::Regular, 12, "Apply to", t.text2);
+                for (i, n) in applies.iter().enumerate() {
+                    ui.button(Rect::new(m.x + 64 + i as i32 * 94, y, 88, 26), n, Action::App(inst, C_APPLY + i as u32), self.apply == i as u8);
+                }
+                y += 36;
+                let target = if self.apply == 2 { look.lock.clone().unwrap_or(look.wall.clone()) } else { look.wall.clone() };
+                // scenes, then your pictures
+                let (cols, gap) = (4, 8);
+                let cw = (m.w - gap * (cols - 1)) / cols;
+                let ch = cw * 10 / 16;
+                for (i, sc) in Scene::ALL.iter().enumerate() {
+                    let r = Rect::new(m.x + (i as i32 % cols) * (cw + gap), y + (i as i32 / cols) * (ch + 22), cw, ch);
+                    let w = Wall::Scene(*sc);
+                    self.draw_thumb(ui, sys, &w, Fit::Fill, r, target == w, Action::App(inst, C_SCENE + i as u32));
+                    ui.text(r.x, r.b() + 14, Face::Regular, 11, sc.name(), t.text2);
+                }
+                let i = Scene::ALL.len() as i32;
+                let r = Rect::new(m.x + (i % cols) * (cw + gap), y + (i / cols) * (ch + 22), cw, ch);
+                let a = Action::App(inst, C_PICS);
+                ui.rrect(r, 8, if ui.hot(a) { t.hover } else { t.chip });
+                if matches!(target, Wall::Picture(_)) {
+                    ui.rrect(r.inset(-3), 11, t.accent);
+                    self.draw_thumb(ui, sys, &target, Fit::Fill, r, true, a);
+                } else {
+                    ui.text_in(r, Face::Medium, 12, "Pictures…", t.text, 1);
+                    ui.zone(r, a);
+                }
+                ui.text(r.x, r.b() + 14, Face::Regular, 11, "Your pictures", t.text2);
+                y += 2 * (ch + 22) + 6;
+                // colours and gradients
+                let d = 26;
+                let mut x = m.x;
+                for (i, c) in SOLIDS.iter().enumerate() {
+                    let a = Action::App(inst, C_SOLID + i as u32);
+                    if target == Wall::Solid(*c) {
+                        ui.circle(x + d / 2, y + d / 2, d / 2 + 3, t.accent);
+                    }
+                    ui.circle(x + d / 2, y + d / 2, d / 2, Color::rgb(*c));
+                    ui.zone(Rect::new(x, y, d, d), a);
+                    x += d + 8;
+                }
+                for (i, g) in GRADIENTS.iter().enumerate() {
+                    let r = Rect::new(x, y, d, d);
+                    let w = Wall::Gradient(g.0, g.1);
+                    self.draw_thumb(ui, sys, &w, Fit::Fill, r, target == w, Action::App(inst, C_GRAD + i as u32));
+                    x += d + 8;
+                }
+                y += d + 12;
+                // pictures: how they fit
+                if let Wall::Picture(_) = target {
+                    ui.text(m.x, y + 17, Face::Regular, 12, "Fit", t.text2);
+                    for (i, f) in Fit::ALL.iter().enumerate() {
+                        ui.button(Rect::new(m.x + 40 + i as i32 * 72, y, 66, 26), f.name(), Action::App(inst, C_FIT + i as u32), look.fit == *f);
+                    }
+                    y += 34;
+                }
+                if y + 40 <= m.b() {
+                    row(ui, Rect::new(m.x, y - 8, m.w - 32, 40), y - 8, "Follow the time of day", "Scenes show dawn, day, dusk and night skies");
+                    ui.switch(sw_x, y, look.time_of_day, Action::App(inst, C_TOD));
+                }
+            }
+            1 => {
+                card(ui, Rect::new(m.x, top, m.w, 116));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 116);
+                let sub = match look.mode {
+                    Mode::Auto => "Dark from 19:00 to 07:00",
+                    Mode::Dark => "Dusk: easy on the eyes at night",
+                    Mode::Light => "Dune: warm and bright",
+                };
+                row(ui, inner, top + 6, "Theme", sub);
+                for (i, md) in Mode::ALL.iter().enumerate() {
+                    ui.button(Rect::new(m.x + 16 + i as i32 * 104, top + 66, 98, 30), md.name(), Action::App(inst, C_MODE + i as u32), look.mode == *md);
+                }
+                let top = top + 130;
+                card(ui, Rect::new(m.x, top, m.w, 150));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 150);
+                row(ui, inner, top + 6, "Accent colour", "Highlights, folders and buttons");
+                let step = ((m.w - 32) / 5).min(84);
+                for (i, (name, l, d)) in ACCENTS.iter().enumerate() {
+                    let cx = m.x + 16 + i as i32 * step;
+                    let a = Action::App(inst, C_ACCENT + i as u32);
+                    if look.accent == Accent::Preset(i as u8) {
+                        ui.circle(cx + 14, top + 82, 17, t.text);
+                        ui.circle(cx + 14, top + 82, 15, t.surface);
+                    }
+                    ui.circle(cx + 14, top + 82, 13, Color::rgb(if sys.dark { *d } else { *l }));
+                    ui.text_in(Rect::new(cx - 10, top + 102, 48, 20), Face::Regular, 12, name, t.text2, 1);
+                    ui.zone(Rect::new(cx - 4, top + 62, 40, 60), a);
+                }
+                // the wallpaper's own colour
+                let cx = m.x + 16 + 4 * step;
+                let a = Action::App(inst, C_ACC_WALL);
+                let from = sys.accent_rgb.map(|p| if sys.dark { p.1 } else { p.0 });
+                if look.accent == Accent::FromWall {
+                    ui.circle(cx + 14, top + 82, 17, t.text);
+                    ui.circle(cx + 14, top + 82, 15, t.surface);
+                }
+                match from {
+                    Some(c) => ui.circle(cx + 14, top + 82, 13, Color::rgb(c)),
+                    None => {
+                        // a quartered swatch: "from the picture"
+                        for (k, c) in [0xF3A683u32, 0x7FD1C7, 0xB39DDB, 0xF6D365].iter().enumerate() {
+                            ui.circle(cx + 8 + (k as i32 % 2) * 12, top + 76 + (k as i32 / 2) * 12, 6, Color::rgb(*c));
+                        }
+                    }
+                }
+                ui.text_in(Rect::new(cx - 18, top + 102, 64, 20), Face::Regular, 12, "Wallpaper", t.text2, 1);
+                ui.zone(Rect::new(cx - 4, top + 62, 40, 60), a);
+            }
+            _ => {
+                card(ui, Rect::new(m.x, top, m.w, 250));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 250);
+                row(ui, inner, top + 6, "Desktop widgets", "The clock, what's next and quick settings");
+                ui.switch(sw_x, top + 14, look.widgets, Action::App(inst, C_WIDGETS));
+                row(ui, inner, top + 54, "Mobile shell", "Use the HydatekOS Mobile home screen on this device");
+                ui.switch(sw_x, top + 62, sys.mobile_shell, Action::App(inst, C_MOBILE));
+                row(ui, inner, top + 102, "Focus", "Silence Phone Link notifications");
+                ui.switch(sw_x, top + 110, sys.focus, Action::App(inst, C_FOCUS));
+                row(ui, inner, top + 150, "Reduce motion", "Windows and menus appear and go without animating");
+                ui.switch(sw_x, top + 158, sys.reduce_motion, Action::App(inst, C_MOTION));
+                row(ui, inner, top + 198, "Pointer speed", "");
+                let ps = format!("{}", sys.pointer_speed);
+                ui.button(Rect::new(sw_x - 44, top + 204, 30, 26), "-", Action::App(inst, C_PTR_DOWN), false);
+                ui.text_in(Rect::new(sw_x - 12, top + 204, 20, 26), Face::Semibold, 13, &ps, t.text, 1);
+                ui.button(Rect::new(sw_x + 12, top + 204, 30, 26), "+", Action::App(inst, C_PTR_UP), false);
+            }
+        }
+    }
+
+    /// Pictures that could be wallpapers, drawn small (once).
+    fn find_pictures(&mut self, sys: &Sys, t: &crate::theme::Theme) {
+        let mut out = Vec::new();
+        for dir in ["/home/Pictures", "/home/Downloads", "/home/Documents/Photos 2026", "/home/Shared"] {
+            for (name, is_dir, size) in sys.fs.list(dir) {
+                let lower = name.to_ascii_lowercase();
+                if out.len() >= 9 || is_dir || size > 24 << 20 || ![".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"].iter().any(|e| lower.ends_with(e)) {
+                    continue;
+                }
+                let path = crate::fs::join(dir, &name);
+                let w = crate::personal::Wall::Picture(path.clone());
+                // drawn only if it decodes
+                if crate::shell::wallpaper::picture(&sys.fs, &path).is_some() {
+                    out.push((path, crate::shell::wallpaper::thumbnail(&sys.fs, &w, crate::personal::Fit::Fill, t, None, 240, 150)));
+                }
+            }
+        }
+        self.pics = Some(out);
+    }
+
+    /// A wallpaper chosen: for the desktop, the lock screen or both.
+    fn set_wall(&mut self, sys: &mut Sys, w: crate::personal::Wall) {
+        let look = &mut sys.look;
+        match self.apply {
+            1 => {
+                // the lock screen keeps what it showed
+                if look.lock.is_none() {
+                    look.lock = Some(look.wall.clone());
+                }
+                look.wall = w;
+            }
+            2 => look.lock = Some(w),
+            _ => {
+                look.wall = w;
+                look.lock = None;
+            }
+        }
+        if look.lock.as_ref() == Some(&look.wall) {
+            look.lock = None;
+        }
+        sys.reqs.push(Req::SaveSettings);
+    }
+
     /// A stroke's width now: from a pen's pressure (1-9), or 3 for a mouse or
     /// finger. And whether it's the eraser end.
     fn ink_width() -> (u8, bool) {
@@ -799,6 +1066,21 @@ const C_INK: u32 = 46;
 const C_INK_CLEAR: u32 = 47;
 const C_AUTOBRIGHT: u32 = 48;
 const C_BT_SCAN: u32 = 49;
+/// Personalisation: + tab, + scene, + colour, + gradient, + picture, + fit,
+/// + what it applies to, + theme mode
+const C_PTAB: u32 = 1500;
+const C_SCENE: u32 = 1510;
+const C_SOLID: u32 = 1520;
+const C_GRAD: u32 = 1530;
+const C_PICS: u32 = 1540;
+const C_PICS_BACK: u32 = 1541;
+const C_FIT: u32 = 1550;
+const C_APPLY: u32 = 1560;
+const C_TOD: u32 = 1570;
+const C_MODE: u32 = 1580;
+const C_ACC_WALL: u32 = 1590;
+const C_WIDGETS: u32 = 1591;
+const C_PIC: u32 = 1600;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -877,42 +1159,7 @@ impl App for Settings {
             10 => self.render_assistant(ui, m, sys, inst),
             11 => self.render_sound(ui, m, sys, inst),
             12 => self.render_devices(ui, m, sys, inst),
-            2 => {
-                card(ui, Rect::new(m.x, m.y, m.w, 190));
-                let inner = Rect::new(m.x + 16, m.y, m.w - 32, 190);
-                row(ui, inner, m.y + 12, "Dark mode", "Dusk palette for evenings");
-                ui.switch(sw_x, m.y + 18, sys.dark, Action::App(inst, C_DARK));
-                row(ui, inner, m.y + 62, "Accent colour", "Used for highlights, folders and buttons");
-                let step = ((m.w - 32) / 4).min(78);
-                for (i, (name, l, d)) in ACCENTS.iter().enumerate() {
-                    let cx = m.x + 16 + i as i32 * step;
-                    let c = Color::rgb(if sys.dark { *d } else { *l });
-                    let a = Action::App(inst, C_ACCENT + i as u32);
-                    if sys.accent == i {
-                        ui.circle(cx + 12, m.y + 128, 14, t.text);
-                        ui.circle(cx + 12, m.y + 128, 12, t.surface);
-                    }
-                    ui.circle(cx + 12, m.y + 128, 10, c);
-                    if step >= 70 {
-                        ui.text(cx + 30, m.y + 133, Face::Regular, 13, name, t.text);
-                    }
-                    ui.zone(Rect::new(cx, m.y + 112, 72, 32), a);
-                }
-                row(ui, inner, m.y + 150, "Pointer speed", "");
-                let ps = format!("{}", sys.pointer_speed);
-                ui.button(Rect::new(sw_x - 44, m.y + 154, 30, 26), "-", Action::App(inst, C_PTR_DOWN), false);
-                ui.text_in(Rect::new(sw_x - 12, m.y + 154, 20, 26), Face::Semibold, 13, &ps, t.text, 1);
-                ui.button(Rect::new(sw_x + 12, m.y + 154, 30, 26), "+", Action::App(inst, C_PTR_UP), false);
-
-                card(ui, Rect::new(m.x, m.y + 204, m.w, 160));
-                let inner = Rect::new(m.x + 16, m.y + 204, m.w - 32, 160);
-                row(ui, inner, m.y + 216, "Mobile shell", "Use the HydatekOS Mobile home screen on this device");
-                ui.switch(sw_x, m.y + 222, sys.mobile_shell, Action::App(inst, C_MOBILE));
-                row(ui, inner, m.y + 264, "Focus", "Silence Phone Link notifications");
-                ui.switch(sw_x, m.y + 270, sys.focus, Action::App(inst, C_FOCUS));
-                row(ui, inner, m.y + 312, "Reduce motion", "Windows and menus appear and go without animating");
-                ui.switch(sw_x, m.y + 320, sys.reduce_motion, Action::App(inst, C_MOTION));
-            }
+            2 => self.render_personal(ui, m, sys, inst),
             4 => {
                 let n = &sys.net;
                 card(ui, Rect::new(m.x, m.y, m.w, 210));
@@ -1239,7 +1486,7 @@ impl App for Settings {
         if code != C_INK {
             self.inking = false;
         }
-        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT].contains(&code) {
+        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT, C_TOD, C_WIDGETS].contains(&code) {
             sys.feel(crate::haptics::Haptic::Click);
         }
         match code {
@@ -1273,6 +1520,72 @@ impl App for Settings {
             }
             C_BT_SCAN => {
                 sys.bt_scan = true;
+                return;
+            }
+            c if (C_PTAB..C_PTAB + 3).contains(&c) => {
+                self.ptab = (c - C_PTAB) as u8;
+                self.pics = None;
+                return;
+            }
+            c if (C_APPLY..C_APPLY + 3).contains(&c) => {
+                self.apply = (c - C_APPLY) as u8;
+                return;
+            }
+            c if (C_SCENE..C_SCENE + 7).contains(&c) => {
+                let sc = crate::personal::Scene::ALL[(c - C_SCENE) as usize];
+                self.set_wall(sys, crate::personal::Wall::Scene(sc));
+                return;
+            }
+            c if (C_SOLID..C_SOLID + 6).contains(&c) => {
+                self.set_wall(sys, crate::personal::Wall::Solid(crate::personal::SOLIDS[(c - C_SOLID) as usize]));
+                return;
+            }
+            c if (C_GRAD..C_GRAD + 4).contains(&c) => {
+                let g = crate::personal::GRADIENTS[(c - C_GRAD) as usize];
+                self.set_wall(sys, crate::personal::Wall::Gradient(g.0, g.1));
+                return;
+            }
+            C_PICS => {
+                let t = crate::theme::theme(sys.dark, sys.accent);
+                self.find_pictures(sys, &t);
+                return;
+            }
+            C_PICS_BACK => {
+                self.pics = None;
+                return;
+            }
+            c if (C_PIC..C_PIC + 16).contains(&c) => {
+                let path = self.pics.as_ref().and_then(|p| p.get((c - C_PIC) as usize)).map(|p| p.0.clone());
+                if let Some(p) = path {
+                    self.set_wall(sys, crate::personal::Wall::Picture(p));
+                }
+                self.pics = None;
+                return;
+            }
+            c if (C_FIT..C_FIT + 5).contains(&c) => {
+                sys.look.fit = crate::personal::Fit::ALL[(c - C_FIT) as usize];
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_TOD => {
+                sys.look.time_of_day = !sys.look.time_of_day;
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            c if (C_MODE..C_MODE + 3).contains(&c) => {
+                sys.look.mode = crate::personal::Mode::ALL[(c - C_MODE) as usize];
+                sys.follow_mode();
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_ACC_WALL => {
+                sys.look.accent = crate::personal::Accent::FromWall;
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_WIDGETS => {
+                sys.look.widgets = !sys.look.widgets;
+                sys.reqs.push(Req::SaveSettings);
                 return;
             }
             C_AUTOBRIGHT => {
@@ -1514,7 +1827,7 @@ impl App for Settings {
                 sys.reqs.push(Req::Lock);
                 return;
             }
-            C_DARK => sys.dark = !sys.dark,
+            C_DARK => { let d = !sys.dark; sys.set_dark(d) }
             C_MOBILE => sys.mobile_shell = !sys.mobile_shell,
             C_WIFI => sys.wifi = !sys.wifi,
             C_BT => sys.bt = !sys.bt,
@@ -1535,7 +1848,10 @@ impl App for Settings {
                     sys.search_engine = alloc::string::ToString::to_string(e.id);
                 }
             }
-            c if c >= C_ACCENT => sys.accent = (c - C_ACCENT) as usize,
+            c if c >= C_ACCENT => {
+                sys.accent = (c - C_ACCENT) as usize;
+                sys.look.accent = crate::personal::Accent::Preset(sys.accent as u8);
+            }
             c if c >= C_SECTION => {
                 self.sec = ((c - C_SECTION) as usize).min(SECTIONS.len() - 1);
                 self.page = true;

@@ -38,6 +38,11 @@ pub const ACCENTS: [(&str, u32, u32); 4] = [
 
 pub fn theme(dark: bool, accent: usize) -> Theme {
     let (_, al, ad) = ACCENTS[accent % ACCENTS.len()];
+    theme_with(dark, (al, ad))
+}
+
+/// The theme with any accent: (for light, for dark).
+pub fn theme_with(dark: bool, (al, ad): (u32, u32)) -> Theme {
     if !dark {
         Theme {
             dark,

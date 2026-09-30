@@ -329,7 +329,7 @@ impl Setup {
             M_PASSWORD => self.set_method(Method::Password, sys),
             M_NOTHING => self.set_method(Method::Nothing, sys),
             LIGHT | DARK => {
-                sys.dark = code == DARK;
+                sys.set_dark(code == DARK);
                 sys.save_settings();
             }
             KB_TOGGLE => self.osk = !self.osk,

@@ -185,7 +185,10 @@ pub struct Shell {
     pub mouse: (i32, i32),
     zones: Vec<Zone>,
     hover: Option<Action>,
-    wall: Option<(Canvas, bool)>,
+    /// the wallpaper the accent was last taken from
+    accent_src: Option<crate::personal::Wall>,
+    /// the ten minutes the time-of-day wallpaper was drawn for
+    scene_slot: Option<u32>,
     last_click: Option<(Action, u64)>,
     kfocus: KFocus,
     mirrors: [Mirror; 2],
@@ -239,7 +242,8 @@ impl Shell {
             mouse: (w / 2, h / 2),
             zones: vec![],
             hover: None,
-            wall: None,
+            accent_src: None,
+            scene_slot: None,
             last_click: None,
             kfocus: KFocus::Top,
             mirrors: [Mirror::new(), Mirror::new()],
@@ -286,7 +290,10 @@ impl Shell {
     }
 
     fn theme(&self) -> Theme {
-        theme(self.sys.dark, self.sys.accent)
+        match (self.sys.look.accent, self.sys.accent_rgb) {
+            (crate::personal::Accent::FromWall, Some(a)) => crate::theme::theme_with(self.sys.dark, a),
+            _ => theme(self.sys.dark, self.sys.accent),
+        }
     }
 
     // ---- window management ------------------------------------------------
@@ -629,6 +636,17 @@ impl Shell {
         }
         if self.moving() {
             self.dirty = true;
+        }
+        // light or dark by the clock, and time-of-day wallpapers moving on
+        if ticks % 500 == 0 {
+            if self.sys.follow_mode() {
+                self.dirty = true;
+            }
+            let slot = self.sys.scene_time().map(|m| m / 10);
+            if slot != self.scene_slot {
+                self.scene_slot = slot;
+                self.dirty = true;
+            }
         }
         // brightness follows the room's light
         if ticks % 10 == 0 && self.sys.auto_brightness {
@@ -1114,7 +1132,7 @@ impl Shell {
                 match i {
                     0 => self.sys.wifi = !self.sys.wifi,
                     1 => self.sys.focus = !self.sys.focus,
-                    2 => self.sys.dark = !self.sys.dark,
+                    2 => { let d = !self.sys.dark; self.sys.set_dark(d) }
                     3 => self.sys.bt = !self.sys.bt,
                     4 => self.open_app(AppKind::Calendar),
                     9 => self.sys.mobile_shell = false,
@@ -1223,7 +1241,8 @@ impl Shell {
                 }
             }
             Cmd::Dark => {
-                self.sys.dark = !self.sys.dark;
+                let d = !self.sys.dark;
+                self.sys.set_dark(d);
                 self.sys.save_settings();
             }
             Cmd::MobileShell => {
@@ -1391,7 +1410,21 @@ impl Shell {
         ui.text_in(Rect::new(bar.r() + 8, r.y, 50, h), Face::Semibold, 13, &label, t.text, 1);
     }
 
+    /// The accent taken from the desktop wallpaper, when that's the choice:
+    /// from a small daytime rendering, so it's the same in light and dark.
+    fn wall_accent(&mut self) {
+        let look = &self.sys.look;
+        if look.accent != crate::personal::Accent::FromWall || self.accent_src.as_ref() == Some(&look.wall) {
+            return;
+        }
+        let small = wallpaper::thumbnail(&self.sys.fs, &look.wall, look.fit, &theme(false, 0), None, 160, 100);
+        self.accent_src = Some(look.wall.clone());
+        self.sys.accent_rgb = Some(crate::personal::accent_pair(crate::personal::dominant(&small.px)));
+        self.dirty = true;
+    }
+
     fn render_frame(&mut self, canvas: &mut Canvas, ticks: u64) {
+        self.wall_accent();
         let full = Rect::new(0, 0, self.w, self.h);
         if self.locked && self.unlocking.is_none() {
             let mut ui = Ui::new(canvas, self.s, self.theme(), self.hover, ticks);
@@ -1424,12 +1457,8 @@ impl Shell {
             return;
         }
         let mobile = self.mobile_mode();
-        if self.wall.as_ref().map(|w| w.1) != Some(t.dark) {
-            let mut c = Canvas::new(w * s, h * s);
-            let b = c.bounds();
-            wallpaper::draw(&mut c, b, &t, false);
-            self.wall = Some((c, t.dark));
-        }
+        let look = &self.sys.look;
+        let wall = wallpaper::cached(&self.sys.fs, &look.wall, look.fit, &t, self.sys.scene_time(), w * s, h * s, false);
         let mut ui = Ui::new(canvas, s, t, self.hover, ticks);
         ui.zone(Rect::new(0, 0, w, h), Action::Background);
         if mobile {
@@ -1437,7 +1466,7 @@ impl Shell {
                 self.local.render(&mut ui, Rect::new(0, 0, w, h), &self.sys);
             } else {
                 let b = ui.c.bounds();
-                ui.c.copy_from(&self.wall.as_ref().unwrap().0, b);
+                ui.c.copy_from(wall, b);
                 let ph = h - 48;
                 let pw = ph * 390 / 844;
                 let r = Rect::new((w - pw) / 2, 24, pw, ph);
@@ -1461,8 +1490,10 @@ impl Shell {
             return;
         }
         let b = ui.c.bounds();
-        ui.c.copy_from(&self.wall.as_ref().unwrap().0, b);
-        self.draw_widgets(&mut ui);
+        ui.c.copy_from(wall, b);
+        if self.sys.look.widgets {
+            self.draw_widgets(&mut ui);
+        }
         self.draw_windows(&mut ui);
         self.draw_ghosts(&mut ui);
         self.draw_dock(&mut ui);

@@ -509,17 +509,21 @@ fn dunes_png() -> Vec<u8> {
             // the sun and its glow
             let (dx, dy) = (x - 430, y - 205);
             let d2 = dx * dx + dy * dy;
-            if d2 < 58 * 58 {
-                c = 0xFFF8D58C;
-            } else if d2 < 120 * 120 {
-                c = mix(c, 0xF8D58C, (120 * 120 - d2) * 90 / (120 * 120 - 58 * 58));
+            if d2 < 120 * 120 {
+                c = mix(c, 0xF8D58C, ((120 * 120 - d2) * 90 / (120 * 120 - 58 * 58)).min(90));
+            }
+            if d2 < 59 * 59 {
+                c = mix(c, 0xF8D58C, ((59 * 59 - d2) * 256 / (59 * 59 - 57 * 57)).min(256));
             }
             for &(base, amp, freq, phase, col) in &dunes {
                 let a = (x * freq * 1024 / w + phase) & 1023;
-                let top = base + amp * sin_q14(a) / 16384;
-                if y >= top {
+                // the crest in 1/256 px, so its edge can be smoothed
+                let top = base * 256 + amp * sin_q14(a) / 64;
+                let cover = (y * 256 + 256 - top).clamp(0, 256);
+                if cover > 0 {
                     // lighter along the crest
-                    c = mix(col, 0xFFE0B0, (12 - (y - top)).max(0) * 6);
+                    let lit = mix(col, 0xFFE0B0, (12 * 256 - (y * 256 - top).max(0)).max(0) * 6 / 256);
+                    c = mix(c, lit, cover);
                 }
             }
             px[(y * w + x) as usize] = c;

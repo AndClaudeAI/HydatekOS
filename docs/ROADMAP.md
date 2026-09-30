@@ -6,7 +6,7 @@
 - Apps: Files, Notes, Settings, Calendar, Terminal, Phone Link, Messages, Mail, Browser, Music, Phone, Camera
 - ✅ Hyda Workspace: Hyda Scripts, Hyda Grids and Hyda Slides, with Word, Excel and PowerPoint import and export
 - ✅ First-start setup assistant and a profile (name, picture, sign-in, look), shown on the lock screen and desktop and recorded as the author of documents
-- Persistent storage on the boot disk; light and dark themes
+- Persistent storage on the boot disk; light, dark and automatic themes; wallpapers (drawn scenes that follow the time of day, colours, your pictures) and an accent taken from the wallpaper
 - PS/2 mouse driver; firmware keyboard, disk and framebuffer
 - ✅ HydatekOS HID stack over the firmware's USB host: mice and tablets (ARM64 included), Precision Touchpads with gestures, touch screens, media keys, gamepads (HID, Xbox 360, Xbox One), haptic touchpad waveforms and controller rumble motors ([DRIVERS.md](DRIVERS.md))
 - ✅ HID over I2C and a DesignWare I2C controller driver (tested against a simulated bus); Settings › Devices

@@ -147,7 +147,13 @@ Windows, macOS or Linux.
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
-- **Light "Dune" and dark "Dusk" themes** with four accent colours.
+- **Wallpaper and personalisation:** seven scenes drawn at your screen's own size
+  (Dune, Lagoon, Aurora, Hills, Mesa, Bloom, Harmattan) whose skies can follow the
+  time of day, plus solid colours, gradients and your own pictures (fill, fit,
+  stretch, centre, tile). The lock screen can have its own wallpaper. There are
+  light "Dune" and dark "Dusk" themes, an automatic theme that turns dark at
+  night, and four accent colours or one taken from the wallpaper. Details:
+  [docs/PERSONALISATION.md](docs/PERSONALISATION.md).
 
 ### What isn't there yet
 

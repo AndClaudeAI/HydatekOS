@@ -49,6 +49,7 @@ mod deckio;
 mod pci;
 mod par;
 mod pdf;
+mod personal;
 mod profile;
 mod accounts;
 mod keymap;
