@@ -203,6 +203,13 @@ Click inside the QEMU window to capture the mouse (Ctrl+Alt+G releases it). The 
 gets a network through QEMU, and Phone Link's port 7743 is forwarded, so a phone
 on the same network as your computer can pair using your computer's IP address.
 
+A whole session, from power on to shut down: setup, a document, the terminal,
+locking and unlocking, **Shut Down** from the HydatekOS menu, then powering on
+again (the document is still there) and shutting down with `shutdown` in the
+terminal.
+
+![From power on to shut down](docs/screenshots/boot-to-shutdown.png)
+
 Automated tests (kernel crypto/QR/protocol, web and Android companion code):
 `tools/test.sh`.
 
