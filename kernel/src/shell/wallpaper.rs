@@ -393,7 +393,6 @@ struct Key {
     wall: Wall,
     fit: Fit,
     dark: bool,
-    accent: u32,
     /// time-of-day wallpapers are redrawn every ten minutes
     slot: Option<u32>,
     w: i32,
@@ -472,7 +471,7 @@ fn decoded(key: &str, load: impl FnOnce() -> Option<Vec<u8>>) -> Option<(&'stati
 /// if it isn't kept already.
 #[allow(clippy::too_many_arguments)]
 pub fn cached(fs: &crate::fs::Vfs, wall: &Wall, fit: Fit, t: &Theme, minutes: Option<u32>, w: i32, h: i32, tall: bool) -> &'static Canvas {
-    let key = Key { wall: wall.clone(), fit, dark: t.dark, accent: t.accent.0, slot: minutes.map(|m| m / 10), w, h, tall };
+    let key = Key { wall: wall.clone(), fit, dark: t.dark, slot: minutes.map(|m| m / 10), w, h, tall };
     if !tall {
         SCREEN_W.store(w, Ordering::Relaxed);
     }

@@ -243,7 +243,7 @@ pub struct Look {
 
 impl Default for Look {
     fn default() -> Look {
-        Look { wall: Wall::Scene(Scene::Dune), fit: Fit::Fill, lock: None, time_of_day: false, mode: Mode::Light, accent: Accent::Preset(0), widgets: true }
+        Look { wall: Wall::Scene(Scene::Dune), fit: Fit::Fill, lock: None, time_of_day: false, mode: Mode::Light, accent: Accent::FromWall, widgets: true }
     }
 }
 
@@ -384,6 +384,52 @@ fn hue(c: u32) -> i32 {
     h.rem_euclid(360)
 }
 
+/// A colour's HSL saturation and lightness, per mille.
+pub fn sat_light(c: u32) -> (i32, i32) {
+    let (r, g, b) = rgb(c);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (mx + mn) * 1000 / 510;
+    let d = (mx - mn) * 1000 / 255;
+    let room = 1000 - (2 * l - 1000).abs();
+    (if room == 0 { 0 } else { (d * 1000 / room).min(1000) }, l)
+}
+
+/// A tone of `c`'s hue at saturation `s` and lightness `l` (per mille, HSL):
+/// how a dynamic theme makes surfaces, lines and ink that belong to a
+/// wallpaper's colour.
+pub fn tone(c: u32, s: i32, l: i32) -> u32 {
+    let (s, l) = (s.clamp(0, 1000) as i64, l.clamp(0, 1000) as i64);
+    let h = hue(c) as i64;
+    let ch = (1000 - (2 * l - 1000).abs()) * s / 1000;
+    let hp = h * 1000 / 60;
+    let x = ch * (1000 - (hp % 2000 - 1000).abs()) / 1000;
+    let (r, g, b) = match h / 60 {
+        0 => (ch, x, 0),
+        1 => (x, ch, 0),
+        2 => (0, ch, x),
+        3 => (0, x, ch),
+        4 => (x, 0, ch),
+        _ => (ch, 0, x),
+    };
+    let m = l - ch / 2;
+    let v = |c: i64| (((c + m) * 255 + 500) / 1000) as i32;
+    pack(v(r), v(g), v(b))
+}
+
+/// `fg` made darker or lighter, keeping its hue, until it has `min`
+/// contrast (×100) on `bg`.
+pub fn readable(fg: u32, bg: u32, min: i32) -> u32 {
+    let toward = if luminance(bg) > 400 { 0x000000 } else { 0xFFFFFF };
+    let mut c = fg;
+    for _ in 0..24 {
+        if contrast(c, bg) >= min {
+            break;
+        }
+        c = mix(c, toward, 24);
+    }
+    c
+}
+
 /// A theme's colours taken from a wallpaper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
@@ -395,13 +441,15 @@ pub struct Palette {
 }
 
 /// The palette of a wallpaper. The colourful pixels are sorted into 24 hue
-/// bands (15° each). The band that covers the most is the tint; the accent
-/// is the most vivid band at least 45° away from it (a sunset over a blue
-/// sky gives a blue tint and a gold accent), or the tint's own colour if
-/// nothing else stands out.
+/// bands (15° each). The band that covers the most is the tint. The accent
+/// is the most vivid band (area × chroma²) at least 45° away from it, if
+/// it's bright enough to glow and has an eighth of the tint's vividness:
+/// a sunset over a blue sky gives a blue tint and a gold accent. Otherwise
+/// the accent is the tint's own colour: sand dunes give terracotta, not
+/// the navy of their shadows.
 pub fn palette(px: &[u32]) -> Palette {
     const N: usize = 24;
-    let (mut cnt, mut sat_sum) = ([0u64; N], [0u64; N]);
+    let (mut cnt, mut chroma) = ([0u64; N], [0u64; N]);
     let (mut sr, mut sg, mut sb, mut sw) = ([0u64; N], [0u64; N], [0u64; N], [0u64; N]);
     let step = (px.len() / 20_000).max(1);
     for p in px.iter().step_by(step) {
@@ -415,7 +463,7 @@ pub fn palette(px: &[u32]) -> Palette {
         // vivid, bright pixels count most towards a band's colour
         let w = (s * s * r.max(g).max(bl) / 65025 + 1) as u64;
         cnt[b] += 1;
-        sat_sum[b] += s as u64;
+        chroma[b] += (r.max(g).max(bl) - r.min(g).min(bl)) as u64;
         sr[b] += r as u64 * w;
         sg[b] += g as u64 * w;
         sb[b] += bl as u64 * w;
@@ -426,14 +474,20 @@ pub fn palette(px: &[u32]) -> Palette {
     }
     // each band with half its neighbours, so a colour split between two bands isn't lost
     let area = |i: usize| cnt[(i + N - 1) % N] + 2 * cnt[i] + cnt[(i + 1) % N];
-    let vivid = |i: usize| area(i) * (sat_sum[i] / cnt[i].max(1));
+    let vivid = |i: usize| {
+        let c = chroma[i] / cnt[i].max(1);
+        area(i) * c * c
+    };
     let colour = |i: usize| pack((sr[i] / sw[i]) as i32, (sg[i] / sw[i]) as i32, (sb[i] / sw[i]) as i32);
     let t = (0..N).max_by_key(|i| area(*i)).unwrap();
     let t = if cnt[t] == 0 { (0..N).max_by_key(|i| cnt[*i]).unwrap() } else { t };
-    let far = (0..N).filter(|i| cnt[*i] > 0 && (*i + N - t) % N >= 3 && (t + N - *i) % N >= 3);
+    let bright = |i: usize| {
+        let (r, g, b) = rgb(colour(i));
+        r.max(g).max(b) >= 120
+    };
+    let far = (0..N).filter(|i| cnt[*i] > 0 && (*i + N - t) % N >= 3 && (t + N - *i) % N >= 3 && bright(*i));
     let a = match far.max_by_key(|i| vivid(*i)) {
-        // it has to hold its own: an eighth of the tint's weight
-        Some(a) if vivid(a) * 8 >= vivid(t) => a,
+        Some(f) if vivid(f) * 8 >= vivid(t) => f,
         _ => t,
     };
     Palette { accent: accent_pair(colour(a)), tint: Some(colour(t)) }

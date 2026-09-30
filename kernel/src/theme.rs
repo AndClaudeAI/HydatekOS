@@ -98,24 +98,86 @@ pub fn theme_with(dark: bool, (al, ad): (u32, u32)) -> Theme {
     }
 }
 
-/// The theme matched to a wallpaper: its accent, and neutral surfaces that
-/// lean a little towards the wallpaper's main colour. Text isn't tinted,
-/// so it keeps its contrast.
+/// The dynamic theme: built from a wallpaper's palette. The accent is the
+/// wallpaper's most vivid colour; the surfaces, lines, menu bar, dock and
+/// secondary ink are tones of its main colour, at the lightness the plain
+/// theme uses, so the layout reads the same. Text keeps its contrast.
 pub fn theme_matched(dark: bool, p: &crate::personal::Palette) -> Theme {
+    use crate::personal::{readable, sat_light, tone};
     let mut t = theme_with(dark, p.accent);
     let Some(tint) = p.tint else { return t };
-    use crate::personal::mix;
-    // how far each surface leans (/256): more in the dark, where it shows less
-    let lean = |c: Color, k: i32| Color::rgba(mix(c.0 & 0xFF_FFFF, tint, if dark { k * 2 } else { k }), c.a() as u8);
-    t.sky = lean(t.sky, 22);
-    t.sky2 = lean(t.sky2, 22);
-    t.surface = lean(t.surface, 10);
-    t.sidebar = lean(t.sidebar, 18);
-    t.tile = lean(t.tile, 20);
-    t.chip = lean(t.chip, 20);
-    t.line = lean(t.line, 18);
-    t.bar = lean(t.bar, 14);
-    t.dock = lean(t.dock, 34);
-    t.dock_btn = lean(t.dock_btn, 34);
+    // a muted wallpaper gives muted surfaces
+    let k = sat_light(tint).0.clamp(250, 700);
+    let at = |s: i32, l: i32| Color::rgb(tone(tint, s * k / 700, l));
+    let keep_alpha = |c: Color, a: u32| Color::rgba(c.0, a as u8);
+    if !dark {
+        t.sky = at(220, 930);
+        t.sky2 = at(240, 905);
+        t.surface = at(170, 972);
+        t.sidebar = at(240, 948);
+        t.tile = at(320, 925);
+        t.chip = at(260, 915);
+        t.line = at(220, 880);
+        t.bar = keep_alpha(at(200, 965), 235);
+        t.dock = at(420, 130);
+        t.dock_btn = at(360, 220);
+        t.hover = keep_alpha(at(400, 200), 16);
+        t.text2 = Color::rgb(readable(tone(tint, 160 * k / 700, 380), t.surface.0 & 0xFF_FFFF, 450));
+        t.text3 = Color::rgb(readable(tone(tint, 120 * k / 700, 560), t.surface.0 & 0xFF_FFFF, 300));
+    } else {
+        t.sky = at(260, 115);
+        t.sky2 = at(260, 135);
+        t.surface = at(270, 125);
+        t.sidebar = at(290, 100);
+        t.tile = at(230, 195);
+        t.chip = at(230, 200);
+        t.line = at(210, 215);
+        t.bar = keep_alpha(at(270, 100), 235);
+        t.dock = at(340, 70);
+        t.dock_btn = at(280, 165);
+        t.text2 = Color::rgb(readable(tone(tint, 160 * k / 700, 700), t.surface.0 & 0xFF_FFFF, 450));
+        t.text3 = Color::rgb(readable(tone(tint, 110 * k / 700, 520), t.surface.0 & 0xFF_FFFF, 300));
+    }
+    // the dark accent was made to stand out on the plain dark surface: make
+    // sure it still does on this one
+    if dark {
+        t.accent = Color::rgb(readable(t.accent.0 & 0xFF_FFFF, t.surface.0 & 0xFF_FFFF, 300));
+    }
     t
+}
+
+impl Theme {
+    /// Part way from `self` to `o` (`k` of 1000): a theme changing colour.
+    pub fn blend(&self, o: &Theme, k: i32) -> Theme {
+        let k = k.clamp(0, 1000) as u32;
+        let m = |a: Color, b: Color| {
+            let al = (a.a() * (1000 - k) + b.a() * k) / 1000;
+            Color::rgba(crate::gfx::lerp(a.0 & 0xFF_FFFF, b.0 & 0xFF_FFFF, k * 256 / 1000), al as u8)
+        };
+        Theme {
+            dark: if k < 500 { self.dark } else { o.dark },
+            sky: m(self.sky, o.sky),
+            sky2: m(self.sky2, o.sky2),
+            surface: m(self.surface, o.surface),
+            sidebar: m(self.sidebar, o.sidebar),
+            tile: m(self.tile, o.tile),
+            chip: m(self.chip, o.chip),
+            text: m(self.text, o.text),
+            text2: m(self.text2, o.text2),
+            text3: m(self.text3, o.text3),
+            accent: m(self.accent, o.accent),
+            on_accent: m(self.on_accent, o.on_accent),
+            line: m(self.line, o.line),
+            sun: m(self.sun, o.sun),
+            dune1: m(self.dune1, o.dune1),
+            dune2: m(self.dune2, o.dune2),
+            dune3: m(self.dune3, o.dune3),
+            dock: m(self.dock, o.dock),
+            dock_btn: m(self.dock_btn, o.dock_btn),
+            dock_icon: m(self.dock_icon, o.dock_icon),
+            bar: m(self.bar, o.bar),
+            hover: m(self.hover, o.hover),
+            danger: m(self.danger, o.danger),
+        }
+    }
 }

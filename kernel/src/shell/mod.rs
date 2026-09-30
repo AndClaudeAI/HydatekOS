@@ -170,6 +170,9 @@ struct Toast {
     until: u64,
 }
 
+/// How long the dynamic theme takes to change colour, in ticks (0.6 s).
+const PAL_FADE: u64 = 60;
+
 pub struct Shell {
     pub sys: Sys,
     wins: Vec<Win>,
@@ -185,8 +188,11 @@ pub struct Shell {
     pub mouse: (i32, i32),
     zones: Vec<Zone>,
     hover: Option<Action>,
-    /// the wallpaper the accent was last taken from
-    accent_src: Option<crate::personal::Wall>,
+    /// what the dynamic palette was last taken from: the wallpaper, light
+    /// or dark, and the time-of-day slot (all change how it looks)
+    pal_key: Option<(crate::personal::Wall, bool, Option<u32>)>,
+    /// the dynamic theme changing colour: from this palette, since this tick
+    pal_fade: Option<(crate::personal::Palette, u64)>,
     /// the ten minutes the time-of-day wallpaper was drawn for
     scene_slot: Option<u32>,
     last_click: Option<(Action, u64)>,
@@ -242,7 +248,8 @@ impl Shell {
             mouse: (w / 2, h / 2),
             zones: vec![],
             hover: None,
-            accent_src: None,
+            pal_key: None,
+            pal_fade: None,
             scene_slot: None,
             last_click: None,
             kfocus: KFocus::Top,
@@ -290,7 +297,15 @@ impl Shell {
     }
 
     fn theme(&self) -> Theme {
-        self.sys.theme_for(self.sys.dark)
+        let t = self.sys.theme_for(self.sys.dark);
+        // a new wallpaper: the dynamic theme eases into its colours
+        if let (Some((from, start)), crate::personal::Accent::FromWall) = (self.pal_fade, self.sys.look.accent) {
+            let p = anim::progress(start, self.motion(PAL_FADE), self.sys.ticks);
+            if p < 1000 {
+                return crate::theme::theme_matched(self.sys.dark, &from).blend(&t, anim::ease_in_out(p));
+            }
+        }
+        t
     }
 
     // ---- window management ------------------------------------------------
@@ -661,6 +676,14 @@ impl Shell {
             if self.sys.haptics.phone && self.sys.phone_haptics() {
                 let w = crate::hlp::Msg::new("haptic").with("p", &crate::haptics::encode(&pat));
                 self.sys.link.outbox.push(w);
+            }
+        }
+        if let Some((_, start)) = self.pal_fade {
+            if ticks >= start + self.motion(PAL_FADE) {
+                self.pal_fade = None;
+                self.dirty = true;
+            } else if ticks % 2 == 0 {
+                self.dirty = true;
             }
         }
         if self.osd.map_or(false, |o| ticks >= o.1) {
@@ -1407,21 +1430,29 @@ impl Shell {
         ui.text_in(Rect::new(bar.r() + 8, r.y, 50, h), Face::Semibold, 13, &label, t.text, 1);
     }
 
-    /// The theme's colours taken from the desktop wallpaper, when that's the choice:
-    /// from a small daytime rendering, so it's the same in light and dark.
-    fn wall_accent(&mut self) {
+    /// The dynamic palette: taken again whenever what the desktop shows
+    /// changes (a new wallpaper, light or dark, the sky moving on with the
+    /// time of day). It's kept up to date even while a fixed accent is
+    /// chosen, so Settings can show it and switching to it is instant.
+    fn wall_palette(&mut self) {
         let look = &self.sys.look;
-        if look.accent != crate::personal::Accent::FromWall || self.accent_src.as_ref() == Some(&look.wall) {
+        let when = self.sys.scene_time();
+        let key = (look.wall.clone(), self.sys.dark, when.map(|m| m / 10));
+        if self.pal_key.as_ref() == Some(&key) {
             return;
         }
-        let small = wallpaper::thumbnail(&self.sys.fs, &look.wall, look.fit, &theme(false, 0), None, 160, 100);
-        self.accent_src = Some(look.wall.clone());
-        self.sys.palette = Some(crate::personal::palette(&small.px));
+        let small = wallpaper::thumbnail(&self.sys.fs, &look.wall, look.fit, &theme(self.sys.dark, 0), when, 160, 100);
+        let new = crate::personal::palette(&small.px);
+        if let Some(old) = self.sys.palette.filter(|o| *o != new) {
+            self.pal_fade = Some((old, self.sys.ticks));
+        }
+        self.pal_key = Some(key);
+        self.sys.palette = Some(new);
         self.dirty = true;
     }
 
     fn render_frame(&mut self, canvas: &mut Canvas, ticks: u64) {
-        self.wall_accent();
+        self.wall_palette();
         let full = Rect::new(0, 0, self.w, self.h);
         if self.locked && self.unlocking.is_none() {
             let mut ui = Ui::new(canvas, self.s, self.theme(), self.hover, ticks);

@@ -565,6 +565,8 @@ impl Sys {
         let text = String::from_utf8_lossy(&data).to_string();
         // settings from before the theme mode: dark stays dark
         let had_mode = text.lines().any(|l| l.starts_with("thememode="));
+        // and from before dynamic colour: the accent picked stays picked
+        let had_accent = text.lines().any(|l| l.starts_with("accentfrom="));
         for line in text.lines() {
             let mut kv = line.splitn(2, '=');
             let (k, v) = (kv.next().unwrap_or(""), kv.next().unwrap_or("").trim());
@@ -597,6 +599,9 @@ impl Sys {
         }
         if !had_mode {
             self.look.mode = if self.dark { crate::personal::Mode::Dark } else { crate::personal::Mode::Light };
+        }
+        if !had_accent {
+            self.look.accent = crate::personal::Accent::Preset(self.accent as u8);
         }
         self.follow_mode();
     }

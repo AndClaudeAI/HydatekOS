@@ -484,42 +484,49 @@ impl Settings {
                 for (i, md) in Mode::ALL.iter().enumerate() {
                     ui.button(Rect::new(m.x + 16 + i as i32 * 104, top + 66, 98, 30), md.name(), Action::App(inst, C_MODE + i as u32), look.mode == *md);
                 }
+                // dynamic colour: the theme built from the wallpaper
                 let top = top + 130;
-                card(ui, Rect::new(m.x, top, m.w, 150));
-                let inner = Rect::new(m.x + 16, top, m.w - 32, 150);
-                let sub = if look.accent == Accent::FromWall { "Matched to the wallpaper, surfaces too" } else { "Highlights, folders and buttons" };
-                row(ui, inner, top + 6, "Accent colour", sub);
+                let dynamic = look.accent == Accent::FromWall;
+                card(ui, Rect::new(m.x, top, m.w, 168));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 168);
+                row(ui, inner, top + 6, "Dynamic colour", "Colours come from your wallpaper, and change when it does");
+                ui.switch(sw_x, top + 14, dynamic, Action::App(inst, C_ACC_WALL));
+                // the palette as it is now: what each part of the system wears
+                if let Some(p) = sys.palette {
+                    let th = crate::theme::theme_matched(sys.dark, &p);
+                    let parts = [("Accent", th.accent), ("Windows", th.surface), ("Sidebars", th.sidebar), ("Buttons", th.chip), ("Lines", th.line), ("Dock", th.dock)];
+                    let n = parts.len() as i32;
+                    let (gap, sw) = (8, (m.w - 32 - 8 * (n - 1)) / n);
+                    for (k, (name, c)) in parts.iter().enumerate() {
+                        let r = Rect::new(m.x + 16 + k as i32 * (sw + gap), top + 66, sw, 52);
+                        ui.rrect(r, 10, t.line);
+                        ui.rrect(r.inset(1), 9, *c);
+                        if k == 0 {
+                            ui.text_in(r, Face::Semibold, 12, "Aa", th.on_accent, 1);
+                        }
+                        ui.text_in(Rect::new(r.x, r.b() + 4, r.w, 18), Face::Regular, 11, name, t.text2, 1);
+                    }
+                    if !dynamic {
+                        ui.text(m.x + 16, top + 158, Face::Regular, 11, "Turn it on to use these colours", t.text3);
+                    }
+                }
+                // or a fixed accent
+                let top = top + 182;
+                card(ui, Rect::new(m.x, top, m.w, 128));
+                let inner = Rect::new(m.x + 16, top, m.w - 32, 128);
+                row(ui, inner, top + 6, "Accent colour", if dynamic { "Choosing one turns dynamic colour off" } else { "Highlights, folders and buttons" });
                 let step = ((m.w - 32) / 5).min(84);
                 for (i, (name, l, d)) in ACCENTS.iter().enumerate() {
                     let cx = m.x + 16 + i as i32 * step;
                     let a = Action::App(inst, C_ACCENT + i as u32);
                     if look.accent == Accent::Preset(i as u8) {
-                        ui.circle(cx + 14, top + 82, 17, t.text);
-                        ui.circle(cx + 14, top + 82, 15, t.surface);
+                        ui.circle(cx + 14, top + 74, 17, t.text);
+                        ui.circle(cx + 14, top + 74, 15, t.surface);
                     }
-                    ui.circle(cx + 14, top + 82, 13, Color::rgb(if sys.dark { *d } else { *l }));
-                    ui.text_in(Rect::new(cx - 10, top + 102, 48, 20), Face::Regular, 12, name, t.text2, 1);
-                    ui.zone(Rect::new(cx - 4, top + 62, 40, 60), a);
+                    ui.circle(cx + 14, top + 74, 13, Color::rgb(if sys.dark { *d } else { *l }));
+                    ui.text_in(Rect::new(cx - 10, top + 94, 48, 20), Face::Regular, 12, name, t.text2, 1);
+                    ui.zone(Rect::new(cx - 4, top + 54, 40, 60), a);
                 }
-                // the wallpaper's own colour
-                let cx = m.x + 16 + 4 * step;
-                let a = Action::App(inst, C_ACC_WALL);
-                let from = sys.palette.map(|p| if sys.dark { p.accent.1 } else { p.accent.0 });
-                if look.accent == Accent::FromWall {
-                    ui.circle(cx + 14, top + 82, 17, t.text);
-                    ui.circle(cx + 14, top + 82, 15, t.surface);
-                }
-                match from {
-                    Some(c) => ui.circle(cx + 14, top + 82, 13, Color::rgb(c)),
-                    None => {
-                        // a quartered swatch: "from the picture"
-                        for (k, c) in [0xF3A683u32, 0x7FD1C7, 0xB39DDB, 0xF6D365].iter().enumerate() {
-                            ui.circle(cx + 8 + (k as i32 % 2) * 12, top + 76 + (k as i32 / 2) * 12, 6, Color::rgb(*c));
-                        }
-                    }
-                }
-                ui.text_in(Rect::new(cx - 18, top + 102, 64, 20), Face::Regular, 12, "Wallpaper", t.text2, 1);
-                ui.zone(Rect::new(cx - 4, top + 62, 40, 60), a);
             }
             _ => {
                 card(ui, Rect::new(m.x, top, m.w, 250));
@@ -1488,7 +1495,7 @@ impl App for Settings {
         if code != C_INK {
             self.inking = false;
         }
-        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT, C_TOD, C_WIDGETS].contains(&code) {
+        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT, C_TOD, C_WIDGETS, C_ACC_WALL].contains(&code) {
             sys.feel(crate::haptics::Haptic::Click);
         }
         match code {
@@ -1590,7 +1597,8 @@ impl App for Settings {
                 return;
             }
             C_ACC_WALL => {
-                sys.look.accent = crate::personal::Accent::FromWall;
+                // dynamic colour on, or back to the accent picked before
+                sys.look.accent = if sys.look.accent == crate::personal::Accent::FromWall { crate::personal::Accent::Preset(sys.accent as u8) } else { crate::personal::Accent::FromWall };
                 sys.reqs.push(Req::SaveSettings);
                 return;
             }

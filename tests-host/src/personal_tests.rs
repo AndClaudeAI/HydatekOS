@@ -202,3 +202,49 @@ fn every_photo_loads_and_has_colours() {
     ids.dedup();
     assert_eq!(ids.len(), Photo::ALL.len());
 }
+
+#[test]
+fn tones_keep_the_hue() {
+    let blue = 0x244D7C; // Summit's sky
+    // light, dark and in between: the same hue, the asked lightness
+    for (s, l) in [(170, 972), (420, 130), (270, 125), (300, 500)] {
+        let c = tone(blue, s, l);
+        assert!((hue_of(c) - hue_of(blue)).abs() <= 6, "{:06x} for {} {}", c, s, l);
+        let (_, got) = sat_light(c);
+        assert!((got - l).abs() <= 8, "{:06x}: lightness {} not {}", c, got, l);
+    }
+    // the extremes
+    assert_eq!(tone(blue, 500, 1000), 0xFFFFFF);
+    assert_eq!(tone(blue, 500, 0), 0x000000);
+    assert_eq!(tone(blue, 0, 500) & 0xFF, (tone(blue, 0, 500) >> 16) & 0xFF); // grey
+    // saturation and lightness of a known colour: pure red is 1000, 500
+    assert_eq!(sat_light(0xFF0000), (1000, 500));
+}
+
+#[test]
+fn readable_ink() {
+    // pale ink on a pale surface is darkened until it reads
+    let c = readable(0xC8C0B8, 0xF7F4EE, 450);
+    assert!(contrast(c, 0xF7F4EE) >= 450);
+    // dim ink on a dark surface is lightened
+    let c = readable(0x403848, 0x1E1C28, 450);
+    assert!(contrast(c, 0x1E1C28) >= 450);
+    // ink that already reads is left alone
+    assert_eq!(readable(0x1E1B2C, 0xFFFFFF, 450), 0x1E1B2C);
+}
+
+#[test]
+fn dynamic_colour_is_the_default() {
+    assert_eq!(Look::default().accent, Accent::FromWall);
+}
+
+#[test]
+fn dark_colours_are_not_accents() {
+    // sand and terracotta dunes over a band of dark navy shadow
+    let mut px = vec![0xFFDCC8ABu32; 400];
+    px.extend(vec![0xFFC4895Eu32; 300]);
+    px.extend(vec![0xFF2B2A48u32; 300]);
+    let p = palette(&px);
+    let h = hue_of(p.accent.0);
+    assert!((15..45).contains(&h), "the accent is warm, not navy: {:06x}", p.accent.0);
+}

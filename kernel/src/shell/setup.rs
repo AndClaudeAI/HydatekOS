@@ -11,7 +11,7 @@ use crate::gfx::{Canvas, Color, Rect};
 use crate::icons::Icon;
 use crate::profile::{self, Avatar, Profile};
 use crate::sys::Sys;
-use crate::theme::{theme, ACCENTS};
+use crate::theme::ACCENTS;
 use crate::ui::{Action, Key, Ui};
 use alloc::format;
 use alloc::string::String;
@@ -53,6 +53,7 @@ const M_NOTHING: u16 = 8;
 const LIGHT: u16 = 9;
 const DARK: u16 = 10;
 const KB_TOGGLE: u16 = 11;
+const DYNAMIC: u16 = 12;
 const SWALLOW: u16 = 13;
 const LATER: u16 = 14;
 const F_KEY: u16 = 15;
@@ -335,6 +336,11 @@ impl Setup {
             KB_TOGGLE => self.osk = !self.osk,
             c if (ACCENT..ACCENT + ACCENTS.len() as u16).contains(&c) => {
                 sys.accent = (c - ACCENT) as usize;
+                sys.look.accent = crate::personal::Accent::Preset(sys.accent as u8);
+                sys.save_settings();
+            }
+            DYNAMIC => {
+                sys.look.accent = crate::personal::Accent::FromWall;
                 sys.save_settings();
             }
             c if c >= OSK => match self.kb.press((c - OSK) as u8, now) {
@@ -751,7 +757,7 @@ impl Setup {
     fn render_look(&mut self, ui: &mut Ui, body: Rect, foot: Rect, sys: &Sys, tall: bool) {
         let t = ui.t;
         let u = Setup::u(tall, body);
-        let mut y = Setup::heading(ui, body, "Choose your look", "Light for daytime, Dark for evenings. The accent colours buttons, folders and highlights.", tall, false);
+        let mut y = Setup::heading(ui, body, "Choose your look", "Light for daytime, Dark for evenings. Dynamic colour takes its colours from your wallpaper, and changes with it.", tall, false);
         let gap = u(14);
         let cw = (body.w - gap) / 2;
         let ch = cw * 9 / 16;
@@ -761,7 +767,7 @@ impl Setup {
             let a = Action::Setup(if *dark { DARK } else { LIGHT });
             let on = sys.dark == *dark;
             // a small desktop in that theme, drawn apart then rounded
-            let th = theme(*dark, sys.accent);
+            let th = sys.theme_for(*dark);
             if on || ui.hot(a) {
                 ui.rrect(b.inset(-u(4)), u(18), if on { t.accent } else { t.line });
             }
@@ -788,16 +794,37 @@ impl Setup {
             ui.zone(Rect::new(b.x, b.y, b.w, b.h + u(30)), a);
         }
         y += ch + u(50);
-        ui.label(body.x, y, u(11), "ACCENT", t.text3);
+        ui.label(body.x, y, u(11), "COLOUR", t.text3);
         y += u(14);
-        let step = (body.w / ACCENTS.len() as i32).min(u(140));
+        let step = (body.w / (ACCENTS.len() as i32 + 1)).min(u(140));
+        let dynamic = sys.look.accent == crate::personal::Accent::FromWall;
+        {
+            // dynamic: the wallpaper's accent, on its main colour
+            let a = Action::Setup(DYNAMIC);
+            let r = u(13);
+            let (ccx, ccy) = (body.x + r + u(4), y + r + u(4));
+            if dynamic {
+                ui.circle(ccx, ccy, r + u(4), t.text);
+                ui.circle(ccx, ccy, r + u(2), t.surface);
+            }
+            let (acc, tint) = match sys.palette {
+                Some(p) => (if sys.dark { p.accent.1 } else { p.accent.0 }, p.tint.unwrap_or(0x6B6B6B)),
+                None => (0xB5581B, 0xDCC8AB),
+            };
+            ui.circle(ccx, ccy, r, Color::rgb(tint));
+            ui.circle(ccx, ccy, r * 3 / 5, Color::rgb(acc));
+            if step >= u(90) {
+                ui.text(ccx + r + u(10), ccy + u(5), Face::Regular, u(14), "Dynamic", t.text);
+            }
+            ui.zone(Rect::new(body.x, y, step - u(4), 2 * r + u(8)), a);
+        }
         for (i, (name, l, d)) in ACCENTS.iter().enumerate() {
-            let x = body.x + i as i32 * step;
+            let x = body.x + (i as i32 + 1) * step;
             let a = Action::Setup(ACCENT + i as u16);
             let c = Color::rgb(if sys.dark { *d } else { *l });
             let r = u(13);
             let (ccx, ccy) = (x + r + u(4), y + r + u(4));
-            if sys.accent == i {
+            if !dynamic && sys.accent == i {
                 ui.circle(ccx, ccy, r + u(4), t.text);
                 ui.circle(ccx, ccy, r + u(2), t.surface);
             }

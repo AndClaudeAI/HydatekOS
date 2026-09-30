@@ -3,7 +3,9 @@
 ![Settings › Personalisation](screenshots/personalise-wallpaper.png)
 
 **Settings › Personalisation** is where HydatekOS takes on your look. It has three
-tabs: **Wallpaper**, **Colours** and **Desktop**. Each person on the computer has
+tabs: **Wallpaper**, **Colours** and **Desktop**. The theme is **dynamic**: its
+colours come from your wallpaper and change when the wallpaper does (see
+[Dynamic colour](#dynamic-colour)). Each person on the computer has
 their own choices ([accounts](ACCOUNTS.md)), and every choice takes effect at once
 and survives reboots.
 
@@ -37,9 +39,7 @@ upright, only a narrow slice fits. Each photo has its own focus point for that
 slice, chosen so its words don't end up under the clock: on Summit, the slice
 shows the peaks and the lake.
 
-**Choosing a photograph also matches the theme to it** (see
-[Colours](#colours)). Choosing another wallpaper leaves your colour choice as
-it is.
+Choosing a photograph turns [dynamic colour](#dynamic-colour) on, if it was off.
 
 | Summit, light | Summit, dark |
 |---|---|
@@ -108,14 +108,50 @@ save memory. If a picture is moved or deleted, the wallpaper falls back to Dune.
 - **Theme:** Light, Dark or **Automatic**. Automatic is dark from 19:00 to 07:00
   and switches on its own. Choosing dark from the quick settings, the keyboard
   shortcut or the terminal turns Automatic off.
-- **Accent colour:** Ember, Ocean, Moss, Plum or **Wallpaper**. Wallpaper matches
-  the whole theme to your desktop wallpaper:
-  - The **accent** is the wallpaper's most vivid colour. Summit's sunset gives
-    gold on a blue sky, Jetty gives coral, and Gold Vein gives gold.
-  - The **surfaces** (windows, sidebars, chips, the menu bar and the dock) lean
-    a little towards the wallpaper's main colour. Summit gives cool blue-grey
-    windows in the light theme and deep navy ones in the dark theme.
-  - Text isn't tinted, so it keeps its contrast.
+- **Dynamic colour** (on by default): the theme's colours come from the
+  wallpaper. See below.
+- **Accent colour:** Ember, Ocean, Moss or Plum. These are for when you'd
+  rather have a fixed colour; choosing one turns dynamic colour off.
+
+### Dynamic colour
+
+![Dynamic colour on Dune](screenshots/personalise-dynamic-dune.png)
+
+With dynamic colour on, the whole theme is built from the wallpaper on the
+screen:
+
+- The **accent** is the wallpaper's most vivid colour: buttons, switches, the
+  selected item, folders, links, the logo in the menu bar and the setup
+  assistant's buttons. Dune gives terracotta, Summit, Peak and Gold Vein give
+  gold, Jetty gives coral, Valley gives peach, and Wave, Skyline and Dew give
+  their own blues and teals.
+- **Windows, sidebars, buttons, lines, the menu bar and the dock** become
+  tones of the wallpaper's main colour. They keep the lightness of the plain
+  theme, so the layout reads the same.
+- **Secondary text** (captions, hints) takes the same hue, and is checked to
+  keep at least 4.5:1 contrast (3:1 for hints). Main text is never tinted.
+
+The Colours tab shows the palette as it is now: the accent and five of the tones.
+
+| Summit, light | Summit, dark |
+|---|---|
+| ![Summit in the light theme](screenshots/personalise-summit-light.png) | ![Summit in the dark theme](screenshots/personalise-summit-dark.png) |
+
+**It keeps changing.** The palette is taken again whenever what the desktop
+shows changes:
+- a new wallpaper;
+- switching between light and dark, which in Automatic mode happens on its own
+  at 07:00 and 19:00;
+- the sky moving on, every ten minutes, when a scene follows the time of day.
+
+The colours don't jump: the theme eases from the old palette to the new one
+over 0.6 seconds (at once with reduced motion).
+
+![From Dew's teal to Summit's gold](screenshots/personalise-fade.png)
+
+The setup assistant offers **Dynamic** first, and its previews show the colours
+the wallpaper gives. Settings files from before dynamic colour keep the accent
+that was picked in them.
 
 ## Desktop
 
@@ -168,21 +204,29 @@ machines:
   copy.
 - **Photographs** are JPEGs in `kernel/assets/wallpapers/`, built into the
   kernel and decoded the first time they are shown.
-- **Matching the theme** (`personal::palette`, `theme::theme_matched`):
+- **Dynamic colour** (`personal::palette`, `theme::theme_matched`):
   - HydatekOS draws a small daytime copy of the wallpaper, 160 × 100, so the
-    palette is the same in light and dark.
+    palette follows what's on screen: a scene at night gives night colours.
   - Its colourful pixels are sorted into 24 hue bands of 15° each. Greys,
     near-blacks and near-whites are left out.
   - The band covering the most area is the **tint**.
-  - The **accent** is the most vivid band at least 45° from the tint, provided
-    it carries at least an eighth of the tint's weight; otherwise the accent is
-    the tint's own colour. A band's colour is weighted towards its vivid,
-    bright pixels.
+  - The **accent** is the most vivid band at least 45° from the tint.
+    Vividness is area × chroma², so a small bright sunset counts for more than
+    a large dull patch. The band must be bright enough to glow (its brightest
+    channel at least 120 of 255) and carry at least an eighth of the tint's
+    vividness. Otherwise the accent is the tint's own colour, which is why
+    Dune's navy shadows don't become its accent. A band's colour is weighted
+    towards its vivid, bright pixels.
   - `accent_pair` then darkens the accent until white text on it has at least
     3:1 contrast (WCAG), and lightens it until it stands out 3:1 against the
     dark theme's surfaces.
-  - The neutral surfaces are mixed 4–13% towards the tint in the light theme,
-    and twice that in the dark theme.
+  - The surfaces are HSL tones of the tint's hue (`personal::tone`), at the
+    plain theme's lightness. Their saturation is 17–42%, scaled down for muted
+    wallpapers. `personal::readable` darkens or lightens secondary text until
+    it has the contrast it needs.
+  - The shell keeps the key the palette came from (wallpaper, light or dark,
+    time slot). When the key changes it takes the palette again, and
+    `Theme::blend` eases between the old theme and the new one.
   - A wallpaper with no colour in it gives a neutral grey accent and no tint.
 - **Light or dark on the wallpaper:** `wallpaper::is_dark` averages the
   luminance of the upper two thirds of the drawn wallpaper.
@@ -190,11 +234,11 @@ machines:
 
   ```
   wall=photo:summit           # or a scene (lagoon), colour:#2b2a48, gradient:#a,#b, picture:/home/Pictures/x.png
-  wallfit=Fill
+  wallfit=fill
   lockwall=aurora             # or "same"
   timeofday=1
-  thememode=Automatic         # Light, Dark, Automatic
-  accentfrom=wallpaper        # or the preset's number
+  thememode=automatic         # light, dark, automatic
+  accentfrom=wallpaper        # dynamic colour, or the preset's number
   widgets=1
   ```
 

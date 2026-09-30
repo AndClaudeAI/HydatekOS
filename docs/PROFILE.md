@@ -14,7 +14,7 @@ everything stays on the computer. Nothing is sent anywhere.
 | 2 | **A picture** | Your initials on one of eight colours, one of six drawn pictures (sunrise, night, waves, hills, peaks, bloom), or a photo from Pictures, Downloads, Shared or Documents. Photos are cut to the square in their middle. |
 | 3 | **Sign-in** | A **PIN** (4 to 8 digits), a **password** (6 or more characters) or no sign-in. You type it twice. |
 | 4 | **Meet Claude** | HydatekOS's assistant is Claude, made by Anthropic. Paste your Anthropic API key, or skip and add it later in Settings › Assistant ([details](ASSISTANT.md)). |
-| 5 | **Your look** | Light or dark, and the accent colour. The assistant changes as you choose. |
+| 5 | **Your look** | Light or dark, and **Dynamic** colour (from the wallpaper, the default) or a fixed accent. The assistant changes as you choose. |
 
 | Your name | A picture |
 |---|---|

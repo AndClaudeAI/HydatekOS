@@ -147,14 +147,14 @@ Windows, macOS or Linux.
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
-- **Wallpaper and personalisation:** ten photographs, and a theme that matches
-  the wallpaper: its accent, with windows and the dock tinted towards its main
-  colour. There are also seven scenes drawn at your screen's own size
+- **Wallpaper and personalisation:** a dynamic theme. The accent, windows,
+  sidebars, lines, menu bar and dock all take their colours from the
+  wallpaper, and ease to new ones when it changes. There are ten photographs. There are also seven scenes drawn at your screen's own size
   (Dune, Lagoon, Aurora, Hills, Mesa, Bloom, Harmattan) whose skies can follow the
   time of day, plus solid colours, gradients and your own pictures (fill, fit,
   stretch, centre, tile). The lock screen can have its own wallpaper. There are
   light "Dune" and dark "Dusk" themes, an automatic theme that turns dark at
-  night, and four accent colours or one taken from the wallpaper. Details:
+  night, and four fixed accent colours for when you'd rather not follow the wallpaper. Details:
   [docs/PERSONALISATION.md](docs/PERSONALISATION.md).
 
 ### What isn't there yet
