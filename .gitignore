@@ -4,3 +4,4 @@ __pycache__/
 /tests-host/target/
 /companion/android/build/
 node_modules/
+/dist/

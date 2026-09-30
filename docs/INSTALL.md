@@ -1,5 +1,10 @@
 # Installing HydatekOS on a PC
 
+> **Just want to try it?** `tools/mkdist.sh` makes `dist/HydatekOS-0.1-x86_64.zip`:
+> a ready-built disk, the UEFI firmware and double-click launchers for Windows
+> (`Start HydatekOS.bat`) and Mac/Linux (`start-hydatekos.command`). The person
+> trying it only needs QEMU; the README inside walks through it.
+
 HydatekOS 0.1 runs on computers with **UEFI firmware** (almost every PC made since
 ~2012). You need 512 MB of RAM or more. One stick carries both builds:
 
