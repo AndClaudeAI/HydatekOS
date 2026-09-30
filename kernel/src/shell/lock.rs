@@ -401,6 +401,13 @@ impl Lock {
         let pr = r.scale(ui.s);
         let wall = wallpaper::cached(&sys.fs, look.lock.as_ref().unwrap_or(&look.wall), look.fit, &t, sys.scene_time(), pr.w, pr.h, tall);
         ui.c.copy_from(wall, pr);
+        // light or dark to suit the wallpaper, so the clock reads on a dark
+        // photo in the light theme (and the other way round)
+        let dark = wallpaper::is_dark(wall);
+        if dark != t.dark {
+            ui.t = sys.theme_for(dark);
+        }
+        let t = ui.t;
         ui.zone(r, Action::Lock(TAP));
         let u = |v: i32| if tall { v * r.w / 390 } else { v };
         // status icons

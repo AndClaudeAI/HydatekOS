@@ -115,3 +115,90 @@ fn pictures_fitted() {
     assert_eq!(r[0] & 0xFFFFFF, 0x7F7F7F);
     assert_eq!(compose(&[], 0, 0, 2, 2, Fit::Fill).len(), 4);
 }
+
+fn hue_of(c: u32) -> i32 {
+    let (r, g, b) = rgb(c);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let d = (mx - mn).max(1);
+    (if mx == r { 60 * (g - b) / d } else if mx == g { 60 * (b - r) / d + 120 } else { 60 * (r - g) / d + 240 }).rem_euclid(360)
+}
+
+#[test]
+fn photo_saved_and_loaded() {
+    let w = Wall::Photo(Photo::Summit);
+    assert_eq!(w.save(), "photo:summit");
+    assert_eq!(Wall::load("photo:summit"), Some(w.clone()));
+    assert_eq!(Wall::load("photo:nowhere"), None);
+    assert_eq!(w.name(), "Summit");
+}
+
+#[test]
+fn summit_palette_is_blue_sky_and_gold() {
+    let data = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../kernel/assets/wallpapers/summit.jpg")).unwrap();
+    let img = crate::image::decode(&data).unwrap();
+    let small = resample(&img.px, img.w as usize, img.h as usize, 160, 90);
+    let p = palette(&small);
+    let tint = p.tint.expect("a colourful photo has a tint");
+    // the sky: blue
+    assert!((195..240).contains(&hue_of(tint)), "tint {:06x}", tint);
+    // the sunset: gold to orange, and different from the tint
+    let (light, dark) = p.accent;
+    for a in [light, dark] {
+        assert!((15..55).contains(&hue_of(a)), "accent {:06x}", a);
+    }
+    // readable: white text on the light accent, the dark accent on dark surfaces
+    assert!(contrast(light, 0xFFFFFF) >= 300);
+    assert!(contrast(dark, 0x23202C) >= 300);
+}
+
+#[test]
+fn palette_of_one_colour_and_of_none() {
+    // a single blue: tint and accent are the same colour
+    let p = palette(&vec![0xFF2F6690; 1000]);
+    assert_eq!(p.tint, Some(0x2F6690));
+    assert!((195..225).contains(&hue_of(p.accent.1)));
+    // a little orange on a lot of blue still gives an orange accent
+    let mut px = vec![0xFF2F6690u32; 900];
+    px.extend(vec![0xFFF08A24u32; 100]);
+    let p = palette(&px);
+    assert!((20..40).contains(&hue_of(p.accent.0)), "{:06x}", p.accent.0);
+    // a speck of it isn't enough
+    let mut px = vec![0xFF2F6690u32; 995];
+    px.extend(vec![0xFFF08A24u32; 5]);
+    assert_eq!(palette(&px).accent, accent_pair(0x2F6690));
+    // greys: no tint
+    assert_eq!(palette(&vec![0xFF808080; 100]).tint, None);
+}
+
+#[test]
+fn fill_keeps_its_focus() {
+    // 100 × 10, each pixel numbered by its column
+    let src: Vec<u32> = (0..1000).map(|i| 0xFF000000 | (i % 100)).collect();
+    // a tall 2 × 10 screen takes a slice 2 columns wide, around 80%
+    let out = compose_at(&src, 100, 10, 2, 10, Fit::Fill, 800);
+    assert!(out.iter().all(|p| (79..=80).contains(&(p & 0xFF))), "{:?}", &out[..2]);
+    // at the edge it stops at the picture's side
+    let out = compose_at(&src, 100, 10, 2, 10, Fit::Fill, 1000);
+    assert!(out.iter().all(|p| (98..=99).contains(&(p & 0xFF))));
+    // the middle, as before
+    assert_eq!(compose(&src, 100, 10, 2, 10, Fit::Fill), compose_at(&src, 100, 10, 2, 10, Fit::Fill, 500));
+}
+
+#[test]
+fn every_photo_loads_and_has_colours() {
+    for p in Photo::ALL {
+        let w = Wall::Photo(p);
+        assert_eq!(Wall::load(&w.save()), Some(w.clone()), "{}", p.id());
+        assert!(p.focus() <= 1000);
+        let path = format!("{}/../kernel/assets/wallpapers/{}.jpg", env!("CARGO_MANIFEST_DIR"), p.id());
+        let img = crate::image::decode(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(img.w >= 500 && img.h >= 300, "{} is {}×{}", p.id(), img.w, img.h);
+        let pal = palette(&resample(&img.px, img.w as usize, img.h as usize, 160, 90));
+        assert!(pal.tint.is_some(), "{} has no colour", p.id());
+        assert!(contrast(pal.accent.0, 0xFFFFFF) >= 300 && contrast(pal.accent.1, 0x23202C) >= 300, "{}", p.id());
+    }
+    let mut ids: Vec<_> = Photo::ALL.iter().map(|p| p.id()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), Photo::ALL.len());
+}

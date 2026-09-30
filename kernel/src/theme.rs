@@ -97,3 +97,25 @@ pub fn theme_with(dark: bool, (al, ad): (u32, u32)) -> Theme {
         }
     }
 }
+
+/// The theme matched to a wallpaper: its accent, and neutral surfaces that
+/// lean a little towards the wallpaper's main colour. Text isn't tinted,
+/// so it keeps its contrast.
+pub fn theme_matched(dark: bool, p: &crate::personal::Palette) -> Theme {
+    let mut t = theme_with(dark, p.accent);
+    let Some(tint) = p.tint else { return t };
+    use crate::personal::mix;
+    // how far each surface leans (/256): more in the dark, where it shows less
+    let lean = |c: Color, k: i32| Color::rgba(mix(c.0 & 0xFF_FFFF, tint, if dark { k * 2 } else { k }), c.a() as u8);
+    t.sky = lean(t.sky, 22);
+    t.sky2 = lean(t.sky2, 22);
+    t.surface = lean(t.surface, 10);
+    t.sidebar = lean(t.sidebar, 18);
+    t.tile = lean(t.tile, 20);
+    t.chip = lean(t.chip, 20);
+    t.line = lean(t.line, 18);
+    t.bar = lean(t.bar, 14);
+    t.dock = lean(t.dock, 34);
+    t.dock_btn = lean(t.dock_btn, 34);
+    t
+}

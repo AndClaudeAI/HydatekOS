@@ -63,6 +63,67 @@ pub enum Wall {
     Gradient(u32, u32),
     /// a picture, by path
     Picture(String),
+    /// a photograph that comes with HydatekOS
+    Photo(Photo),
+}
+
+/// The photographs that come with HydatekOS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Photo {
+    /// sunrise over a lake from a rocky summit: "Greater things are ahead"
+    Summit,
+    /// snowy peaks above the clouds: "Bigger dreams, bolder steps"
+    Peak,
+    /// a ribbon of blue light: "Discipline builds freedom"
+    Wave,
+    /// lanterns on a jetty at sunset: "Be still and know that I am God"
+    Jetty,
+    /// dew on dark leaves
+    Dew,
+    /// a city's lights on the water at dusk
+    Skyline,
+    /// a small tree by a stone wall in the evening sun
+    Shade,
+    /// the sun setting over a rocky beach: "Gratitude changes everything"
+    Shore,
+    /// black stone veined with gold
+    GoldVein,
+    /// mist in a valley at dawn: "The best is yet to come"
+    Valley,
+}
+
+impl Photo {
+    pub const ALL: [Photo; 10] = [Photo::Summit, Photo::Peak, Photo::Wave, Photo::Jetty, Photo::Dew, Photo::Skyline, Photo::Shade, Photo::Shore, Photo::GoldVein, Photo::Valley];
+
+    /// (id, name, focus): where a tall screen's narrow slice keeps its
+    /// middle, across the picture (per mille), chosen so that a photo's
+    /// words don't sit under a phone's clock
+    fn info(self) -> (&'static str, &'static str, usize) {
+        match self {
+            Photo::Summit => ("summit", "Summit", 470),
+            Photo::Peak => ("peak", "Peak", 700),
+            Photo::Wave => ("wave", "Wave", 820),
+            Photo::Jetty => ("jetty", "Jetty", 470),
+            Photo::Dew => ("dew", "Dew", 500),
+            Photo::Skyline => ("skyline", "Skyline", 500),
+            Photo::Shade => ("shade", "Shade", 780),
+            Photo::Shore => ("shore", "Shore", 700),
+            Photo::GoldVein => ("goldvein", "Gold Vein", 500),
+            Photo::Valley => ("valley", "Valley", 400),
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        self.info().0
+    }
+
+    pub fn name(self) -> &'static str {
+        self.info().1
+    }
+
+    pub fn focus(self) -> usize {
+        self.info().2
+    }
 }
 
 /// Solid colours and gradients offered in Settings.
@@ -80,12 +141,16 @@ impl Wall {
             Wall::Solid(c) => format!("colour:#{:06x}", c),
             Wall::Gradient(a, b) => format!("gradient:#{:06x},#{:06x}", a, b),
             Wall::Picture(p) => format!("picture:{}", p),
+            Wall::Photo(p) => format!("photo:{}", p.id()),
         }
     }
 
     pub fn load(s: &str) -> Option<Wall> {
         if let Some(p) = s.strip_prefix("picture:") {
             return (!p.is_empty()).then(|| Wall::Picture(p.to_string()));
+        }
+        if let Some(p) = s.strip_prefix("photo:") {
+            return Photo::ALL.iter().find(|x| x.id() == p).map(|x| Wall::Photo(*x));
         }
         if let Some(c) = s.strip_prefix("colour:") {
             return hex(c).map(Wall::Solid);
@@ -103,6 +168,7 @@ impl Wall {
             Wall::Solid(_) => String::from("Colour"),
             Wall::Gradient(..) => String::from("Gradient"),
             Wall::Picture(p) => p.rsplit('/').next().unwrap_or(p).to_string(),
+            Wall::Photo(p) => p.name().to_string(),
         }
     }
 }
@@ -301,6 +367,78 @@ pub fn dominant(px: &[u32]) -> u32 {
     pack((r / n) as i32, (g / n) as i32, (b / n) as i32)
 }
 
+fn hue(c: u32) -> i32 {
+    let (r, g, b) = rgb(c);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    if mx == mn {
+        return 0;
+    }
+    let d = mx - mn;
+    let h = if mx == r {
+        60 * (g - b) / d
+    } else if mx == g {
+        60 * (b - r) / d + 120
+    } else {
+        60 * (r - g) / d + 240
+    };
+    h.rem_euclid(360)
+}
+
+/// A theme's colours taken from a wallpaper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    /// the accent: (for the light theme, for the dark theme)
+    pub accent: (u32, u32),
+    /// the wallpaper's main colour, which the neutral surfaces lean towards;
+    /// none for a wallpaper without colour
+    pub tint: Option<u32>,
+}
+
+/// The palette of a wallpaper. The colourful pixels are sorted into 24 hue
+/// bands (15° each). The band that covers the most is the tint; the accent
+/// is the most vivid band at least 45° away from it (a sunset over a blue
+/// sky gives a blue tint and a gold accent), or the tint's own colour if
+/// nothing else stands out.
+pub fn palette(px: &[u32]) -> Palette {
+    const N: usize = 24;
+    let (mut cnt, mut sat_sum) = ([0u64; N], [0u64; N]);
+    let (mut sr, mut sg, mut sb, mut sw) = ([0u64; N], [0u64; N], [0u64; N], [0u64; N]);
+    let step = (px.len() / 20_000).max(1);
+    for p in px.iter().step_by(step) {
+        let c = *p & 0xFF_FFFF;
+        let (s, l) = (saturation(c), luminance(c));
+        if s < 60 || !(30..950).contains(&l) {
+            continue;
+        }
+        let b = hue(c) as usize * N / 360;
+        let (r, g, bl) = rgb(c);
+        // vivid, bright pixels count most towards a band's colour
+        let w = (s * s * r.max(g).max(bl) / 65025 + 1) as u64;
+        cnt[b] += 1;
+        sat_sum[b] += s as u64;
+        sr[b] += r as u64 * w;
+        sg[b] += g as u64 * w;
+        sb[b] += bl as u64 * w;
+        sw[b] += w;
+    }
+    if cnt.iter().all(|n| *n == 0) {
+        return Palette { accent: accent_pair(0x6B6B6B), tint: None };
+    }
+    // each band with half its neighbours, so a colour split between two bands isn't lost
+    let area = |i: usize| cnt[(i + N - 1) % N] + 2 * cnt[i] + cnt[(i + 1) % N];
+    let vivid = |i: usize| area(i) * (sat_sum[i] / cnt[i].max(1));
+    let colour = |i: usize| pack((sr[i] / sw[i]) as i32, (sg[i] / sw[i]) as i32, (sb[i] / sw[i]) as i32);
+    let t = (0..N).max_by_key(|i| area(*i)).unwrap();
+    let t = if cnt[t] == 0 { (0..N).max_by_key(|i| cnt[*i]).unwrap() } else { t };
+    let far = (0..N).filter(|i| cnt[*i] > 0 && (*i + N - t) % N >= 3 && (t + N - *i) % N >= 3);
+    let a = match far.max_by_key(|i| vivid(*i)) {
+        // it has to hold its own: an eighth of the tint's weight
+        Some(a) if vivid(a) * 8 >= vivid(t) => a,
+        _ => t,
+    };
+    Palette { accent: accent_pair(colour(a)), tint: Some(colour(t)) }
+}
+
 /// An accent pair made from a colour: one readable under white text (light
 /// theme), one bright enough on the dark theme's surfaces.
 pub fn accent_pair(c: u32) -> (u32, u32) {
@@ -396,6 +534,11 @@ pub fn resample(src: &[u32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<
 
 /// A picture made into a wallpaper of `w` × `h`.
 pub fn compose(src: &[u32], sw: usize, sh: usize, w: usize, h: usize, fit: Fit) -> Vec<u32> {
+    compose_at(src, sw, sh, w, h, fit, 500)
+}
+
+/// As `compose`, with a Fill crop kept around `focus` (per mille across).
+pub fn compose_at(src: &[u32], sw: usize, sh: usize, w: usize, h: usize, fit: Fit, focus: usize) -> Vec<u32> {
     if sw == 0 || sh == 0 || src.len() < sw * sh {
         return alloc::vec![0xFF2B2A48; w * h];
     }
@@ -404,7 +547,8 @@ pub fn compose(src: &[u32], sw: usize, sh: usize, w: usize, h: usize, fit: Fit) 
         Fit::Fill => {
             // the largest part of the picture with the screen's shape
             let (cw, ch) = if sw * h > sh * w { (sh * w / h, sh) } else { (sw, sw * h / w) };
-            let (cx, cy) = ((sw - cw) / 2, (sh - ch) / 2);
+            let cx = (sw * focus.min(1000) / 1000).saturating_sub(cw / 2).min(sw - cw);
+            let cy = (sh - ch) / 2;
             let mut crop = Vec::with_capacity(cw * ch);
             for y in cy..cy + ch {
                 crop.extend_from_slice(&src[y * sw + cx..y * sw + cx + cw]);

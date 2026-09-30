@@ -14,6 +14,37 @@ where your next choice goes: **Both**, the **Desktop** only, or the **Lock
 screen** only. You can also click either preview to pick it as the target. So the
 desktop can be a quiet lagoon while the lock screen shows the northern lights.
 
+### Photographs
+
+HydatekOS comes with ten photographs. Six of them carry a line of encouragement
+in the sky.
+
+| Photo | What it is |
+|---|---|
+| **Summit** | Sunrise over a lake from a rocky summit, with a lone tree. *Greater things are ahead · Faith · Discipline · Progress* |
+| **Peak** | Snowy peaks above a sea of cloud at sunrise. *Bigger dreams, bolder steps, greater tomorrows* |
+| **Wave** | A ribbon of blue light on black. *Discipline builds freedom* |
+| **Jetty** | Lanterns along a jetty on a still lake at sunset. *Be still and know that I am God (Psalm 46:10)* |
+| **Dew** | Dew on dark tropical leaves. |
+| **Skyline** | A city's lights on the water at dusk. |
+| **Shade** | A small tree by a stone wall in the evening sun. |
+| **Shore** | The sun setting over a rocky beach. *Gratitude changes everything* |
+| **Gold Vein** | Black stone veined with gold. |
+| **Valley** | Mist in a valley at dawn. *The best is yet to come* |
+
+A photograph always fills the screen. On a tall screen, such as a phone held
+upright, only a narrow slice fits. Each photo has its own focus point for that
+slice, chosen so its words don't end up under the clock: on Summit, the slice
+shows the peaks and the lake.
+
+**Choosing a photograph also matches the theme to it** (see
+[Colours](#colours)). Choosing another wallpaper leaves your colour choice as
+it is.
+
+| Summit, light | Summit, dark |
+|---|---|
+| ![Summit in the light theme](screenshots/personalise-summit-light.png) | ![Summit in the dark theme](screenshots/personalise-summit-dark.png) |
+
 ### Scenes
 
 HydatekOS draws seven scenes itself, at the exact size of your screen. Nothing is
@@ -77,9 +108,14 @@ save memory. If a picture is moved or deleted, the wallpaper falls back to Dune.
 - **Theme:** Light, Dark or **Automatic**. Automatic is dark from 19:00 to 07:00
   and switches on its own. Choosing dark from the quick settings, the keyboard
   shortcut or the terminal turns Automatic off.
-- **Accent colour:** Ember, Ocean, Moss, Plum or **Wallpaper**. Wallpaper takes the
-  accent from your desktop wallpaper (see below). That way a lagoon gives a
-  teal accent and a picture of dunes at dusk gives an amber one.
+- **Accent colour:** Ember, Ocean, Moss, Plum or **Wallpaper**. Wallpaper matches
+  the whole theme to your desktop wallpaper:
+  - The **accent** is the wallpaper's most vivid colour. Summit's sunset gives
+    gold on a blue sky, Jetty gives coral, and Gold Vein gives gold.
+  - The **surfaces** (windows, sidebars, chips, the menu bar and the dock) lean
+    a little towards the wallpaper's main colour. Summit gives cool blue-grey
+    windows in the light theme and deep navy ones in the dark theme.
+  - Text isn't tinted, so it keeps its contrast.
 
 ## Desktop
 
@@ -93,6 +129,15 @@ are here too.
 
 The lock screen shows its own wallpaper when you've chosen one, and the desktop's
 otherwise. It uses your accent before you sign in, too.
+
+The lock screen and the phone's home screen draw straight on the wallpaper. They
+go light or dark to suit how bright the wallpaper is where their text sits, so
+the clock stays readable on a dark photo while the rest of the system is in the
+light theme.
+
+| Lock screen on Gold Vein | Phone home screen |
+|---|---|
+| ![The lock screen on a dark photo](screenshots/personalise-lock-photo.png) | ![The phone home screen](screenshots/personalise-phone.png) |
 
 ## ARM64
 
@@ -121,20 +166,30 @@ machines:
   something that shows changes: the wallpaper, the fit, light or dark, the
   accent, the screen size or the ten-minute time slot. Drawing the desktop is a
   copy.
-- **Accent from the wallpaper.**
+- **Photographs** are JPEGs in `kernel/assets/wallpapers/`, built into the
+  kernel and decoded the first time they are shown.
+- **Matching the theme** (`personal::palette`, `theme::theme_matched`):
   - HydatekOS draws a small daytime copy of the wallpaper, 160 × 100, so the
-    accent is the same in light and dark.
-  - It builds a 4096-bucket colour histogram of the copy's colourful pixels,
-    leaving out greys, near-blacks and near-whites, and weights each pixel by
-    how saturated it is.
-  - It averages the busiest bucket. `accent_pair` then darkens that colour
-    until white text on it has at least 3:1 contrast (WCAG), and lightens it
-    until it stands out 3:1 against the dark theme's surfaces.
-  - A wallpaper with no colour in it gives a neutral grey.
+    palette is the same in light and dark.
+  - Its colourful pixels are sorted into 24 hue bands of 15° each. Greys,
+    near-blacks and near-whites are left out.
+  - The band covering the most area is the **tint**.
+  - The **accent** is the most vivid band at least 45° from the tint, provided
+    it carries at least an eighth of the tint's weight; otherwise the accent is
+    the tint's own colour. A band's colour is weighted towards its vivid,
+    bright pixels.
+  - `accent_pair` then darkens the accent until white text on it has at least
+    3:1 contrast (WCAG), and lightens it until it stands out 3:1 against the
+    dark theme's surfaces.
+  - The neutral surfaces are mixed 4–13% towards the tint in the light theme,
+    and twice that in the dark theme.
+  - A wallpaper with no colour in it gives a neutral grey accent and no tint.
+- **Light or dark on the wallpaper:** `wallpaper::is_dark` averages the
+  luminance of the upper two thirds of the drawn wallpaper.
 - **Settings file.** The choices are saved as lines in your settings file:
 
   ```
-  wall=lagoon                 # or colour:#2b2a48, gradient:#a,#b, picture:/home/Pictures/x.png
+  wall=photo:summit           # or a scene (lagoon), colour:#2b2a48, gradient:#a,#b, picture:/home/Pictures/x.png
   wallfit=Fill
   lockwall=aurora             # or "same"
   timeofday=1

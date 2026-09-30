@@ -80,6 +80,13 @@ impl Mobile {
 
         let pr = r.scale(ui.s);
         let wall = wallpaper::cached(&sys.fs, &sys.look.wall, sys.look.fit, &t, sys.scene_time(), pr.w, pr.h, true);
+        // the home screen goes light or dark to suit the wallpaper
+        let saved = ui.t;
+        let dark = wallpaper::is_dark(wall);
+        if dark != t.dark {
+            ui.t = sys.theme_for(dark);
+        }
+        let t = ui.t;
         // the phone's screen may sit anywhere: copy row by row into it
         for y in 0..pr.h.min(wall.h) {
             let (a, b) = (((pr.y + y) * ui.c.w + pr.x) as usize, (y * wall.w) as usize);
@@ -148,6 +155,7 @@ impl Mobile {
             }
             ui.zone(b, a);
         }
+        ui.t = saved;
         ui.set_clip(old);
     }
 }

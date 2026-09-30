@@ -290,10 +290,7 @@ impl Shell {
     }
 
     fn theme(&self) -> Theme {
-        match (self.sys.look.accent, self.sys.accent_rgb) {
-            (crate::personal::Accent::FromWall, Some(a)) => crate::theme::theme_with(self.sys.dark, a),
-            _ => theme(self.sys.dark, self.sys.accent),
-        }
+        self.sys.theme_for(self.sys.dark)
     }
 
     // ---- window management ------------------------------------------------
@@ -1410,7 +1407,7 @@ impl Shell {
         ui.text_in(Rect::new(bar.r() + 8, r.y, 50, h), Face::Semibold, 13, &label, t.text, 1);
     }
 
-    /// The accent taken from the desktop wallpaper, when that's the choice:
+    /// The theme's colours taken from the desktop wallpaper, when that's the choice:
     /// from a small daytime rendering, so it's the same in light and dark.
     fn wall_accent(&mut self) {
         let look = &self.sys.look;
@@ -1419,7 +1416,7 @@ impl Shell {
         }
         let small = wallpaper::thumbnail(&self.sys.fs, &look.wall, look.fit, &theme(false, 0), None, 160, 100);
         self.accent_src = Some(look.wall.clone());
-        self.sys.accent_rgb = Some(crate::personal::accent_pair(crate::personal::dominant(&small.px)));
+        self.sys.palette = Some(crate::personal::palette(&small.px));
         self.dirty = true;
     }
 

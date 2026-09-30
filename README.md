@@ -147,7 +147,9 @@ Windows, macOS or Linux.
   Messages, Mail, Browser, Music, plus Phone and Camera on mobile.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
-- **Wallpaper and personalisation:** seven scenes drawn at your screen's own size
+- **Wallpaper and personalisation:** ten photographs, and a theme that matches
+  the wallpaper: its accent, with windows and the dock tinted towards its main
+  colour. There are also seven scenes drawn at your screen's own size
   (Dune, Lagoon, Aurora, Hills, Mesa, Bloom, Harmattan) whose skies can follow the
   time of day, plus solid colours, gradients and your own pictures (fill, fit,
   stretch, centre, tile). The lock screen can have its own wallpaper. There are

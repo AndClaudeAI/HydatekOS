@@ -16,7 +16,7 @@
 //! Drawn wallpapers are kept (`cached`), so a frame only copies them.
 
 use crate::gfx::{lerp, sin_q14, Canvas, Color, Rect};
-use crate::personal::{self, mix, Fit, Scene, Wall};
+use crate::personal::{self, mix, Fit, Photo, Scene, Wall};
 use crate::theme::Theme;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -362,9 +362,17 @@ pub fn paint(c: &mut Canvas, r: Rect, w: &Wall, fit: Fit, t: &Theme, minutes: Op
                 }
             }
         }
-        Wall::Picture(_) => match picture {
+        Wall::Picture(_) | Wall::Photo(_) => match picture {
             Some((px, pw, ph)) => {
-                let img = personal::compose(px, pw, ph, r.w as usize, r.h as usize, fit);
+                // photographs always fill, around their own focus
+                let img = match w {
+                    // (off-centre only on a tall screen, which sees a narrow slice)
+                    Wall::Photo(ph_) => {
+                        let focus = if tall || r.h > r.w { ph_.focus() } else { 500 };
+                        personal::compose_at(px, pw, ph, r.w as usize, r.h as usize, Fit::Fill, focus)
+                    }
+                    _ => personal::compose(px, pw, ph, r.w as usize, r.h as usize, fit),
+                };
                 for y in 0..r.h {
                     let row = &img[(y * r.w) as usize..((y + 1) * r.w) as usize];
                     let at = ((r.y + y) * c.w + r.x) as usize;
@@ -409,11 +417,41 @@ fn cache() -> &'static mut Cache {
     unsafe { (*CACHE.0.get()).get_or_insert_with(|| Cache { entries: Vec::new(), pictures: Vec::new() }) }
 }
 
+/// The photographs that come with HydatekOS.
+fn photo_bytes(p: Photo) -> &'static [u8] {
+    match p {
+        Photo::Summit => include_bytes!("../../assets/wallpapers/summit.jpg"),
+        Photo::Peak => include_bytes!("../../assets/wallpapers/peak.jpg"),
+        Photo::Wave => include_bytes!("../../assets/wallpapers/wave.jpg"),
+        Photo::Jetty => include_bytes!("../../assets/wallpapers/jetty.jpg"),
+        Photo::Dew => include_bytes!("../../assets/wallpapers/dew.jpg"),
+        Photo::Skyline => include_bytes!("../../assets/wallpapers/skyline.jpg"),
+        Photo::Shade => include_bytes!("../../assets/wallpapers/shade.jpg"),
+        Photo::Shore => include_bytes!("../../assets/wallpapers/shore.jpg"),
+        Photo::GoldVein => include_bytes!("../../assets/wallpapers/goldvein.jpg"),
+        Photo::Valley => include_bytes!("../../assets/wallpapers/valley.jpg"),
+    }
+}
+
+/// The pixels behind a picture or photograph wallpaper, decoded and kept.
+pub fn source(fs: &crate::fs::Vfs, wall: &Wall) -> Option<(&'static [u32], usize, usize)> {
+    match wall {
+        Wall::Picture(p) => picture(fs, p),
+        Wall::Photo(p) => decoded(&alloc::format!("photo:{}", p.id()), || Some(photo_bytes(*p).to_vec())),
+        _ => None,
+    }
+}
+
 /// A picture file, decoded (kept; the largest side at most 3840).
 pub fn picture(fs: &crate::fs::Vfs, path: &str) -> Option<(&'static [u32], usize, usize)> {
+    decoded(path, || fs.read(path))
+}
+
+fn decoded(key: &str, load: impl FnOnce() -> Option<Vec<u8>>) -> Option<(&'static [u32], usize, usize)> {
+    let path = key;
     let c = cache();
     if !c.pictures.iter().any(|p| p.0 == path) {
-        let data = fs.read(path)?;
+        let data = load()?;
         let img = crate::image::decode(&data).ok()?;
         let (mut w, mut h, mut px) = (img.w as usize, img.h as usize, img.px);
         if w.max(h) > 3840 {
@@ -442,10 +480,7 @@ pub fn cached(fs: &crate::fs::Vfs, wall: &Wall, fit: Fit, t: &Theme, minutes: Op
     if let Some(i) = c.entries.iter().position(|e| e.0 == key) {
         return &c.entries[i].1;
     }
-    let pic = match wall {
-        Wall::Picture(p) => picture(fs, p).map(|(px, pw, ph)| (px.to_vec(), pw, ph)),
-        _ => None,
-    };
+    let pic = source(fs, wall).map(|(px, pw, ph)| (px.to_vec(), pw, ph));
     let mut canvas = Canvas::new(w, h);
     let b = canvas.bounds();
     paint(&mut canvas, b, wall, fit, t, minutes, tall, pic.as_ref().map(|p| (&p.0[..], p.1, p.2)));
@@ -458,11 +493,29 @@ pub fn cached(fs: &crate::fs::Vfs, wall: &Wall, fit: Fit, t: &Theme, minutes: Op
     &c.entries.last().unwrap().1
 }
 
+/// Is a drawn wallpaper dark where things sit on it (its upper two
+/// thirds)? Then what's drawn straight on it wants light ink.
+pub fn is_dark(c: &Canvas) -> bool {
+    let (w, h) = (c.w.max(1) as usize, (c.h as usize * 2 / 3).max(1));
+    let (mut sum, mut n) = (0i64, 0i64);
+    for y in (0..h).step_by((h / 48).max(1)) {
+        for x in (0..w).step_by((w / 64).max(1)) {
+            if let Some(p) = c.px.get(y * w + x) {
+                sum += personal::luminance(*p & 0xFF_FFFF) as i64;
+                n += 1;
+            }
+        }
+    }
+    // mid-grey is about 250 on this scale
+    n > 0 && sum / n < 280
+}
+
 /// A small drawing of a wallpaper for Settings.
 pub fn thumbnail(fs: &crate::fs::Vfs, wall: &Wall, fit: Fit, t: &Theme, minutes: Option<u32>, w: i32, h: i32) -> Canvas {
     let mut c = Canvas::new(w, h);
     let b = c.bounds();
     let pic = match wall {
+        Wall::Photo(_) => source(fs, wall).map(|(px, pw, ph)| (px.to_vec(), pw, ph)),
         Wall::Picture(p) => picture(fs, p).map(|(px, pw, ph)| {
             // centred and tiled pictures keep their size on screen, so a
             // preview shrinks them as much as it shrinks the screen

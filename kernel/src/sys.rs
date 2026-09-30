@@ -69,7 +69,7 @@ pub struct Sys {
     /// wallpaper, lock screen, theme mode, accent source, widgets (personal.rs)
     pub look: crate::personal::Look,
     /// the accent taken from the wallpaper (for light, for dark), once drawn
-    pub accent_rgb: Option<(u32, u32)>,
+    pub palette: Option<crate::personal::Palette>,
     pub wifi: bool,
     pub bt: bool,
     pub focus: bool,
@@ -233,7 +233,7 @@ impl Sys {
             dark: false,
             accent: 0,
             look: Default::default(),
-            accent_rgb: None,
+            palette: None,
             wifi: true,
             bt: true,
             focus: false,
@@ -1055,6 +1055,15 @@ impl Sys {
     }
 
     /// Minutes since midnight.
+    /// The theme, light or dark, with the chosen accent (or matched to the
+    /// wallpaper, once its palette is known).
+    pub fn theme_for(&self, dark: bool) -> crate::theme::Theme {
+        match (self.look.accent, self.palette) {
+            (crate::personal::Accent::FromWall, Some(p)) => crate::theme::theme_matched(dark, &p),
+            _ => crate::theme::theme(dark, self.accent),
+        }
+    }
+
     pub fn minutes(&self) -> u32 {
         self.now.hour as u32 * 60 + self.now.minute as u32
     }

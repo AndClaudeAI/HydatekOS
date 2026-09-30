@@ -353,7 +353,7 @@ impl Settings {
 
     /// Settings › Personalisation: wallpaper, colours, the desktop.
     fn render_personal(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
-        use crate::personal::{Accent, Fit, Mode, Scene, Wall, GRADIENTS, SOLIDS};
+        use crate::personal::{Accent, Fit, Mode, Photo, Scene, Wall, GRADIENTS, SOLIDS};
         let t = ui.t;
         let sw_x = m.r() - 54;
         // tabs
@@ -417,17 +417,17 @@ impl Settings {
                 }
                 y += 36;
                 let target = if self.apply == 2 { look.lock.clone().unwrap_or(look.wall.clone()) } else { look.wall.clone() };
-                // scenes, then your pictures
-                let (cols, gap) = (4, 8);
+                // photographs, scenes, then your pictures
+                let (cols, gap) = (6, 8);
                 let cw = (m.w - gap * (cols - 1)) / cols;
                 let ch = cw * 10 / 16;
-                for (i, sc) in Scene::ALL.iter().enumerate() {
+                let tiles = Photo::ALL.iter().enumerate().map(|(i, p)| (Wall::Photo(*p), C_PHOTO + i as u32)).chain(Scene::ALL.iter().enumerate().map(|(i, sc)| (Wall::Scene(*sc), C_SCENE + i as u32)));
+                for (i, (w, code)) in tiles.enumerate() {
                     let r = Rect::new(m.x + (i as i32 % cols) * (cw + gap), y + (i as i32 / cols) * (ch + 22), cw, ch);
-                    let w = Wall::Scene(*sc);
-                    self.draw_thumb(ui, sys, &w, Fit::Fill, r, target == w, Action::App(inst, C_SCENE + i as u32));
-                    ui.text(r.x, r.b() + 14, Face::Regular, 11, sc.name(), t.text2);
+                    self.draw_thumb(ui, sys, &w, Fit::Fill, r, target == w, Action::App(inst, code));
+                    ui.text(r.x, r.b() + 14, Face::Regular, 11, &w.name(), t.text2);
                 }
-                let i = Scene::ALL.len() as i32;
+                let i = (Photo::ALL.len() + Scene::ALL.len()) as i32;
                 let r = Rect::new(m.x + (i % cols) * (cw + gap), y + (i / cols) * (ch + 22), cw, ch);
                 let a = Action::App(inst, C_PICS);
                 ui.rrect(r, 8, if ui.hot(a) { t.hover } else { t.chip });
@@ -439,7 +439,7 @@ impl Settings {
                     ui.zone(r, a);
                 }
                 ui.text(r.x, r.b() + 14, Face::Regular, 11, "Your pictures", t.text2);
-                y += 2 * (ch + 22) + 6;
+                y += ((Photo::ALL.len() + Scene::ALL.len()) as i32 / cols + 1) * (ch + 22) + 6;
                 // colours and gradients
                 let d = 26;
                 let mut x = m.x;
@@ -487,7 +487,8 @@ impl Settings {
                 let top = top + 130;
                 card(ui, Rect::new(m.x, top, m.w, 150));
                 let inner = Rect::new(m.x + 16, top, m.w - 32, 150);
-                row(ui, inner, top + 6, "Accent colour", "Highlights, folders and buttons");
+                let sub = if look.accent == Accent::FromWall { "Matched to the wallpaper, surfaces too" } else { "Highlights, folders and buttons" };
+                row(ui, inner, top + 6, "Accent colour", sub);
                 let step = ((m.w - 32) / 5).min(84);
                 for (i, (name, l, d)) in ACCENTS.iter().enumerate() {
                     let cx = m.x + 16 + i as i32 * step;
@@ -503,7 +504,7 @@ impl Settings {
                 // the wallpaper's own colour
                 let cx = m.x + 16 + 4 * step;
                 let a = Action::App(inst, C_ACC_WALL);
-                let from = sys.accent_rgb.map(|p| if sys.dark { p.1 } else { p.0 });
+                let from = sys.palette.map(|p| if sys.dark { p.accent.1 } else { p.accent.0 });
                 if look.accent == Accent::FromWall {
                     ui.circle(cx + 14, top + 82, 17, t.text);
                     ui.circle(cx + 14, top + 82, 15, t.surface);
@@ -1081,6 +1082,7 @@ const C_MODE: u32 = 1580;
 const C_ACC_WALL: u32 = 1590;
 const C_WIDGETS: u32 = 1591;
 const C_PIC: u32 = 1600;
+const C_PHOTO: u32 = 1620;
 const C_PICK: u32 = 1000;
 /// + model index
 const C_MODEL: u32 = 1400;
@@ -1534,6 +1536,15 @@ impl App for Settings {
             c if (C_SCENE..C_SCENE + 7).contains(&c) => {
                 let sc = crate::personal::Scene::ALL[(c - C_SCENE) as usize];
                 self.set_wall(sys, crate::personal::Wall::Scene(sc));
+                return;
+            }
+            c if (C_PHOTO..C_PHOTO + crate::personal::Photo::ALL.len() as u32).contains(&c) => {
+                let p = crate::personal::Photo::ALL[(c - C_PHOTO) as usize];
+                self.set_wall(sys, crate::personal::Wall::Photo(p));
+                // a photograph brings its colours: the theme matches it
+                if self.apply != 2 {
+                    sys.look.accent = crate::personal::Accent::FromWall;
+                }
                 return;
             }
             c if (C_SOLID..C_SOLID + 6).contains(&c) => {
