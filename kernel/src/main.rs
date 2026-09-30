@@ -442,6 +442,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         if xhcis.iter().any(|x| x.at == p.at) {
             p.driver = "HydatekOS xHCI";
         }
+        if net.as_ref().and_then(|n| n.nic_at()) == Some(p.at) {
+            p.driver = "HydatekOS Intel Ethernet";
+        }
         if audio.as_ref().map_or(false, |a| a.at == p.at) {
             p.driver = "HydatekOS HD Audio";
         }
@@ -471,8 +474,9 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     loop {
         // Wake on the 10 ms tick, or as soon as a network packet arrives.
         let mut idx = 0usize;
-        let waits = [timer, net.as_ref().map(|n| n.wait_event()).unwrap_or(timer)];
-        (efi::bs().wait_for_event)(if net.is_some() { 2 } else { 1 }, waits.as_ptr(), &mut idx);
+        let packet = net.as_ref().and_then(|n| n.wait_event());
+        let waits = [timer, packet.unwrap_or(timer)];
+        (efi::bs().wait_for_event)(if packet.is_some() { 2 } else { 1 }, waits.as_ptr(), &mut idx);
         // installing HydatekOS on a disk, when Settings asks
         if let Some((i, bring)) = sh.sys.install_request.take() {
             let st = match sh.sys.install_targets.get(i).cloned() {

@@ -25,7 +25,8 @@
 - ✅ Phone Link over the network: encrypted Hydatek Link Protocol, QR pairing,
   browser companion, HydatekOS Link for Android
 - ✅ DNS resolver; TLS 1.3 / 1.2 with certificate checks
-- Native virtio-net, Intel e1000/i219 and Realtek RTL8111 drivers; IPv6
+- ✅ Native Intel e1000 / e1000e / chipset LAN (82577 to I219) driver
+- Native virtio-net and Realtek RTL8111 drivers; IPv6
 - Wi-Fi (Intel iwlwifi-class hardware) with WPA2/WPA3
 - ✅ Browser: HTML/CSS subset renderer, Hyda Search
 - ✅ Browser pictures

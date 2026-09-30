@@ -108,7 +108,8 @@ Windows, macOS or Linux.
   dock) with full-screen apps and a home indicator. It's used automatically on portrait
   screens and can be switched on from **View › Mobile Shell** or Settings.
 - **Networking:** HydatekOS's own TCP/IP stack (ARP, IPv4, ICMP, UDP, DHCP, TCP,
-  mDNS) over the firmware's Ethernet driver. See Settings › Network.
+  mDNS) over HydatekOS's own Intel Ethernet driver (e1000, e1000e, chipset LAN
+  up to the I219) or the firmware's driver for other cards. See Settings › Network.
 - **Phone Link with real phones** (like Windows "Link to Windows"). Scan a QR code
   to pair. Any phone's browser can exchange photos, files and text with the PC.
   The **HydatekOS Link Android app** adds texts (read and reply), notifications,
@@ -162,7 +163,8 @@ Windows, macOS or Linux.
 An operating system is a long project. Here's what's still missing; the plan is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- **Wired Ethernet only, through the firmware's driver.** There are no Wi-Fi or
+- **Wired Ethernet only.** Intel chips have HydatekOS's own driver; others go
+  through the firmware's. There are no Wi-Fi or
   Bluetooth drivers yet. The browser runs no JavaScript, doesn't float or
   position boxes and can't show AVIF pictures, so many of today's sites look
   simpler than in other browsers. Mail

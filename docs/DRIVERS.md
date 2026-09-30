@@ -112,12 +112,17 @@ The serial log says what happened. In QEMU's ARM machine that's
 | NVMe, SATA | `nvme.rs`, `ahci.rs`, `storage.rs`, `disks.rs` | Identify, read, write; GPT/MBR; FAT, exFAT, NTFS, ext2-4, Btrfs, APFS, HFS+, ISO 9660. Writes only to disks carrying a test marker | Host tests on an mformat/mkfs disk; QEMU NVMe and AHCI, a sector written and read back |
 | Audio | `hda.rs`, `sound.rs` | Intel HD Audio: codecs, output paths, a 48 kHz stream; synthesised system sounds; the volume keys work | QEMU recorded to WAV: the startup chord's notes, the notification, the volume tick |
 | Bluetooth | `bt.rs`, `usb.rs` | USB adapters: HCI bring-up, classic inquiry and LE scanning, names, kinds, makers, signal | Host tests (QEMU 8.2 has no Bluetooth device) |
+| Intel Ethernet | `net/e1000.rs`, `net/mod.rs` | Gigabit Ethernet on the 8254x ("e1000"), 82571–82574/82583 and the LAN in Intel chipsets since 2009: 82577LM/LC, 82578, 82579, I217, I218, I219 (the 82577LM is the one in an HP EliteBook 8440w). Takes the card from the firmware, legacy descriptors, 32-entry rings, polled. Chipset LAN is never reset, because the Management Engine (vPro) shares its PHY. Other cards still go through the firmware's driver | QEMU `e1000` (82540EM) and `e1000e` (82574L): link, DHCP, and 40 Phone Link page loads in a row. Not yet tried on a real chipset LAN |
 | Wi-Fi | `wifi.rs`, `uefiwifi.rs` | Beacons (security, Wi-Fi 4-7, bands), WPA2: PBKDF2, PTK, the 4-way handshake, group key unwrap, CCMP. Scanning through the firmware's Wi-Fi driver where there is one | IEEE 802.11 Annex J vectors; the handshake frame for frame against an independent Python authenticator. No Wi-Fi hardware to try |
 
 What's still missing:
 - Wi-Fi chip drivers (Intel, Qualcomm, MediaTek, Realtek), and joining
-  networks through the firmware.
+  networks through the firmware. Intel's Wi-Fi chips run on a firmware file
+  that the driver loads into them, and QEMU has no Wi-Fi card to test with.
 - Bluetooth pairing and profiles.
 - Qualcomm's I2C (GENI) and SPMI haptics.
-- GPU engines.
+- GPU engines (Intel, AMD, NVIDIA). NVIDIA publishes no programming manual
+  for its older GPUs such as the Quadro FX 880M, so a driver means
+  reverse-engineering on the scale of Linux's nouveau.
+- Realtek and Broadcom Ethernet chips (these use the firmware's driver).
 - An AML interpreter for Load/LoadTable (tables loaded at run time).

@@ -135,11 +135,12 @@ partitions.
 | Keyboard | USB and PS/2, through the firmware |
 | Mouse / touchpad | USB through the firmware, or the HydatekOS PS/2 mouse driver (with wheel). On ARM64, only if the firmware has a pointer driver |
 | Storage | The boot disk's FAT partition |
-| Ethernet | Through the firmware's network driver; DHCP, then Phone Link on port 7743 |
+| Ethernet | Intel gigabit (e1000, e1000e, chipset LAN such as the 82577LM, 82579, I217–I219) by HydatekOS's own driver; other cards through the firmware's network driver. DHCP, then Phone Link on port 7743 |
 | Wi-Fi, Bluetooth, audio, camera | Not yet (see ROADMAP.md) |
 
-**Networking:** plug in an Ethernet cable before booting. Many PCs only load
-their network driver when **Network Stack**, **PXE** or **UEFI network** is
+**Networking:** plug in an Ethernet cable before booting. With an Intel
+network chip HydatekOS uses its own driver and needs nothing from the
+firmware. Otherwise, note that many PCs only load their network driver when **Network Stack**, **PXE** or **UEFI network** is
 enabled in the firmware settings. Settings › Network shows the adapter and IP
 address. Phone Link needs the phone on the same network (e.g. the router's
 Wi-Fi) and TCP port 7743 reachable.

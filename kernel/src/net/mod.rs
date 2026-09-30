@@ -3,12 +3,66 @@
 
 pub mod mdns;
 pub mod snp;
+pub mod e1000;
 pub mod tcp;
 
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use snp::FirmwareNic;
+
+/// The network card: one HydatekOS drives itself, or the firmware's.
+pub enum Nic {
+    Intel(e1000::E1000),
+    Firmware(FirmwareNic),
+}
+
+impl Nic {
+    /// HydatekOS's own driver for the cards it knows, else the firmware's.
+    fn open() -> Option<Nic> {
+        if let Some(n) = e1000::E1000::find() {
+            return Some(Nic::Intel(n));
+        }
+        FirmwareNic::open().map(Nic::Firmware)
+    }
+    fn mac(&self) -> Mac {
+        match self {
+            Nic::Intel(n) => n.mac,
+            Nic::Firmware(n) => n.mac,
+        }
+    }
+    fn name(&self) -> String {
+        match self {
+            Nic::Intel(n) => n.name.clone(),
+            Nic::Firmware(n) => n.name.clone(),
+        }
+    }
+    fn send(&mut self, f: &[u8]) -> bool {
+        match self {
+            Nic::Intel(n) => n.send(f),
+            Nic::Firmware(n) => n.send(f),
+        }
+    }
+    fn recv(&mut self, b: &mut [u8]) -> Option<usize> {
+        match self {
+            Nic::Intel(n) => n.recv(b),
+            Nic::Firmware(n) => n.recv(b),
+        }
+    }
+    fn link_up(&self) -> bool {
+        match self {
+            Nic::Intel(n) => n.link_up(),
+            Nic::Firmware(n) => n.link_up(),
+        }
+    }
+    /// Where the card is on PCI, when HydatekOS drives it.
+    fn at(&self) -> Option<(u8, u8, u8)> {
+        match self {
+            Nic::Intel(n) => Some(n.at),
+            Nic::Firmware(_) => None,
+        }
+    }
+}
 use tcp::Tcp;
 
 pub type Ip = [u8; 4];
@@ -73,7 +127,7 @@ struct Dhcp {
 }
 
 pub struct Net {
-    nic: FirmwareNic,
+    nic: Nic,
     pub mac: Mac,
     pub ip: Ip,
     pub mask: Ip,
@@ -101,10 +155,10 @@ pub const UDP_CLIENT_PORTS: core::ops::Range<u16> = 40000..41000;
 
 impl Net {
     pub fn up() -> Option<Net> {
-        let nic = FirmwareNic::open()?;
-        let mac = nic.mac;
+        let nic = Nic::open()?;
+        let mac = nic.mac();
         let hostname = alloc::format!("hydatek-{:02x}{:02x}", mac[4], mac[5]);
-        let if_name = nic.name.clone();
+        let if_name = nic.name();
         let mut xid = [0u8; 4];
         crate::rng::fill(&mut xid);
         Some(Net {
@@ -131,9 +185,18 @@ impl Net {
         })
     }
 
-    /// Firmware event signalled when a packet is waiting.
-    pub fn wait_event(&self) -> crate::efi::Event {
-        self.nic.wait_event()
+    /// Firmware event signalled when a packet is waiting (none for cards
+    /// HydatekOS drives: they're polled on every tick).
+    pub fn wait_event(&self) -> Option<crate::efi::Event> {
+        match &self.nic {
+            Nic::Firmware(n) => Some(n.wait_event()),
+            Nic::Intel(_) => None,
+        }
+    }
+
+    /// The network card's place on PCI, when HydatekOS drives it.
+    pub fn nic_at(&self) -> Option<(u8, u8, u8)> {
+        self.nic.at()
     }
 
     pub fn configured(&self) -> bool {
