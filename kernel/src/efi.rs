@@ -129,9 +129,9 @@ pub struct RuntimeServices {
     pub set_wakeup_time: Fp,
     pub set_virtual_address_map: Fp,
     pub convert_pointer: Fp,
-    pub get_variable: Fp,
+    pub get_variable: extern "efiapi" fn(*const u16, *const Guid, *mut u32, *mut usize, *mut c_void) -> Status,
     pub get_next_variable_name: Fp,
-    pub set_variable: Fp,
+    pub set_variable: extern "efiapi" fn(*const u16, *const Guid, u32, usize, *const c_void) -> Status,
     pub get_next_high_monotonic_count: Fp,
     pub reset_system: extern "efiapi" fn(u32, Status, usize, *const c_void) -> !,
 }
@@ -498,3 +498,35 @@ pub fn connect_all() {
     }
     (bs().free_pool)(buf as *mut u8);
 }
+
+/// The firmware's own variables (BootOrder, Boot0001…).
+pub const GLOBAL_VARIABLE: Guid = Guid(0x8be4df61, 0x93ca, 0x11d2, [0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c]);
+
+fn utf16z(name: &str) -> alloc::vec::Vec<u16> {
+    name.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// A firmware variable's contents, if it has one.
+pub fn get_var(name: &str, guid: &Guid) -> Option<alloc::vec::Vec<u8>> {
+    let n = utf16z(name);
+    let mut attrs = 0u32;
+    let mut size = 0usize;
+    let s = (rt().get_variable)(n.as_ptr(), guid, &mut attrs, &mut size, null_mut());
+    if s != BUFFER_TOO_SMALL || size == 0 {
+        return None;
+    }
+    let mut buf = alloc::vec![0u8; size];
+    if (rt().get_variable)(n.as_ptr(), guid, &mut attrs, &mut size, buf.as_mut_ptr() as *mut c_void) != SUCCESS {
+        return None;
+    }
+    buf.truncate(size);
+    Some(buf)
+}
+
+/// Keep a variable in the firmware's memory, across restarts (non-volatile,
+/// seen by the firmware and by systems it starts).
+pub fn set_var(name: &str, guid: &Guid, data: &[u8]) -> bool {
+    let n = utf16z(name);
+    (rt().set_variable)(n.as_ptr(), guid, 7, data.len(), data.as_ptr() as *const c_void) == SUCCESS
+}
+

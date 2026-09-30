@@ -154,6 +154,11 @@ pub struct Sys {
     pub sounds: Vec<crate::sound::Sound>,
     /// disks HydatekOS drives (NVMe, SATA)
     pub disks: Vec<crate::storage::DiskInfo>,
+    /// the disks HydatekOS could be installed on, how an install is going,
+    /// and one asked for from Settings (which disk, bring my files)
+    pub install_targets: Vec<crate::install::Candidate>,
+    pub install_state: crate::install::State,
+    pub install_request: Option<(usize, bool)>,
     /// the battery: percent, charging (None: no battery, a desktop)
     pub battery: Option<(u32, bool)>,
     /// ambient light (lux) from a light sensor, and whether brightness follows it
@@ -290,6 +295,9 @@ impl Sys {
             audio: None,
             sounds: Vec::new(),
             disks: Vec::new(),
+            install_targets: Vec::new(),
+            install_state: crate::install::State::Idle,
+            install_request: None,
             battery: None,
             lux: None,
             auto_brightness: true,

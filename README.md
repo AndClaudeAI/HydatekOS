@@ -222,8 +222,10 @@ tools/mkimage.sh        # -> build/hydatekos.img
 ```
 
 Then write `build/hydatekos.img` to a USB stick with balenaEtcher, Rufus (DD mode) or
-`dd`, and boot from it. Your files are saved on the stick. The install guide also
-covers putting HydatekOS on the internal disk next to another OS.
+`dd`, and boot from it. Your files are saved on the stick. To put HydatekOS on the
+computer's own **empty** disk, open **Settings › Install**. It copies HydatekOS and your
+files across, checks everything, and adds HydatekOS to the computer's start-up menu.
+The install guide also covers putting HydatekOS next to another OS by hand.
 
 ## Using HydatekOS
 

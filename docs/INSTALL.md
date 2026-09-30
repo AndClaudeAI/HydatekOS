@@ -43,11 +43,58 @@ tools/mkimage.sh                   # -> build/hydatekos.img (128 MB, GPT + EFI S
 HydatekOS boots into the desktop. Files, notes, settings and calendar events are saved in
 `\HYDATEK\` on the stick, so it works as a portable install you can carry between PCs.
 
-## 4. Optional: install to the internal disk
+## 4. Install on the computer's own disk
 
-Milestone 1 doesn't have its own installer yet (that's milestone 5). You can still put
-HydatekOS on the internal disk next to Windows or Linux by hand. Every UEFI PC already
-has an EFI System Partition (ESP):
+HydatekOS has its own installer. It puts HydatekOS on an **empty** disk inside the
+computer, so it starts without the USB stick.
+
+1. Start HydatekOS from the USB stick (steps 1–3), and go through the setup assistant.
+2. Open **Settings › Install**. It lists the computer's NVMe and SATA disks:
+
+   ![The disks](screenshots/install-disks.png)
+
+3. Pick the empty disk. Leave **Bring my accounts, files and settings** on to take
+   everything on the stick along, or turn it off to start fresh. Save any open work
+   first: files are copied as they are on the stick.
+4. Click **Install…**, check the disk, and click **Install**.
+
+   ![Confirm](screenshots/install-confirm.png)
+
+5. When it says **HydatekOS is installed**, take out the USB stick and click
+   **Restart now**. The computer starts HydatekOS from its own disk.
+
+   ![Installed](screenshots/install-done.png)
+
+### What the installer does
+
+- **Only empty disks.** A disk with a partition table (MBR or GPT, at either end) or a
+  file system straight on it is listed, with the reason, but can't be picked. The disk
+  is checked again just before the first write. HydatekOS never touches the disk it
+  started from.
+- **The layout.** One GPT partition, an EFI System Partition as big as the disk,
+  formatted FAT32 (up to 2 TiB with 512-byte sectors, 16 TiB with 4 KiB ones). It
+  holds `\EFI\BOOT\BOOTX64.EFI` and `BOOTAA64.EFI`, and `\HYDATEK\` for your
+  files. Disks with 4 KiB sectors ("4K native", as many NVMe drives are) are laid out
+  in 4 KiB sectors.
+- **Safely.** The file system goes on first and the partition table last, so an
+  install that's interrupted leaves a disk that still reads as empty, and it can
+  simply be run again. Everything written is read back and compared before it says
+  it's done.
+- **The start-up menu.** It adds a "HydatekOS" entry to the firmware's start-up list
+  (a `Boot####` variable) and puts it first. The entry names the partition by its
+  unique ID, so it works wherever the disk is connected. If the firmware won't take
+  the entry, the installer says so: most firmware starts `\EFI\BOOT\` from a disk
+  anyway, or you pick the disk in the boot menu.
+
+Tested in QEMU on an empty 512-byte NVMe disk, a 4 KiB-sector NVMe disk and a SATA
+disk. Each started HydatekOS by itself afterwards, with the stick removed. A disk
+with a partition was refused and left unchanged. The layout is host-tested against
+`sgdisk`, `fsck.fat` and mtools (`tests-host/src/mkdisk_tests.rs`).
+
+### Next to Windows or Linux (by hand)
+
+The installer only uses empty disks. To add HydatekOS to a disk that already has
+Windows or Linux, copy it onto the existing EFI System Partition by hand:
 
 1. Copy `kernel/target/x86_64-unknown-uefi/release/hydatek.efi` to the ESP as
    `\EFI\HydatekOS\hydatek.efi`.

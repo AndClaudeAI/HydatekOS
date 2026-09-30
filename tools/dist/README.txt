@@ -49,6 +49,19 @@ USING IT
 - Something went wrong? hydatekos-log.txt in this folder says what
   HydatekOS was doing. Send it along with a description.
 
+PUT IT ON A REAL COMPUTER
+-------------------------
+1. Write hydatekos.img (from a fresh copy of this zip) to a USB stick of
+   1 GB or more with balenaEtcher (https://etcher.balena.io). This erases
+   the stick.
+2. Plug it in, start the computer and tap its boot-menu key (often F12),
+   then choose the stick. If it won't start, turn off Secure Boot in the
+   computer's settings (often F2 or Del at power-on).
+3. To install on the computer's own EMPTY disk: Settings > Install, pick
+   the disk, Install. Then take out the stick and restart.
+   HydatekOS only installs on an empty disk; it never changes a disk
+   with anything on it.
+
 SHARPER PICTURE
 ---------------
 HydatekOS starts at 1280 x 800. For a bigger, sharper screen:

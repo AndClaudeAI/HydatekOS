@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub const SECTIONS: [&str; 14] = ["Profile", "Accounts", "Personalisation", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About"];
+pub const SECTIONS: [&str; 15] = ["Profile", "Accounts", "Personalisation", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About", "Install"];
 
 const C_SECTION: u32 = 100;
 const C_DARK: u32 = 1;
@@ -72,6 +72,10 @@ pub struct Settings {
     /// wallpaper choice applies to (both, desktop, lock screen), drawn
     /// thumbnails (what, dark, drawing), and pictures found (path, thumbnail)
     ptab: u8,
+    /// Install: the disk picked, bring my files, and asked to confirm
+    inst_sel: Option<usize>,
+    inst_bring: bool,
+    inst_confirm: bool,
     apply: u8,
     thumbs: Vec<(String, bool, Canvas)>,
     pics: Option<Vec<(String, Canvas)>>,
@@ -161,7 +165,7 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0, ptab: 0, apply: 0, thumbs: Vec::new(), pics: None }
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0, ptab: 0, inst_sel: None, inst_bring: true, inst_confirm: false, apply: 0, thumbs: Vec::new(), pics: None }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
@@ -352,6 +356,124 @@ impl Settings {
     }
 
     /// Settings › Personalisation: wallpaper, colours, the desktop.
+    /// Settings › Install: HydatekOS onto an empty disk in this computer.
+    fn render_install(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
+        use crate::install::State;
+        let t = ui.t;
+        let wrap = |ui: &mut Ui, x: i32, y: i32, w: i32, text: &str, col: Color| -> i32 {
+            let mut y = y;
+            for line in ui.wrap(Face::Regular, 13, text, w) {
+                ui.text(x, y, Face::Regular, 13, &line, col);
+                y += 19;
+            }
+            y
+        };
+        match &sys.install_state {
+            State::Running { phase, done, total } => {
+                card(ui, Rect::new(m.x, m.y, m.w, 150));
+                ui.text(m.x + 20, m.y + 34, Face::Semibold, 17, "Installing HydatekOS", t.text);
+                let pct = (*done * 100 / (*total).max(1)).min(100) as i32;
+                ui.text(m.x + 20, m.y + 60, Face::Regular, 13, &format!("{} · {}%", phase, pct), t.text2);
+                let bar = Rect::new(m.x + 20, m.y + 80, m.w - 40, 8);
+                ui.rrect(bar, 4, t.chip);
+                ui.rrect(Rect::new(bar.x, bar.y, (bar.w * pct / 100).max(8), bar.h), 4, t.accent);
+                wrap(ui, m.x + 20, m.y + 118, m.w - 40, "Keep the computer on and the USB stick in. This takes a minute or two.", t.text3);
+                return;
+            }
+            State::Done { disk, menu } => {
+                card(ui, Rect::new(m.x, m.y, m.w, if *menu { 190 } else { 230 }));
+                ui.text(m.x + 20, m.y + 34, Face::Semibold, 17, "HydatekOS is installed", t.text);
+                let y = wrap(ui, m.x + 20, m.y + 58, m.w - 40, &format!("It's on {}, with everything checked after writing.", disk), t.text2);
+                let next = if *menu {
+                    "Now take out the USB stick and restart. The computer starts HydatekOS from its own disk."
+                } else {
+                    "Now take out the USB stick and restart. If the computer doesn't start HydatekOS by itself, choose the disk in its boot menu (often F12 at power-on); the firmware didn't let HydatekOS add itself to its start-up list."
+                };
+                let y = wrap(ui, m.x + 20, y + 6, m.w - 40, next, t.text);
+                ui.button(Rect::new(m.x + 20, y + 10, 130, 32), "Restart now", Action::App(inst, C_RESTART), true);
+                return;
+            }
+            State::Failed(e) => {
+                card(ui, Rect::new(m.x, m.y, m.w, 170));
+                ui.text(m.x + 20, m.y + 34, Face::Semibold, 17, "HydatekOS wasn't installed", t.text);
+                let y = wrap(ui, m.x + 20, m.y + 58, m.w - 40, e, t.danger);
+                let y = wrap(ui, m.x + 20, y + 6, m.w - 40, "Nothing else on this computer was changed, and HydatekOS still runs from the USB stick.", t.text2);
+                ui.button(Rect::new(m.x + 20, y + 10, 110, 32), "Try again", Action::App(inst, C_INST_AGAIN), false);
+                return;
+            }
+            State::Idle => {}
+        }
+        let targets = &sys.install_targets;
+        if self.inst_confirm {
+            if let Some(c) = self.inst_sel.and_then(|i| targets.get(i)) {
+                card(ui, Rect::new(m.x, m.y, m.w, 196));
+                ui.text(m.x + 20, m.y + 34, Face::Semibold, 17, "Install HydatekOS on this disk?", t.text);
+                ui.text(m.x + 20, m.y + 60, Face::Medium, 14, &format!("{} · {} · {}", c.name, c.kind, crate::storage::size_text(c.bytes)), t.text);
+                let what = if self.inst_bring { "HydatekOS, your accounts, files and settings go on it, as they are on the stick now: save any open work first." } else { "HydatekOS goes on it, and starts fresh with the setup assistant." };
+                let y = wrap(ui, m.x + 20, m.y + 86, m.w - 40, &format!("The disk is set up for HydatekOS. It's empty, so nothing is lost. {}", what), t.text2);
+                ui.button(Rect::new(m.x + 20, y + 12, 110, 32), "Cancel", Action::App(inst, C_INST_NO), false);
+                ui.button(Rect::new(m.x + 140, y + 12, 110, 32), "Install", Action::App(inst, C_INST_YES), true);
+                return;
+            }
+            self.inst_confirm = false;
+        }
+        // the page: what it does, the disks, the choice
+        let y = wrap(ui, m.x, m.y + 6, m.w, "Put HydatekOS on a disk inside this computer, so it starts without the USB stick. HydatekOS only installs on an empty disk: it never changes a disk with anything on it.", t.text2);
+        let mut y = y + 12;
+        ui.text(m.x, y + 14, Face::Semibold, 14, "Disks", t.text);
+        y += 26;
+        if targets.is_empty() {
+            card(ui, Rect::new(m.x, y, m.w, 84));
+            wrap(ui, m.x + 16, y + 26, m.w - 32, "No disk here can take HydatekOS. It installs on the NVMe and SATA disks inside a computer, when it was started from a USB stick. If HydatekOS already runs from this computer's disk, it's installed.", t.text2);
+            return;
+        }
+        for (i, c) in targets.iter().enumerate() {
+            let r = Rect::new(m.x, y, m.w, 58);
+            let a = Action::App(inst, C_INST_PICK + i as u32);
+            let on = self.inst_sel == Some(i) && c.ready.is_ok();
+            card(ui, r);
+            if on {
+                ui.stroke(r, 14, 2, t.accent);
+            } else if c.ready.is_ok() && ui.hot(a) {
+                ui.rrect(r, 14, t.hover);
+            }
+            // a radio mark
+            let (cx, cy) = (r.x + 24, r.y + 29);
+            ui.circle(cx, cy, 9, if c.ready.is_ok() { t.text3 } else { t.line });
+            ui.circle(cx, cy, 7, t.surface);
+            if on {
+                ui.circle(cx, cy, 5, t.accent);
+            }
+            let name = ui.fit(Face::Medium, 14, &format!("{} · {}", c.name, crate::storage::size_text(c.bytes)), r.w - 60);
+            ui.text(r.x + 44, r.y + 25, Face::Medium, 14, &name, if c.ready.is_ok() { t.text } else { t.text3 });
+            let sub = match &c.ready {
+                Ok(()) => format!("{} · empty, ready for HydatekOS", c.kind),
+                Err(e) => format!("{} · can't use it: {}", c.kind, e),
+            };
+            let sub = ui.fit(Face::Regular, 12, &sub, r.w - 60);
+            ui.text(r.x + 44, r.y + 44, Face::Regular, 12, &sub, t.text2);
+            if c.ready.is_ok() {
+                ui.zone(r, a);
+            }
+            y += 66;
+            if y > m.b() - 120 {
+                break;
+            }
+        }
+        let y = y + 6;
+        row(ui, Rect::new(m.x, y - 8, m.w - 60, 40), y - 8, "Bring my accounts, files and settings", "Everything on the USB stick comes along. Off: start fresh.");
+        ui.switch(m.r() - 54, y, self.inst_bring, Action::App(inst, C_INST_BRING));
+        let can = self.inst_sel.and_then(|i| targets.get(i)).map_or(false, |c| c.ready.is_ok());
+        let b = Rect::new(m.x, y + 50, 140, 34);
+        if can {
+            ui.button(b, "Install…", Action::App(inst, C_INST_GO), true);
+        } else {
+            ui.rrect(b, 17, t.chip.with_alpha(120));
+            ui.text_in(b, Face::Medium, 13, "Install…", t.text3, 1);
+            ui.text(b.r() + 14, b.y + 22, Face::Regular, 12, "Pick an empty disk first", t.text3);
+        }
+    }
+
     fn render_personal(&mut self, ui: &mut Ui, m: Rect, sys: &Sys, inst: u32) {
         use crate::personal::{Accent, Fit, Mode, Photo, Scene, Wall, GRADIENTS, SOLIDS};
         let t = ui.t;
@@ -1099,6 +1221,12 @@ const C_MODEL: u32 = 1400;
 const C_ACC_TYPE: u32 = 1100;
 const C_ACC_REMOVE: u32 = 1200;
 const C_ACC_CONFIRM: u32 = 1300;
+const C_INST_PICK: u32 = 1760;
+const C_INST_BRING: u32 = 1795;
+const C_INST_GO: u32 = 1796;
+const C_INST_YES: u32 = 1797;
+const C_INST_NO: u32 = 1798;
+const C_INST_AGAIN: u32 = 1799;
 const IDLE_STEPS: [u32; 6] = [0, 2, 5, 10, 15, 30];
 
 fn row(ui: &mut Ui, r: Rect, y: i32, title: &str, sub: &str) {
@@ -1170,6 +1298,7 @@ impl App for Settings {
             10 => self.render_assistant(ui, m, sys, inst),
             11 => self.render_sound(ui, m, sys, inst),
             12 => self.render_devices(ui, m, sys, inst),
+            14 => self.render_install(ui, m, sys, inst),
             2 => self.render_personal(ui, m, sys, inst),
             4 => {
                 let n = &sys.net;
@@ -1534,7 +1663,7 @@ impl App for Settings {
         if code != C_INK {
             self.inking = false;
         }
-        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT, C_TOD, C_WIDGETS, C_ACC_WALL].contains(&code) {
+        if [C_DARK, C_MOBILE, C_WIFI, C_BT, C_FOCUS, C_MOTION, C_LOCK_BOOT, C_FINGER, C_MUTE, C_HPHONE, C_ACC_ADMIN, C_AUTOBRIGHT, C_TOD, C_WIDGETS, C_ACC_WALL, C_INST_BRING].contains(&code) {
             sys.feel(crate::haptics::Haptic::Click);
         }
         match code {
@@ -1826,6 +1955,35 @@ impl App for Settings {
                 sys.set_screen(ch);
             }
             C_SHUTDOWN => sys.reqs.push(Req::Shutdown),
+            c if (C_INST_PICK..C_INST_PICK + 32).contains(&c) => {
+                self.inst_sel = Some((c - C_INST_PICK) as usize);
+                return;
+            }
+            C_INST_BRING => {
+                self.inst_bring = !self.inst_bring;
+                return;
+            }
+            C_INST_GO => {
+                self.inst_confirm = self.inst_sel.is_some();
+                return;
+            }
+            C_INST_NO => {
+                self.inst_confirm = false;
+                return;
+            }
+            C_INST_YES => {
+                self.inst_confirm = false;
+                if let Some(i) = self.inst_sel {
+                    sys.install_request = Some((i, self.inst_bring));
+                    sys.install_state = crate::install::State::Running { phase: "Checking the disk", done: 0, total: 1 };
+                }
+                return;
+            }
+            C_INST_AGAIN => {
+                sys.install_state = crate::install::State::Idle;
+                self.inst_sel = None;
+                return;
+            }
             c if c >= C_PICK => {
                 use crate::avatar::{Choice, Picker};
                 use crate::profile::Avatar;

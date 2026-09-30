@@ -39,7 +39,8 @@
 - USB video (UVC) cameras
 
 ## M5 — everyday OS
-- Graphical installer for internal disks with dual-boot support
+- ✅ Installer: Settings › Install puts HydatekOS on an empty internal disk (NVMe or SATA, 512-byte or 4K sectors) and adds it to the firmware's start-up menu
+- Installing next to Windows or Linux (dual boot), resizing partitions
 - ✅ Accounts: several people, each with their own files, settings and sign-in, a Shared folder, administrators
 - Per-file permissions and sharing with one person, disk encryption, several people signed in at once
 - Updates, Secure Boot signing, an app SDK and package format

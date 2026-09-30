@@ -44,6 +44,8 @@ pub mod hidin;
 pub mod ambient;
 #[path = "../../kernel/src/personal.rs"]
 pub mod personal;
+#[path = "../../kernel/src/mkdisk.rs"]
+pub mod mkdisk;
 #[path = "../../kernel/src/bt.rs"]
 pub mod bt;
 #[path = "../../kernel/src/wifi.rs"]
@@ -140,6 +142,8 @@ mod wifi_tests;
 mod bt_tests;
 #[cfg(test)]
 mod personal_tests;
+#[cfg(test)]
+mod mkdisk_tests;
 #[cfg(test)]
 mod wifi_vectors;
 #[cfg(test)]

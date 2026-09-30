@@ -9,6 +9,11 @@
 /// The architecture's name as Settings shows it.
 #[cfg(target_arch = "x86_64")]
 pub const NAME: &str = "x86-64";
+/// The file the firmware starts, in \EFI\BOOT\.
+#[cfg(target_arch = "x86_64")]
+pub const BOOT_FILE: &str = "BOOTX64.EFI";
+#[cfg(target_arch = "aarch64")]
+pub const BOOT_FILE: &str = "BOOTAA64.EFI";
 #[cfg(target_arch = "aarch64")]
 pub const NAME: &str = "ARM64";
 

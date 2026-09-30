@@ -474,6 +474,72 @@ fn read_file(vol: *mut File, path: &str) -> Vec<u8> {
     out
 }
 
+/// A whole file from the volume, however big (up to `max` bytes).
+fn read_file_max(vol: *mut File, path: &str, max: usize) -> Option<Vec<u8>> {
+    let h = open(vol, path, false, false)?;
+    let mut out = vec![];
+    let mut chunk = vec![0u8; 1 << 20];
+    let mut ok = true;
+    loop {
+        let mut n = chunk.len();
+        if unsafe { ((*h).read)(h, &mut n, chunk.as_mut_ptr()) } != efi::SUCCESS {
+            ok = false;
+            break;
+        }
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..n]);
+        if out.len() > max {
+            ok = false;
+            break;
+        }
+    }
+    close(h);
+    ok.then_some(out)
+}
+
+impl Vfs {
+    /// A file on the boot volume by its own path (`\EFI\BOOT\BOOTX64.EFI`),
+    /// read whole: for the installer.
+    pub fn read_volume(&self, path: &str, max: usize) -> Option<Vec<u8>> {
+        if self.vol.is_null() {
+            return None;
+        }
+        read_file_max(self.vol, path, max)
+    }
+
+    /// Everything under a folder of the boot volume, read whole: (path from
+    /// that folder with '/' between names, bytes or None for a folder).
+    /// None if it can't all be read or comes to more than `max` bytes.
+    pub fn read_volume_tree(&self, dir: &str, max: usize) -> Option<Vec<(String, Option<Vec<u8>>)>> {
+        if self.vol.is_null() {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        let mut stack = vec![(String::from(dir), String::new(), 0u32)];
+        while let Some((native, rel, depth)) = stack.pop() {
+            if depth > 12 {
+                continue;
+            }
+            for (child, is_dir) in read_entries(self.vol, &native) {
+                let np = alloc::format!("{}\\{}", native, child);
+                let rp = if rel.is_empty() { child.clone() } else { alloc::format!("{}/{}", rel, child) };
+                if is_dir {
+                    out.push((rp.clone(), None));
+                    stack.push((np, rp, depth + 1));
+                } else {
+                    let data = read_file_max(self.vol, &np, max.saturating_sub(total))?;
+                    total += data.len();
+                    out.push((rp, Some(data)));
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 fn load_dir(vol: *mut File, npath: &str, name: &str, depth: u32) -> Node {
     let mut n = Node::dir(name);
     if depth > 8 {

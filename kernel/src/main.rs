@@ -74,6 +74,8 @@ mod web;
 mod wifi;
 mod xhci;
 mod zip;
+mod mkdisk;
+mod install;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -423,8 +425,11 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     let mut audio = hda::start();
     sh.sys.audio = audio.as_ref().map(|a| alloc::format!("{} · {}", a.name, a.outputs.join(", ")));
     // disks HydatekOS drives itself (not the boot disk)
-    let disks = disks::start_all();
+    let mut disks = disks::start_all();
     sh.sys.disks = disks.info.clone();
+    // the disks HydatekOS could be installed on (only ones it drives itself)
+    sh.sys.install_targets = install::candidates(&mut disks);
+    let mut install_job: Option<install::Job> = None;
     // USB controllers HydatekOS drives itself (before the firmware's USB
     // devices are listed: taking a controller removes them)
     let xhcis = xhci::start_all();
@@ -468,6 +473,42 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         let mut idx = 0usize;
         let waits = [timer, net.as_ref().map(|n| n.wait_event()).unwrap_or(timer)];
         (efi::bs().wait_for_event)(if net.is_some() { 2 } else { 1 }, waits.as_ptr(), &mut idx);
+        // installing HydatekOS on a disk, when Settings asks
+        if let Some((i, bring)) = sh.sys.install_request.take() {
+            let st = match sh.sys.install_targets.get(i).cloned() {
+                Some(c) if c.ready.is_ok() => match install::files(&sh.sys.fs, bring).and_then(|items| install::Job::new(&mut disks, c.which, &c.name, &items, efi::now())) {
+                    Ok(j) => {
+                        install_job = Some(j);
+                        install::State::Running { phase: "Checking the disk", done: 0, total: 1 }
+                    }
+                    Err(e) => install::State::Failed(e),
+                },
+                _ => install::State::Failed(alloc::string::String::from("That disk can't take HydatekOS.")),
+            };
+            if let install::State::Failed(e) = &st {
+                log!("install: {}", e);
+            }
+            sh.sys.install_state = st;
+            sh.dirty = true;
+        }
+        if let Some(job) = install_job.as_mut() {
+            // about 40 ms of work, then a frame to show how it's going
+            let t0 = arch::us();
+            let mut st = install::State::Idle;
+            while arch::us() - t0 < 40_000 {
+                st = job.step(&mut disks, 256);
+                if !matches!(st, install::State::Running { .. }) {
+                    break;
+                }
+            }
+            if !matches!(st, install::State::Running { .. }) {
+                install_job = None;
+                // the disk isn't empty any more
+                sh.sys.install_targets = install::candidates(&mut disks);
+            }
+            sh.sys.install_state = st;
+            sh.dirty = true;
+        }
         if idx == 1 {
             if let (Some(n), Some(srv)) = (net.as_mut(), server.as_mut()) {
                 n.poll(ticks * 10);
