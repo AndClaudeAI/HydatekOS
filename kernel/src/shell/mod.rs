@@ -787,7 +787,9 @@ impl Shell {
                         w.app.close(&mut self.sys);
                     }
                     self.sys.save_settings();
-                    efi::reset(if matches!(r, Req::Shutdown) { 2 } else { 0 });
+                    let off = matches!(r, Req::Shutdown);
+                    log!("power: {}: {} window(s) closed, settings saved", if off { "shutting down" } else { "restarting" }, self.wins.len());
+                    efi::reset(if off { 2 } else { 0 });
                 }
             }
         }
