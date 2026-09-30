@@ -169,9 +169,10 @@ An operating system is a long project. Here's what's still missing; the plan is 
   need a physical keyboard.
 - **Accounts keep people apart inside HydatekOS only:** files aren't encrypted
   yet, and one person is signed in at a time.
-- **I²C touchpads aren't started yet.** HydatekOS has the HID over I²C protocol and
-  a DesignWare I²C controller driver, but finding the touchpad needs ACPI's AML,
-  which HydatekOS can't run yet. USB touchpads, mice, touch screens and controllers
+- **Wi-Fi chips have no drivers yet**, and Bluetooth finds devices but doesn't pair.
+  HydatekOS has its own ACPI interpreter, xHCI, NVMe, SATA, HD Audio and I²C
+  touchpad drivers ([docs/DRIVERS.md](docs/DRIVERS.md)); the GPU draws through
+  the firmware's framebuffer, on every core ([docs/GRAPHICS.md](docs/GRAPHICS.md)). USB touchpads, mice, touch screens and controllers
   work on x86 and ARM64 alike ([docs/DRIVERS.md](docs/DRIVERS.md)); haptic
   touchpads and controllers' rumble motors play HydatekOS's haptic patterns. Haptic
   touchpads and controllers have only been tested against simulated and virtual

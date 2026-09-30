@@ -304,6 +304,8 @@ pub struct PciDev {
     pub kind: &'static str,
     pub ids: String,
     pub driver: &'static str,
+    /// bus, device, function
+    pub at: (u8, u8, u8),
 }
 
 /// A graphics device.
@@ -444,6 +446,8 @@ mod detect {
             }
             let (vendor, device) = (id as u16, (id >> 16) as u16);
             let (base, sub, iface) = ((class >> 24) as u8, (class >> 16) as u8, (class >> 8) as u8);
+            let (mut sg, mut bus, mut dv, mut fnc) = (0usize, 0usize, 0usize, 0usize);
+            unsafe { ((*p).get_location)(p, &mut sg, &mut bus, &mut dv, &mut fnc) };
             let kind = pci_class(base, sub, iface);
             let name = if base == 0x03 {
                 gpu_name(vendor, device)
@@ -453,7 +457,7 @@ mod detect {
                     v => format!("{} {}", v, kind),
                 }
             };
-            out.push(PciDev { name, kind, ids: format!("{:04x}:{:04x}", vendor, device), driver: pci_driver(base, sub) });
+            out.push(PciDev { name, kind, ids: format!("{:04x}:{:04x}", vendor, device), driver: pci_driver(base, sub), at: (bus as u8, dv as u8, fnc as u8) });
         }
         out
     }

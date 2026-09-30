@@ -115,11 +115,17 @@ impl Canvas {
         if base.len() != self.px.len() || alpha >= 255 {
             return;
         }
-        for (p, b) in self.px.iter_mut().zip(base.iter()) {
-            if *p != *b {
-                *p = lerp(*b, *p, alpha + (alpha >> 7));
+        let w = self.w as usize;
+        let bp = base.as_ptr() as usize;
+        // every core, a band of rows each
+        crate::par::rows(&mut self.px, w, &|y0, part| {
+            let base = unsafe { core::slice::from_raw_parts((bp as *const u32).add(y0 * w), part.len()) };
+            for (p, b) in part.iter_mut().zip(base.iter()) {
+                if *p != *b {
+                    *p = lerp(*b, *p, alpha + (alpha >> 7));
+                }
             }
-        }
+        });
     }
 
     pub fn bounds(&self) -> Rect {
@@ -255,11 +261,20 @@ impl Canvas {
     /// Copy `src` (same size) into self inside `r`.
     pub fn copy_from(&mut self, src: &Canvas, r: Rect) {
         let r = r.intersect(&self.bounds()).intersect(&src.bounds());
-        for y in r.y..r.b() {
-            let a = (y * self.w + r.x) as usize;
-            let b = (y * src.w + r.x) as usize;
-            self.px[a..a + r.w as usize].copy_from_slice(&src.px[b..b + r.w as usize]);
+        if r.is_empty() {
+            return;
         }
+        let (w, sw) = (self.w as usize, src.w as usize);
+        let sp = src.px.as_ptr() as usize;
+        let rows = &mut self.px[r.y as usize * w..r.b() as usize * w];
+        // big copies (the wallpaper under everything) on every core
+        crate::par::rows(rows, w, &|y0, part| {
+            for (k, row) in part.chunks_mut(w).enumerate() {
+                let y = r.y as usize + y0 + k;
+                let s = unsafe { core::slice::from_raw_parts((sp as *const u32).add(y * sw + r.x as usize), r.w as usize) };
+                row[r.x as usize..r.x as usize + r.w as usize].copy_from_slice(s);
+            }
+        });
     }
 
     /// Draw `src` scaled into `dst` (box-filtered; intended for shrinking),
@@ -283,32 +298,41 @@ impl Canvas {
         // 16.16 fixed-point source step
         let sx = ((src.w as i64) << 16) / dst.w as i64;
         let sy = ((src.h as i64) << 16) / dst.h as i64;
-        for y in d.y..d.b() {
-            let y0 = (((y - dst.y) as i64 * sy) >> 16) as i32;
-            let y1 = ((((y - dst.y + 1) as i64 * sy) >> 16) as i32).clamp(y0 + 1, src.h);
-            for x in d.x..d.r() {
-                let x0 = (((x - dst.x) as i64 * sx) >> 16) as i32;
-                let x1 = ((((x - dst.x + 1) as i64 * sx) >> 16) as i32).clamp(x0 + 1, src.w);
-                let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
-                for yy in y0..y1 {
-                    let row = (yy * src.w) as usize;
-                    for xx in x0..x1 {
-                        let p = src.px[row + xx as usize];
-                        r += (p >> 16) & 255;
-                        g += (p >> 8) & 255;
-                        b += p & 255;
-                        n += 1;
+        let (w, sp, mp) = (self.w as usize, src.px.as_ptr() as usize, (m.as_ptr() as usize, m.len()));
+        let (srcw, srch) = (src.w, src.h);
+        let rows = &mut self.px[d.y as usize * w..d.b() as usize * w];
+        // each core scales and blends its own band of rows
+        crate::par::rows(rows, w, &|band, part| {
+            let src = unsafe { core::slice::from_raw_parts(sp as *const u32, (srcw * srch) as usize) };
+            let m = unsafe { core::slice::from_raw_parts(mp.0 as *const u8, mp.1) };
+            for (k, row) in part.chunks_mut(w).enumerate() {
+                let y = d.y + (band + k) as i32;
+                let y0 = (((y - dst.y) as i64 * sy) >> 16) as i32;
+                let y1 = ((((y - dst.y + 1) as i64 * sy) >> 16) as i32).clamp(y0 + 1, srch);
+                for x in d.x..d.r() {
+                    let x0 = (((x - dst.x) as i64 * sx) >> 16) as i32;
+                    let x1 = ((((x - dst.x + 1) as i64 * sx) >> 16) as i32).clamp(x0 + 1, srcw);
+                    let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+                    for yy in y0..y1 {
+                        let srow = (yy * srcw) as usize;
+                        for xx in x0..x1 {
+                            let p = src[srow + xx as usize];
+                            r += (p >> 16) & 255;
+                            g += (p >> 8) & 255;
+                            b += p & 255;
+                            n += 1;
+                        }
                     }
+                    let c = ((r / n) << 16) | ((g / n) << 8) | (b / n);
+                    // coverage inside the rounded outline
+                    let (lx, ly) = (x - dst.x, y - dst.y);
+                    let mx = if lx < rad { lx } else if lx >= dst.w - rad { dst.w - 1 - lx } else { rad };
+                    let my = if ly < rad { ly } else if ly >= dst.h - rad { dst.h - 1 - ly } else { rad };
+                    let cov = if mx < rad && my < rad { m[(my * rad + mx) as usize] as u32 } else { 255 };
+                    blend(&mut row[x as usize], c, cov * alpha.min(255) / 255);
                 }
-                let c = ((r / n) << 16) | ((g / n) << 8) | (b / n);
-                // coverage inside the rounded outline
-                let (lx, ly) = (x - dst.x, y - dst.y);
-                let mx = if lx < rad { lx } else if lx >= dst.w - rad { dst.w - 1 - lx } else { rad };
-                let my = if ly < rad { ly } else if ly >= dst.h - rad { dst.h - 1 - ly } else { rad };
-                let cov = if mx < rad && my < rad { m[(my * rad + mx) as usize] as u32 } else { 255 };
-                blend(&mut self.px[(y * self.w + x) as usize], c, cov * alpha.min(255) / 255);
             }
-        }
+        });
     }
 
     /// Draw ARGB pixels (w × h, straight alpha) at (x, y), blending by alpha.

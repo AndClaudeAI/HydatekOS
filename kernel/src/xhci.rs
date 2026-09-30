@@ -145,8 +145,8 @@ pub struct Xhci {
     /// a scratch page for control transfers
     scratch: usize,
     pub name: String,
-    /// the controller's vendor:device
-    pub ids: String,
+    /// the controller's PCI location
+    pub at: (u8, u8, u8),
     pub info: Vec<DeviceInfo>,
     pub generation: u32,
 }
@@ -258,7 +258,7 @@ impl Xhci {
             changed: Vec::new(),
             scratch: crate::efi::dma(1).ok_or("no memory")?,
             name: format!("xHCI {:02x}:{:02x}.{}", b, dv, f),
-            ids: format!("{:04x}:{:04x}", d.vendor, d.device),
+            at: d.loc,
             info: Vec::new(),
             generation: 1,
         };

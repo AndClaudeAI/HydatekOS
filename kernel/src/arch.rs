@@ -63,6 +63,16 @@ pub fn ms() -> u64 {
     cycles().wrapping_sub(START.load(Ordering::Relaxed)) / per
 }
 
+/// Microseconds since `calibrate` (timing frames).
+pub fn us() -> u64 {
+    use core::sync::atomic::Ordering;
+    let per = PER_MS.load(Ordering::Relaxed);
+    if per < 1000 {
+        return ms() * 1000;
+    }
+    cycles().wrapping_sub(START.load(Ordering::Relaxed)) / (per / 1000)
+}
+
 /// A random number from the processor's own generator, if it has one:
 /// RDRAND on x86-64, RNDR (Armv8.5 FEAT_RNG) on ARM64.
 pub fn hw_random() -> Option<u64> {

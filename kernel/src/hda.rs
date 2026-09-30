@@ -70,6 +70,8 @@ pub struct Hda {
     pub mixer: Mixer,
     pub name: String,
     pub outputs: Vec<&'static str>,
+    /// the controller's PCI location
+    pub at: (u8, u8, u8),
 }
 
 fn codec_name(vendor: u16) -> &'static str {
@@ -145,7 +147,7 @@ impl Hda {
         }
         let sd = base + 0x80 + 0x20 * iss;
         let ring = crate::efi::dma(BUF / 4096).ok_or("no memory")?;
-        let mut h = Hda { base, corb, rirb, corb_wp: 0, rirb_rp: 0, sd, ring, written: 0, mixer: Mixer::default(), name: String::new(), outputs: Vec::new() };
+        let mut h = Hda { base, corb, rirb, corb_wp: 0, rirb_rp: 0, sd, ring, written: 0, mixer: Mixer::default(), name: String::new(), outputs: Vec::new(), at: d.loc };
         for c in 0..15u32 {
             if codecs & 1 << c != 0 && h.setup_codec(c) {
                 break;

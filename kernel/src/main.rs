@@ -47,6 +47,7 @@ mod doc;
 mod deck;
 mod deckio;
 mod pci;
+mod par;
 mod pdf;
 mod profile;
 mod accounts;
@@ -101,10 +102,18 @@ fn claim_heap() -> usize {
     0
 }
 
+/// Present on every core (measured: see docs/GRAPHICS.md).
+const PAR_PRESENT: bool = true;
+
 struct Display {
     gop: *mut efi::Gop,
     w: i32,
     h: i32,
+    /// the framebuffer, when HydatekOS may write it directly: address,
+    /// pixels per scan line, red and blue swapped (RGBX)
+    fb: Option<(usize, usize, bool)>,
+    /// what's on the screen now (to write only what changed)
+    shown: core::cell::RefCell<Vec<u32>>,
 }
 
 impl Display {
@@ -138,14 +147,63 @@ impl Display {
                     ((*gop).set_mode)(gop, m);
                 }
             }
-            let info = &*(*(*gop).mode).info;
-            Some(Display { gop, w: info.hres as i32, h: info.vres as i32 })
+            let m = &*(*gop).mode;
+            let info = &*m.info;
+            // BGRX (1) is HydatekOS's own pixel layout; RGBX (0) swaps two bytes
+            let fb = (m.fb_base != 0 && info.pixel_format <= 1).then(|| (m.fb_base as usize, info.pixels_per_scanline as usize, info.pixel_format == 0));
+            log!("display: {}", if fb.is_some() { "direct framebuffer, every core" } else { "firmware blits" });
+            Some(Display { gop, w: info.hres as i32, h: info.vres as i32, fb, shown: core::cell::RefCell::new(vec![0x0102_0304; (info.hres * info.vres) as usize]) })
         }
     }
 
     fn present(&self, c: &Canvas, r: Rect) {
         let r = r.intersect(&c.bounds());
         if r.is_empty() {
+            return;
+        }
+        if let Some((fb, stride, swap)) = self.fb {
+            // straight into the framebuffer, on every core, only the spans
+            // that changed since the last frame
+            let mut shown = self.shown.borrow_mut();
+            let w = c.w as usize;
+            if shown.len() != c.px.len() {
+                shown.clear();
+                shown.resize(c.px.len(), 0x0102_0304);
+            }
+            let (x0, x1) = (r.x as usize, r.r() as usize);
+            let (ry, rb) = (r.y as usize, r.b() as usize);
+            let src = c.px.as_ptr() as usize;
+            let rows = &mut shown[ry * w..rb * w];
+            let draw = |y0: usize, part: &mut [u32]| {
+                let src = src as *const u32;
+                for (k, row) in part.chunks_mut(w).enumerate() {
+                    let y = ry + y0 + k;
+                    let s = unsafe { core::slice::from_raw_parts(src.add(y * w), w) };
+                    // most rows haven't changed: one wide comparison says so
+                    if row[x0..x1] == s[x0..x1] {
+                        continue;
+                    }
+                    let a = (x0..x1).find(|&x| row[x] != s[x]).unwrap_or(x0);
+                    let b = (x0..x1).rev().find(|&x| row[x] != s[x]).unwrap_or(x1 - 1);
+                    let dst = unsafe { core::slice::from_raw_parts_mut((fb + 4 * y * stride) as *mut u32, stride) };
+                    if swap {
+                        for x in a..=b {
+                            let p = s[x];
+                            dst[x] = (p & 0xFF00_FF00) | (p >> 16 & 0xFF) | (p & 0xFF) << 16;
+                        }
+                    } else {
+                        dst[a..=b].copy_from_slice(&s[a..=b]);
+                    }
+                    row[a..=b].copy_from_slice(&s[a..=b]);
+                }
+            };
+            if PAR_PRESENT {
+                let min = par::MIN_PIXELS.swap(0, core::sync::atomic::Ordering::Relaxed);
+                par::rows(rows, w, &draw);
+                par::MIN_PIXELS.store(min, core::sync::atomic::Ordering::Relaxed);
+            } else {
+                draw(0, rows);
+            }
             return;
         }
         unsafe {
@@ -167,6 +225,7 @@ impl Display {
             }
             efi::stall_us(12_000);
         }
+        self.shown.borrow_mut().iter_mut().for_each(|p| *p = 0x0102_0304);
     }
 
     /// Blit `r` of the back buffer with the cursor composited on top.
@@ -203,6 +262,24 @@ impl Display {
                 *d = (mix(sr, dr) << 16) | (mix(sg, dg) << 8) | mix(sb, db);
             }
         }
+        if let Some((fb, stride, swap)) = self.fb {
+            // the cursor's little rectangle: written directly, and remembered
+            // as what's on the screen (so the next frame repaints under it)
+            let mut shown = self.shown.borrow_mut();
+            let w = c.w as usize;
+            for y in 0..r.h as usize {
+                let (sy, row) = (r.y as usize + y, &scratch[y * r.w as usize..(y + 1) * r.w as usize]);
+                let dst = (fb + 4 * (sy * stride + r.x as usize)) as *mut u32;
+                for (x, p) in row.iter().enumerate() {
+                    let q = if swap { (p & 0xFF00_FF00) | (p >> 16 & 0xFF) | (p & 0xFF) << 16 } else { *p };
+                    unsafe { core::ptr::write_volatile(dst.add(x), q) };
+                }
+                if shown.len() >= (sy + 1) * w {
+                    shown[sy * w + r.x as usize..sy * w + r.x as usize + row.len()].copy_from_slice(row);
+                }
+            }
+            return;
+        }
         unsafe {
             ((*self.gop).blt)(self.gop, scratch.as_ptr(), 2, 0, 0, r.x as usize, r.y as usize, r.w as usize, r.h as usize, r.w as usize * 4);
         }
@@ -222,6 +299,8 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     if heap_mb == 0 {
         return 1 << 63 | 9;
     }
+    let cores = par::init();
+    log!("par: drawing on {} core{}", cores, if cores == 1 { "" } else { "s" });
     let Some(disp) = Display::init() else {
         log!("no graphics output");
         return efi::NOT_FOUND;
@@ -304,11 +383,14 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     // the PCI list says who drives what now
     for p in sh.sys.hw.pci.iter_mut() {
         let k = p.kind;
-        if (k.starts_with("NVMe") || k.starts_with("SATA")) && disks.taken.iter().any(|t| *t == p.ids) {
+        if disks.taken.contains(&p.at) {
             p.driver = if k.starts_with("NVMe") { "HydatekOS NVMe" } else { "HydatekOS AHCI" };
         }
-        if k.starts_with("USB 3") && xhcis.iter().any(|x| x.ids == p.ids) {
+        if xhcis.iter().any(|x| x.at == p.at) {
             p.driver = "HydatekOS xHCI";
+        }
+        if audio.as_ref().map_or(false, |a| a.at == p.at) {
+            p.driver = "HydatekOS HD Audio";
         }
     }
     let mut input = input::Input::new(disp.w, disp.h);
@@ -331,6 +413,8 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
     sh.sys.sound(sound::Sound::Startup);
     drop(splash);
     let mut first = true;
+    // every core or one: decided by timing real frames
+    let mut trial = par::Trial::new();
     loop {
         // Wake on the 10 ms tick, or as soon as a network packet arrives.
         let mut idx = 0usize;
@@ -458,8 +542,19 @@ pub extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -
         if sh.dirty || first {
             sh.dirty = false;
             first = false;
+            let t0 = arch::us();
             sh.render(&mut back, ticks);
+            let t1 = arch::us();
             disp.present(&back, back.bounds());
+            let t2 = arch::us();
+            // frame times (smoothed) for Settings › Display
+            let (r0, p0) = sh.sys.frame_us;
+            sh.sys.frame_us = ((r0 * 7 + (t1 - t0) as u32) / 8, (p0 * 7 + (t2 - t1) as u32) / 8);
+            sh.sys.frames += 1;
+            trial.frame(t2 - t0);
+            if sh.sys.frames % 500 == 0 {
+                log!("frame: render {} us, present {} us", sh.sys.frame_us.0, sh.sys.frame_us.1);
+            }
             disp.present_with_cursor(&back, &cursor, input.x, input.y, Rect::new(input.x, input.y, cursor.w, cursor.h), &mut scratch);
             cx = input.x;
             cy = input.y;

@@ -31,8 +31,8 @@ pub struct Disks {
     pub nvme: Vec<crate::nvme::Nvme>,
     pub sata: Vec<crate::ahci::SataDisk>,
     pub info: Vec<DiskInfo>,
-    /// the controllers taken (vendor:device)
-    pub taken: Vec<alloc::string::String>,
+    /// the controllers taken (bus, device, function)
+    pub taken: Vec<(u8, u8, u8)>,
 }
 
 pub fn start_all() -> Disks {
@@ -48,7 +48,7 @@ pub fn start_all() -> Disks {
             log!("disks: {:02x}:{:02x}.{} holds the boot disk: the firmware keeps it", d.loc.0, d.loc.1, d.loc.2);
             continue;
         }
-        all.taken.push(format!("{:04x}:{:04x}", d.vendor, d.device));
+        all.taken.push(d.loc);
         if is_nvme {
             match crate::nvme::Nvme::start(&d) {
                 Ok(mut n) => {

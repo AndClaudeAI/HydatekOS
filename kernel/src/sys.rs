@@ -140,6 +140,9 @@ pub struct Sys {
     /// quality 0-100); None when there's no Wi-Fi HydatekOS can use
     pub wifi_nets: Option<Vec<(String, &'static str, u8)>>,
     pub wifi_scan: bool,
+    /// how long frames take to draw and to show (µs, smoothed), and how many
+    pub frame_us: (u32, u32),
+    pub frames: u64,
     /// the sound device HydatekOS plays to, and the sounds waiting
     pub audio: Option<String>,
     pub sounds: Vec<crate::sound::Sound>,
@@ -273,6 +276,8 @@ impl Sys {
             bt_scan: false,
             wifi_nets: None,
             wifi_scan: false,
+            frame_us: (0, 0),
+            frames: 0,
             audio: None,
             sounds: Vec::new(),
             disks: Vec::new(),

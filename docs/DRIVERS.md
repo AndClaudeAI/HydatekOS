@@ -1,5 +1,7 @@
 # Drivers
 
+> Also: [GRAPHICS.md](GRAPHICS.md) (drawing on every core), and the sections below on ACPI, USB host, storage, audio, Bluetooth and Wi-Fi.
+
 HydatekOS's own device drivers, and what each piece of hardware needs.
 Milestone 1 keeps the firmware for the USB host controller, disks and the
 framebuffer (HydatekOS never calls `ExitBootServices`). Everything a person
@@ -94,3 +96,28 @@ The serial log says what happened. In QEMU's ARM machine that's
   USB audio, video (UVC) and Bluetooth (HCI) can follow.
 - **Wi-Fi, audio (HD Audio, SoundWire), NVMe/AHCI and GPU acceleration.** Each
   is a driver family of its own; see [ROADMAP.md](ROADMAP.md).
+
+
+## Added since: the machine's own hardware
+
+![Settings › Devices with everything HydatekOS drives](screenshots/devices-all.png)
+
+| Part | File | What it does | Tested |
+|---|---|---|---|
+| ACPI interpreter | `aml.rs`, `acpi.rs` | Loads the DSDT and SSDTs and runs their methods (_HID, _CID, _STA, _CRS, _DSM, _INI, _BIF/_BST, _ALI). _OSI answers like Windows. Reaches memory, I/O ports, PCI configuration space (ECAM) and the embedded controller | Host tests: an iasl-compiled laptop DSDT, QEMU's q35 and ARM `virt` DSDTs, fuzzed tables. QEMU: both DSDTs load with 0 errors; an injected SSDT's touchpad, battery and light sensor are found |
+| I2C touchpads | `i2cdev.rs`, `i2c.rs` | Finds HID over I2C devices through ACPI and starts them on DesignWare controllers (Intel LPSS on PCI is taken out of reset and timed from FMCN). Polled, no GPIO interrupt yet | Simulated controller and touchpad; QEMU discovery (it has no I2C hardware) |
+| Battery, light | `acpi.rs`, `ambient.rs` | Battery percentage in the top bar; brightness follows a light sensor (ACPI or HID). The brightness keys shift the curve | QEMU with an injected SSDT |
+| Pen | `hid.rs`, `hidin.rs` | Pressure, eraser, barrel button, tilt; a pen pad in Settings › Devices (the mouse draws on it too) | Host test with a Windows-style pen descriptor; the pad in QEMU |
+| USB host (xHCI) | `xhci.rs`, `pci.rs` | Takes controllers from the firmware (never the boot disk's, and the firmware always keeps a real keyboard), rings, contexts, port reset, hot-plug, HID devices including keyboards | QEMU x86-64 and ARM64: setup typed and clicked through it |
+| NVMe, SATA | `nvme.rs`, `ahci.rs`, `storage.rs`, `disks.rs` | Identify, read, write; GPT/MBR; FAT, exFAT, NTFS, ext2-4, Btrfs, APFS, HFS+, ISO 9660. Writes only to disks carrying a test marker | Host tests on an mformat/mkfs disk; QEMU NVMe and AHCI, a sector written and read back |
+| Audio | `hda.rs`, `sound.rs` | Intel HD Audio: codecs, output paths, a 48 kHz stream; synthesised system sounds; the volume keys work | QEMU recorded to WAV: the startup chord's notes, the notification, the volume tick |
+| Bluetooth | `bt.rs`, `usb.rs` | USB adapters: HCI bring-up, classic inquiry and LE scanning, names, kinds, makers, signal | Host tests (QEMU 8.2 has no Bluetooth device) |
+| Wi-Fi | `wifi.rs`, `uefiwifi.rs` | Beacons (security, Wi-Fi 4-7, bands), WPA2: PBKDF2, PTK, the 4-way handshake, group key unwrap, CCMP. Scanning through the firmware's Wi-Fi driver where there is one | IEEE 802.11 Annex J vectors; the handshake frame for frame against an independent Python authenticator. No Wi-Fi hardware to try |
+
+What's still missing:
+- Wi-Fi chip drivers (Intel, Qualcomm, MediaTek, Realtek), and joining
+  networks through the firmware.
+- Bluetooth pairing and profiles.
+- Qualcomm's I2C (GENI) and SPMI haptics.
+- GPU engines.
+- An AML interpreter for Load/LoadTable (tables loaded at run time).

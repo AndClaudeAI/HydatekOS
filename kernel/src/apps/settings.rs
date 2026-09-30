@@ -1107,7 +1107,13 @@ impl App for Settings {
                 kv(ui, m.x + 16, m.y + 30, m.w - 32, "Resolution", &format!("{} × {}", w, h));
                 kv(ui, m.x + 16, m.y + 56, m.w - 32, "Scale", &format!("{}×", s));
                 kv(ui, m.x + 16, m.y + 82, m.w - 32, "Layout", &format!("{} × {} points", w / s, h / s));
-                kv(ui, m.x + 16, m.y + 108, m.w - 32, "Renderer", "HydatekOS software compositor");
+                let cores = crate::par::count();
+                let simd = if sys.hw.features.contains(&"AVX2") { "AVX2" } else if cfg!(target_arch = "aarch64") { "NEON" } else { "SSE2" };
+                let fr = if sys.frames > 0 { format!(" · frame {:.1} + {:.1} ms", sys.frame_us.0 as f32 / 1000.0, sys.frame_us.1 as f32 / 1000.0) } else { String::new() };
+                let _ = cores;
+                #[allow(static_mut_refs)]
+                let how = unsafe { crate::par::DECISION };
+                kv(ui, m.x + 16, m.y + 108, m.w - 32, "Renderer", &format!("{}, {}{}", how, simd, fr));
                 // the graphics hardware
                 let top = m.y + 144;
                 let n = hw.gpus.len().max(1) as i32;

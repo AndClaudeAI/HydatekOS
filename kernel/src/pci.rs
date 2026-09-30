@@ -131,6 +131,32 @@ pub fn behind(path: &[u8], controller: &[u8]) -> bool {
     !controller.is_empty() && path.len() >= controller.len() && &path[..controller.len()] == controller
 }
 
+/// A device path that ends at a real keyboard: a USB device, or a PS/2
+/// keyboard (ACPI PNP0303 / PNP030B). Serial consoles also give text input,
+/// but nobody types on them.
+fn is_keyboard(p: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 4 <= p.len() {
+        let (t, st, len) = (p[i], p[i + 1], u16::from_le_bytes([p[i + 2], p[i + 3]]) as usize);
+        if len < 4 {
+            break;
+        }
+        // messaging / USB, USB class, USB WWID
+        if t == 3 && matches!(st, 5 | 15 | 16) {
+            return true;
+        }
+        // ACPI / ACPI device path with the PS/2 keyboard's EISA id
+        if t == 2 && st == 1 && len >= 12 {
+            let hid = u32::from_le_bytes([p[i + 4], p[i + 5], p[i + 6], p[i + 7]]);
+            if hid == 0x0303_41D0 || hid == 0x030B_41D0 {
+                return true;
+            }
+        }
+        i += len;
+    }
+    false
+}
+
 /// Whether HydatekOS may take a controller from the firmware: not when the
 /// boot disk is behind it, and the firmware always keeps a keyboard (one not
 /// behind this controller or any already `taken`), so there's one to fall
@@ -139,6 +165,17 @@ pub fn may_take(ctl: &[u8], taken: &[Vec<u8>]) -> bool {
     if behind(&efi::device_path(efi::boot_device()), ctl) {
         return false;
     }
-    let kbds: Vec<Vec<u8>> = efi::handles(&efi::TEXT_INPUT_EX_GUID).into_iter().map(efi::device_path).filter(|p| !p.is_empty()).collect();
-    kbds.is_empty() || kbds.iter().any(|k| !behind(k, ctl) && !taken.iter().any(|t| behind(k, t)))
+    // keyboards: every handle with a text input protocol and a device path
+    // (the console's own virtual handle has none)
+    const TEXT_INPUT: efi::Guid = efi::Guid(0x387477C1, 0x69C7, 0x11D2, [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B]);
+    let mut kbds: Vec<Vec<u8>> = Vec::new();
+    for g in [&efi::TEXT_INPUT_EX_GUID, &TEXT_INPUT] {
+        for p in efi::handles(g).into_iter().map(efi::device_path) {
+            if is_keyboard(&p) && !kbds.contains(&p) {
+                kbds.push(p);
+            }
+        }
+    }
+    // no keyboard the firmware can name: don't risk it
+    !kbds.is_empty() && kbds.iter().any(|k| !behind(k, ctl) && !taken.iter().any(|t| behind(k, t)))
 }

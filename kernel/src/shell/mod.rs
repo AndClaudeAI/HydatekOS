@@ -2002,11 +2002,14 @@ fn draw_win(ui: &mut Ui, win: &mut Win, r: Rect, focused: bool, sys: &Sys, embed
 /// software dimmer).
 fn dim(c: &mut Canvas, percent: u8) {
     let k = percent as u32 * 256 / 100;
-    for p in c.px.iter_mut() {
-        let v = *p;
-        let r = ((v >> 16 & 255) * k) >> 8;
-        let g = ((v >> 8 & 255) * k) >> 8;
-        let b = ((v & 255) * k) >> 8;
-        *p = (v & 0xff00_0000) | r << 16 | g << 8 | b;
-    }
+    let w = c.w as usize;
+    crate::par::rows(&mut c.px, w, &|_, part| {
+        for p in part.iter_mut() {
+            let v = *p;
+            let r = ((v >> 16 & 255) * k) >> 8;
+            let g = ((v >> 8 & 255) * k) >> 8;
+            let b = ((v & 255) * k) >> 8;
+            *p = (v & 0xff00_0000) | r << 16 | g << 8 | b;
+        }
+    });
 }

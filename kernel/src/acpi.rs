@@ -507,10 +507,12 @@ mod firmware {
                 }
             }
         }
+        // no embedded controller ports on ARM
         #[cfg(not(target_arch = "x86_64"))]
-        {
-            ec = None;
-        }
+        let ec: Option<(u16, u16)> = {
+            let _ = ec;
+            None
+        };
         let mut a = Aml::new(KernelHost { ecam, ec });
         for t in tabs.iter().filter(|t| &t[0..4] == b"DSDT") {
             let _ = a.load(t);
