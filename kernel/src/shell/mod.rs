@@ -1,4 +1,4 @@
-//! The HydatekOS shell: desktop (menu bar, widgets, windows, dock, launcher,
+//! The HydatekOS shell: desktop (menu bar, the app rail, cards, windows, launcher,
 //! notifications) and the mobile shell, plus event routing.
 
 pub mod cursor;
@@ -9,6 +9,7 @@ pub mod osk;
 pub mod setup;
 pub mod splash;
 pub mod wallpaper;
+pub mod widgets;
 
 use crate::apps::{self, App, AppKind, DESKTOP_APPS, HEADER};
 use crate::efi;
@@ -27,7 +28,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use mobile::Mobile;
 
-const BAR_H: i32 = 28;
+const BAR_H: i32 = 40;
+/// The app rail down the left side.
+const RAIL_W: i32 = 64;
 
 /// The HydatekOS mark: an arch in a rounded square, `size` points wide.
 pub fn logo(ui: &mut Ui, x: i32, y: i32, size: i32, bg: Color, fg: Color) {
@@ -72,6 +75,15 @@ enum FxKind {
     Restore,
     /// gliding to a new place or size (maximise, snap, restore)
     Move,
+}
+
+/// A button on the rail.
+struct RailItem {
+    r: Rect,
+    icon: Icon,
+    a: Action,
+    name: &'static str,
+    kind: Option<AppKind>,
 }
 
 /// A picture of a window that has gone (closed or minimised), animated out.
@@ -224,6 +236,8 @@ pub struct Shell {
     /// latest of them appeared (it fades in)
     popups: (bool, Option<u8>, bool),
     popup_at: u64,
+    /// the calendar card's month, from this one
+    cal_shift: i32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -271,6 +285,7 @@ impl Shell {
             ghosts: vec![],
             popups: (false, None, false),
             popup_at: 0,
+            cal_shift: 0,
         };
         sh.sys.screen = (w * s, h * s, s);
         if !sh.mobile_mode() {
@@ -311,7 +326,7 @@ impl Shell {
     // ---- window management ------------------------------------------------
 
     fn work_area(&self) -> Rect {
-        Rect::new(8, BAR_H + 8, self.w - 16, self.h - BAR_H - 90)
+        Rect::new(RAIL_W + 10, BAR_H + 10, self.w - RAIL_W - 20, self.h - BAR_H - 20)
     }
 
     fn open_app(&mut self, k: AppKind) {
@@ -332,13 +347,18 @@ impl Shell {
         ww = ww.min(wa.w);
         wh = wh.min(wa.h);
         let n = self.wins.len() as i32;
-        let mut x = wa.x + (wa.w - ww) / 2 + 60 + n * 26;
-        let mut y = BAR_H + 34 + n * 26;
+        // in the space between the desktop's cards, when there's room
+        let (left, right) = self.widget_columns();
+        let free_l = left.map_or(wa.x, |r| r.r() + 16);
+        let free_r = right.map_or(wa.r(), |r| r.x - 16);
+        let (fx, fw) = if free_r - free_l >= ww { (free_l, free_r - free_l) } else { (wa.x, wa.w) };
+        let mut x = fx + (fw - ww) / 2 + n * 26;
+        let mut y = BAR_H + 30 + n * 26;
         if x + ww > wa.r() {
             x = wa.x + (wa.w - ww) / 2;
         }
         if y + wh > wa.b() {
-            y = BAR_H + 20;
+            y = wa.y;
         }
         let id = self.next_id;
         self.next_id += 1;
@@ -405,26 +425,41 @@ impl Shell {
         }
     }
 
-    /// Where an app's dock icon is (as draw_dock lays them out).
+    /// Where an app's button on the rail is (where windows minimise to).
     fn dock_icon(&self, kind: AppKind) -> Rect {
+        self.rail().iter().find(|i| i.kind == Some(kind)).map_or(Rect::new(10, BAR_H + 66, 44, 44), |i| i.r)
+    }
+
+    /// The rail's buttons, top to bottom: the desktop, all apps, the pinned
+    /// apps, others that are open, and Settings at the foot.
+    fn rail(&self) -> Vec<RailItem> {
+        let mut items: Vec<(Icon, Action, &'static str, Option<AppKind>)> = vec![
+            (Icon::Home, Action::Quick(widgets::Q_HOME), "Desktop", None),
+            (Icon::Grid, Action::ToggleLauncher, "All apps", None),
+        ];
+        let pinned = DOCK_APPS.iter().copied().filter(|k| *k != AppKind::Settings);
         let mut extra: Vec<AppKind> = vec![];
         for k in self.wins.iter().map(|w| w.app.kind()) {
             if !DOCK_APPS.contains(&k) && !extra.contains(&k) {
                 extra.push(k);
             }
         }
-        let n = 1 + DOCK_APPS.len() as i32 + extra.len() as i32;
-        let (bw, gap) = (40, 7);
-        let dw = n * bw + (n - 1) * gap + 16 + if extra.is_empty() { 0 } else { 12 };
-        let dock = Rect::new((self.w - dw) / 2, self.h - 16 - 56, dw, 56);
-        let at = DOCK_APPS.iter().chain(extra.iter()).position(|k| *k == kind).map(|i| i as i32 + 1);
-        match at {
-            Some(idx) => {
-                let sep = if idx >= 1 + DOCK_APPS.len() as i32 { 12 } else { 0 };
-                Rect::new(dock.x + 8 + idx * (bw + gap) + sep, dock.y + 8, bw, bw)
-            }
-            None => Rect::new(dock.x + dock.w / 2 - 20, dock.y + 8, bw, bw),
+        for k in pinned.chain(extra.iter().copied()) {
+            items.push((k.icon(), Action::Launch(k), k.name(), Some(k)));
         }
+        let n = items.len() as i32 + 1;
+        // Settings sits at the foot; the rest share what height there is
+        let avail = self.h - BAR_H - 32 - 56;
+        let step = (avail / (n - 1)).clamp(30, 50);
+        let size = (step - 6).min(44);
+        let x = (RAIL_W - size) / 2;
+        let mut out: Vec<RailItem> = items
+            .into_iter()
+            .enumerate()
+            .map(|(i, (icon, a, name, kind))| RailItem { r: Rect::new(x, BAR_H + 16 + i as i32 * step, size, size), icon, a, name, kind })
+            .collect();
+        out.push(RailItem { r: Rect::new(x, self.h - 16 - size, size, size), icon: AppKind::Settings.icon(), a: Action::Launch(AppKind::Settings), name: AppKind::Settings.name(), kind: Some(AppKind::Settings) });
+        out
     }
 
     /// Window `i` drawn on its own, at its size (for animating it out).
@@ -487,8 +522,7 @@ impl Shell {
 
     fn win_rect(&self, w: &Win) -> Rect {
         if w.max {
-            let wa = self.work_area();
-            Rect::new(wa.x, wa.y, wa.w, wa.h + 10)
+            self.work_area()
         } else {
             w.r
         }
@@ -690,7 +724,13 @@ impl Shell {
             self.osd = None;
             self.dirty = true;
         }
-        self.sys.web_tick();
+        if self.sys.web_tick() {
+            self.dirty = true;
+        }
+        // the player card's clock moves on each second
+        if self.sys.player.playing && self.sys.player.pos % 100 == 0 && self.sys.look.widgets {
+            self.dirty = true;
+        }
         self.process_reqs();
         if anim && ticks >= self.last_anim + 10 {
             self.last_anim = ticks;
@@ -796,6 +836,7 @@ impl Shell {
     }
 
     fn open_path(&mut self, p: &str) {
+        self.sys.note_recent(p);
         let kind = if self.sys.fs.is_dir(p) {
             AppKind::Files
         } else if [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"].iter().any(|e| p.to_ascii_lowercase().ends_with(e)) {
@@ -950,22 +991,7 @@ impl Shell {
                 }
             }
             _ if self.mobile_mode() => {}
-            Key::Char('d') => {
-                // show the desktop; again brings the windows back
-                let open: Vec<u32> = self.wins.iter().filter(|w| !w.min).map(|w| w.id).collect();
-                if open.is_empty() {
-                    for id in core::mem::take(&mut self.peeked) {
-                        if let Some(i) = self.win_idx(id) {
-                            self.unminimise(i);
-                        }
-                    }
-                } else {
-                    for i in 0..self.wins.len() {
-                        self.minimise(i);
-                    }
-                    self.peeked = open;
-                }
-            }
+            Key::Char('d') => self.show_desktop(),
             Key::Char('m') => {
                 for i in 0..self.wins.len() {
                     self.minimise(i);
@@ -995,7 +1021,7 @@ impl Shell {
                     let x = if k == Key::Left { wa.x } else { wa.x + wa.w - half };
                     self.reshape(i, |w| {
                         w.max = false;
-                        w.r = Rect::new(x, wa.y, half, wa.h + 10);
+                        w.r = Rect::new(x, wa.y, half, wa.h);
                     });
                 }
             }
@@ -1151,13 +1177,50 @@ impl Shell {
                 self.launcher = if self.launcher.is_some() { None } else { Some(Default::default()) };
             }
             Action::Quick(i) => {
+                use widgets::*;
                 match i {
-                    0 => self.sys.wifi = !self.sys.wifi,
-                    1 => self.sys.focus = !self.sys.focus,
+                    Q_WIFI => self.sys.wifi = !self.sys.wifi,
+                    Q_DND => {
+                        self.sys.focus = !self.sys.focus;
+                        self.sys.focus_until = None;
+                    }
                     2 => { let d = !self.sys.dark; self.sys.set_dark(d) }
-                    3 => self.sys.bt = !self.sys.bt,
-                    4 => self.open_app(AppKind::Calendar),
+                    Q_BT => self.sys.bt = !self.sys.bt,
+                    Q_UPNEXT => self.open_app(AppKind::Calendar),
+                    Q_NET => self.sys.reqs.push(Req::Settings(4)),
                     9 => self.sys.mobile_shell = false,
+                    Q_PLAY => self.sys.player.toggle(),
+                    Q_NEXT => self.sys.player.next(),
+                    Q_PREV => self.sys.player.prev(),
+                    Q_SHUFFLE => self.sys.player.shuffle = !self.sys.player.shuffle,
+                    Q_REPEAT => self.sys.player.repeat = !self.sys.player.repeat,
+                    Q_MUSIC => self.open_app(AppKind::Music),
+                    Q_CAL_BACK => self.cal_shift -= 1,
+                    Q_CAL_ON => self.cal_shift += 1,
+                    Q_CAL_TODAY => self.cal_shift = 0,
+                    d if d > Q_DAY => self.open_app(AppKind::Calendar),
+                    Q_FOCUS => {
+                        self.sys.toggle_focus_session(FOCUS_MINS);
+                        if self.sys.focus_until.is_some() {
+                            self.toast("Focus", &alloc::format!("{} minutes, notifications silenced.", FOCUS_MINS));
+                        }
+                    }
+                    Q_WEATHER => {
+                        self.sys.settings_tab = Some(crate::apps::settings::TAB_DESKTOP);
+                        self.sys.reqs.push(Req::Settings(crate::apps::settings::PERSONALISATION));
+                    }
+                    Q_HOME => self.show_desktop(),
+                    Q_SEARCH => {
+                        self.launcher = if self.launcher.is_some() { None } else { Some(Default::default()) };
+                        return;
+                    }
+                    Q_SEARCH_WEB => {
+                        let q = self.launcher.take().map(|e| e.text).unwrap_or_default();
+                        if !q.trim().is_empty() {
+                            self.search_everything(q.trim());
+                        }
+                        return;
+                    }
                     _ => {}
                 }
                 self.sys.save_settings();
@@ -1287,6 +1350,16 @@ impl Shell {
         }
     }
 
+    /// Hyda Search for `q`: your files, the pages you've visited and the web.
+    fn search_everything(&mut self, q: &str) {
+        self.open_app(AppKind::Browser);
+        let u = alloc::format!("hydatek://search?q={}", crate::web::url::encode(q));
+        let target: Option<&mut Box<dyn App>> = if self.mobile_mode() { self.local.app.as_mut() } else { self.wins.last_mut().map(|w| &mut w.app) };
+        if let Some(a) = target {
+            a.open_path(&u, &mut self.sys);
+        }
+    }
+
     fn launcher_matches(&self) -> Vec<AppKind> {
         let q = self.launcher.as_ref().map_or("", |e| e.text.as_str()).to_lowercase();
         DESKTOP_APPS.iter().copied().filter(|k| k.name().to_lowercase().contains(&q)).collect()
@@ -1324,9 +1397,13 @@ impl Shell {
             match k {
                 Key::Esc => self.launcher = None,
                 Key::Enter => {
+                    let q = q.text.trim().to_string();
                     if let Some(k) = self.launcher_matches().first().copied() {
                         self.launcher = None;
                         self.open_app(k);
+                    } else if !q.is_empty() {
+                        self.launcher = None;
+                        self.search_everything(&q);
                     }
                 }
                 Key::Char(' ') if gen => self.launcher = None,
@@ -1372,6 +1449,23 @@ impl Shell {
         }
         if let Some(inst) = self.focused_inst() {
             self.with_app(inst, |a, sys| a.key(k, gen, sys));
+        }
+    }
+
+    /// Show the desktop; again brings the windows back.
+    fn show_desktop(&mut self) {
+        let open: Vec<u32> = self.wins.iter().filter(|w| !w.min).map(|w| w.id).collect();
+        if open.is_empty() {
+            for id in core::mem::take(&mut self.peeked) {
+                if let Some(i) = self.win_idx(id) {
+                    self.unminimise(i);
+                }
+            }
+        } else {
+            for i in 0..self.wins.len() {
+                self.minimise(i);
+            }
+            self.peeked = open;
         }
     }
 
@@ -1526,7 +1620,7 @@ impl Shell {
         }
         self.draw_windows(&mut ui);
         self.draw_ghosts(&mut ui);
-        self.draw_dock(&mut ui);
+        self.draw_rail(&mut ui);
         self.draw_bar(&mut ui);
         // notifications under the launcher and open menus
         self.draw_toasts(&mut ui);
@@ -1558,45 +1652,6 @@ impl Shell {
         self.zones = core::mem::take(&mut ui.zones);
     }
 
-    fn draw_widgets(&self, ui: &mut Ui) {
-        let t = ui.t;
-        let sys = &self.sys;
-        if self.w < 900 {
-            return;
-        }
-        let card = Rect::new(28, BAR_H + 26, 200, 182);
-        ui.shadow(card, 22, 10, 3, 18);
-        ui.rrect(card, 22, t.surface);
-        let top_line = if sys.profile.ready() { sys.greeting() } else { sys.date_long() };
-        let top_line = ui.fit(Face::Regular, 12, &top_line, card.w - 36);
-        ui.text(card.x + 18, card.y + 30, Face::Regular, 12, &top_line, t.text2);
-        ui.text(card.x + 15, card.y + 90, Face::Display, 64, &sys.clock(), t.text);
-        ui.rect(Rect::new(card.x + 18, card.y + 106, card.w - 36, 1), t.line);
-        ui.label(card.x + 18, card.y + 128, 10, "UP NEXT", t.accent);
-        let (title, sub) = match sys.next_event() {
-            Some(e) => (e.title.clone(), alloc::format!("{}{}{}", sys.event_when(e), if e.place.is_empty() { "" } else { " · " }, e.place)),
-            None => ("Nothing scheduled".to_string(), "Add events in Calendar".to_string()),
-        };
-        let title = ui.fit(Face::Semibold, 14, &title, card.w - 36);
-        let sub = ui.fit(Face::Regular, 12, &sub, card.w - 36);
-        ui.text(card.x + 18, card.y + 150, Face::Semibold, 14, &title, t.text);
-        ui.text(card.x + 18, card.y + 168, Face::Regular, 12, &sub, t.text2);
-        ui.zone(Rect::new(card.x, card.y + 110, card.w, 72), Action::Quick(4));
-
-        let qc = Rect::new(28, card.b() + 12, 200, 98);
-        ui.shadow(qc, 22, 10, 3, 18);
-        ui.rrect(qc, 22, t.surface);
-        let items = [("Wi-Fi", sys.wifi), ("Focus", sys.focus), ("Dark mode", sys.dark), ("Bluetooth", sys.bt)];
-        for (i, (name, on)) in items.iter().enumerate() {
-            let r = Rect::new(qc.x + 12 + (i as i32 % 2) * 92, qc.y + 12 + (i as i32 / 2) * 40, 84, 33);
-            let a = Action::Quick(i as u8);
-            let bg = if *on { t.accent } else { t.chip };
-            ui.rrect(r, 12, if ui.hot(a) { bg.mix(t.text, 25) } else { bg });
-            ui.text_in(r, Face::Semibold, 13, name, if *on { t.on_accent } else { t.text }, 1);
-            ui.zone(r, a);
-        }
-    }
-
     fn draw_windows(&mut self, ui: &mut Ui) {
         let t = ui.t;
         let top = self.top();
@@ -1609,7 +1664,7 @@ impl Shell {
             if win.min {
                 continue;
             }
-            let target = if win.max { Rect::new(wa.x, wa.y, wa.w, wa.h + 10) } else { win.r };
+            let target = if win.max { wa } else { win.r };
             let focused = Some(i) == top && kfocus == KFocus::Top;
             let mut r = target;
             // opening and coming back from the dock: drawn on its own, then
@@ -1663,51 +1718,62 @@ impl Shell {
         self.ghosts.retain(|g| now < g.start + g.dur);
     }
 
-    fn draw_dock(&self, ui: &mut Ui) {
+    fn draw_rail(&self, ui: &mut Ui) {
         let t = ui.t;
-        let extra: Vec<AppKind> = self.wins.iter().map(|w| w.app.kind()).filter(|k| !DOCK_APPS.contains(k)).fold(vec![], |mut v, k| {
-            if !v.contains(&k) {
-                v.push(k);
-            }
-            v
-        });
-        let n = 1 + DOCK_APPS.len() as i32 + extra.len() as i32;
-        let bw = 40;
-        let gap = 7;
-        let dw = n * bw + (n - 1) * gap + 16 + if extra.is_empty() { 0 } else { 12 };
-        let dock = Rect::new((self.w - dw) / 2, self.h - 16 - 56, dw, 56);
-        ui.shadow(dock, 20, 10, 4, 50);
-        ui.rrect(dock, 20, t.dock);
-        let mut x = dock.x + 8;
+        let rail = Rect::new(0, BAR_H, RAIL_W, self.h - BAR_H);
+        ui.rect(rail, t.dock.with_alpha(236));
+        ui.zone(rail, Action::Swallow);
+        // the app in front, or the desktop when nothing is
+        let front = self.top().filter(|&i| !self.wins[i].min).map(|i| self.wins[i].app.kind());
         let mut tip: Option<(Rect, &str)> = None;
-        let mut items: Vec<(Icon, Action, &str, bool)> = vec![(Icon::Grid, Action::ToggleLauncher, "All apps", false)];
-        for k in DOCK_APPS.iter().chain(extra.iter()) {
-            let running = self.wins.iter().any(|w| w.app.kind() == *k);
-            items.push((k.icon(), Action::Launch(*k), k.name(), running));
-        }
-        for (i, (ic, a, name, running)) in items.iter().enumerate() {
-            if i == 1 + DOCK_APPS.len() {
-                ui.rect(Rect::new(x + 1, dock.y + 14, 1, 28), Color::rgba(0xFFFFFF, 40));
-                x += 12;
+        for it in self.rail() {
+            let on = match it.kind {
+                Some(k) => front == Some(k),
+                None => it.a == Action::Quick(widgets::Q_HOME) && front.is_none(),
+            };
+            let hot = ui.hot(it.a);
+            let bg = if on { t.accent } else if hot { t.dock_btn } else { t.dock.with_alpha(0) };
+            if on || hot {
+                ui.rrect(it.r, 12, bg);
             }
-            let b = Rect::new(x, dock.y + 8, bw, bw);
-            let hot = ui.hot(*a);
-            ui.rrect(b, 12, if hot { t.dock_btn.mix(t.dock_icon, 40) } else { t.dock_btn });
-            ui.icon_in(*ic, b, 20, t.dock_icon);
-            if *running {
-                ui.circle(b.x + bw / 2, b.b() - 4, 2, Color::rgb(0xE8A15F));
+            let size = (it.r.w * 11 / 22).max(16);
+            ui.icon_in(it.icon, it.r, size, if on { t.on_accent } else { t.dock_icon });
+            if let Some(k) = it.kind {
+                if !on && self.wins.iter().any(|w| w.app.kind() == k) {
+                    ui.rrect(Rect::new(2, it.r.y + it.r.h / 2 - 6, 3, 12), 2, Color::rgb(0xE8A15F));
+                }
             }
             if hot {
-                tip = Some((b, name));
+                tip = Some((it.r, it.name));
             }
-            ui.zone(b, *a);
-            x += bw + gap;
+            ui.zone(it.r, it.a);
         }
         if let Some((b, name)) = tip {
             let tw = ui.tw(Face::Medium, 12, name) + 20;
-            let r = Rect::new(b.x + b.w / 2 - tw / 2, b.y - 40, tw, 24);
+            let r = Rect::new(RAIL_W + 6, b.y + b.h / 2 - 12, tw, 24);
+            ui.shadow(r, 8, 8, 2, 40);
             ui.rrect(r, 8, t.dock);
             ui.text_in(r, Face::Medium, 12, name, t.dock_icon, 1);
+        }
+    }
+
+    /// Where each top-bar menu starts: the logo, then the app's menus.
+    fn menu_x(&self, ui: &Ui, m: u8) -> i32 {
+        if m == 0 {
+            return 8;
+        }
+        let mut x = 44 + ui.tw(Face::Semibold, 14, "HydatekOS") + 22;
+        x += ui.tw(Face::Semibold, 14, self.app_title()) + 20;
+        for mm in MENUS.iter().take(m as usize - 1) {
+            x += ui.tw(Face::Regular, 14, mm) + 22;
+        }
+        x - 9
+    }
+
+    fn app_title(&self) -> &'static str {
+        match self.top() {
+            Some(i) if !self.mobile_mode() && !self.wins[i].min => self.wins[i].app.kind().name(),
+            _ => "Desktop",
         }
     }
 
@@ -1715,71 +1781,88 @@ impl Shell {
         let t = ui.t;
         let bar = Rect::new(0, 0, self.w, BAR_H);
         ui.rect(bar, t.bar);
+        ui.rect(Rect::new(0, BAR_H - 1, self.w, 1), t.line.with_alpha(160));
         ui.zone(bar, Action::Swallow);
-        // logo
-        let lr = Rect::new(10, 5, 18, 18);
+        let base = BAR_H / 2 + 5;
+        // the logo opens the system menu
         let la = Action::Menu(0);
+        let lz = Rect::new(8, 6, 30, 28);
         if ui.hot(la) || self.menu == Some(0) {
-            ui.rrect(Rect::new(6, 3, 26, 22), 6, t.hover);
+            ui.rrect(lz, 8, t.hover);
         }
-        logo(ui, lr.x, lr.y, lr.w, t.accent, t.on_accent);
-        ui.zone(Rect::new(6, 3, 26, 22), la);
-        let mut x = 38;
-        x += ui.text(x, 19, Face::Semibold, 13, "HydatekOS", t.text) + 18;
-        let app_name = match self.top() {
-            Some(i) if !self.mobile_mode() => self.wins[i].app.kind().name(),
-            _ => "Desktop",
-        };
-        x += ui.text(x, 19, Face::Semibold, 13, app_name, t.text) + 16;
+        logo(ui, 12, 9, 22, t.accent, t.on_accent);
+        ui.zone(lz, la);
+        let mut x = 44;
+        x += ui.text(x, base, Face::Semibold, 14, "HydatekOS", t.text) + 22;
+        x += ui.text(x, base, Face::Semibold, 14, self.app_title(), t.text) + 20;
         for (i, m) in MENUS.iter().enumerate() {
             let a = Action::Menu(i as u8 + 1);
-            let w = ui.tw(Face::Regular, 13, m) + 16;
-            let r = Rect::new(x - 8, 3, w, 22);
+            let w = ui.tw(Face::Regular, 14, m) + 18;
+            let r = Rect::new(x - 9, 7, w, 26);
             if ui.hot(a) || self.menu == Some(i as u8 + 1) {
-                ui.rrect(r, 6, t.hover);
+                ui.rrect(r, 7, t.hover);
             }
-            ui.text(x, 19, Face::Regular, 13, m, t.text);
+            ui.text(x, base, Face::Regular, 14, m, t.text2.mix(t.text, 140));
             ui.zone(r, a);
             x += w + 4;
         }
-        // status area
-        let clock = alloc::format!("{}  {}", self.sys.date_short(), self.sys.clock());
+        let menus_end = x;
+        // the status area, from the right
+        let clock = alloc::format!("{}   {}", self.sys.date_short(), self.sys.clock());
         let cw = ui.tw(Face::Medium, 13, &clock);
-        let mut rx = self.w - 14 - cw;
-        ui.text(rx, 19, Face::Medium, 13, &clock, t.text);
+        let mut rx = self.w - 16 - cw;
+        ui.text(rx, base, Face::Medium, 13, &clock, t.text);
+        let iy = (BAR_H - 18) / 2;
         // the battery, when there is one (ACPI's _BST)
         if let Some((pct, charging)) = self.sys.battery {
-            rx -= 30;
-            ui.icon(Icon::Battery, rx, 6, 16, t.text);
+            rx -= 34;
+            ui.icon(Icon::Battery, rx, iy, 18, t.text);
             let label = alloc::format!("{}%{}", pct, if charging { "+" } else { "" });
             let lw = ui.tw(Face::Medium, 12, &label);
             rx -= lw + 4;
-            ui.text(rx, 19, Face::Medium, 12, &label, if pct <= 10 && !charging { t.danger } else { t.text });
+            ui.text(rx, base, Face::Medium, 12, &label, if pct <= 10 && !charging { t.danger } else { t.text });
         }
-        rx -= 26;
-        let wifi_col = if self.sys.wifi { t.text } else { t.text3 };
-        ui.icon(Icon::Wifi, rx, 6, 16, wifi_col);
+        rx -= 32;
+        let muted = self.sys.muted || self.sys.volume == 0;
+        ui.icon(if muted { Icon::SpeakerOff } else { Icon::Speaker }, rx, iy, 18, t.text);
+        rx -= 32;
+        ui.icon(Icon::Wifi, rx, iy, 18, if self.sys.wifi || self.sys.net.ip.is_some() { t.text } else { t.text3 });
         if self.sys.link.paired {
-            rx -= 26;
-            ui.icon(Icon::Phone, rx, 6, 16, t.text);
-            ui.zone(Rect::new(rx - 4, 2, 24, 24), Action::Launch(AppKind::PhoneLink));
+            rx -= 32;
+            ui.icon(Icon::Phone, rx, iy, 18, t.text);
+            ui.zone(Rect::new(rx - 5, 6, 28, 28), Action::Launch(AppKind::PhoneLink));
         }
         if self.sys.profile.ready() {
-            rx -= 30;
+            rx -= 36;
             let pa = Action::Menu(5);
             if ui.hot(pa) || self.menu == Some(5) {
-                ui.rrect(Rect::new(rx - 4, 2, 28, 24), 6, t.hover);
+                ui.rrect(Rect::new(rx - 4, 5, 32, 30), 8, t.hover);
             }
-            ui.avatar(Rect::new(rx, 4, 20, 20), &self.sys.avatar);
-            ui.zone(Rect::new(rx - 4, 2, 28, 24), pa);
+            ui.avatar(Rect::new(rx, 8, 24, 24), &self.sys.avatar);
+            ui.zone(Rect::new(rx - 4, 5, 32, 30), pa);
         }
-        rx -= 26;
-        let sa = Action::ToggleLauncher;
-        if ui.hot(sa) {
-            ui.rrect(Rect::new(rx - 4, 3, 24, 22), 6, t.hover);
+        // search, in the middle when there's room for it
+        let room = rx - 24 - menus_end - 24;
+        if room >= 150 {
+            let pw = room.min(380);
+            let px = ((self.w - pw) / 2).clamp(menus_end + 24, rx - 24 - pw);
+            let pr = Rect::new(px, 6, pw, BAR_H - 12);
+            let a = Action::Quick(widgets::Q_SEARCH);
+            ui.rrect(pr, pr.h / 2, if ui.hot(a) { t.surface } else { t.surface.with_alpha(200) });
+            ui.stroke(pr, pr.h / 2, 1, t.line);
+            ui.icon(Icon::Search, pr.x + 14, pr.y + (pr.h - 16) / 2, 16, t.text2);
+            let hint = ui.fit(Face::Regular, 13, "Search anything…", pr.w - 50);
+            ui.text(pr.x + 40, base, Face::Regular, 13, &hint, t.text3);
+            ui.zone(pr, a);
+        } else {
+            rx -= 32;
+            let a = Action::Quick(widgets::Q_SEARCH);
+            if ui.hot(a) {
+                ui.rrect(Rect::new(rx - 5, 6, 28, 28), 8, t.hover);
+            }
+            ui.icon(Icon::Search, rx, iy, 18, t.text);
+            ui.zone(Rect::new(rx - 5, 6, 28, 28), a);
         }
-        ui.icon(Icon::Search, rx, 6, 16, t.text);
-        ui.zone(Rect::new(rx - 4, 3, 24, 22), sa);
     }
 
     fn draw_launcher(&self, ui: &mut Ui) {
@@ -1788,7 +1871,14 @@ impl Shell {
         ui.zone(Rect::new(0, 0, self.w, self.h), Action::Background);
         let pw = 580.min(self.w - 40);
         // room for every app (rows of five) and the hint under them
-        let ph = 84 + (DESKTOP_APPS.len() as i32 + 4) / 5 * 108 + 36;
+        let typed = self.launcher.as_ref().map_or(false, |e| !e.text.trim().is_empty());
+        let ph = if typed {
+            // shrinks to what matches, and the line to search everything
+            let n = self.launcher_matches().len() as i32;
+            84 + (n + 4) / 5 * 108 + 56 + 40
+        } else {
+            84 + (DESKTOP_APPS.len() as i32 + 4) / 5 * 108 + 36
+        };
         let panel = Rect::new((self.w - pw) / 2, (self.h - ph - 40) / 2, pw, ph);
         ui.shadow(panel, 24, 20, 10, 90);
         ui.rrect(panel, 24, t.surface);
@@ -1801,7 +1891,7 @@ impl Shell {
         ui.icon(Icon::Search, sr.x + 14, sr.y + 11, 16, t.text2);
         let tr = Rect::new(sr.x + 40, sr.y, sr.w - 50, sr.h);
         if q.is_empty() {
-            ui.text_in(tr, Face::Regular, 15, "Search apps", t.text3, 0);
+            ui.text_in(tr, Face::Regular, 15, "Search apps, files and the web", t.text3, 0);
         }
         ui.text_in(tr, Face::Regular, 15, q, t.text, 0);
         if (ui.ticks / 50) % 2 == 0 {
@@ -1822,6 +1912,18 @@ impl Shell {
             ui.icon_in(k.icon(), tile, 26, if k.warm() { t.accent } else { t.text });
             ui.text_in(Rect::new(cell.x, cell.y + 74, cw, 20), Face::Regular, 13, k.name(), t.text, 1);
             ui.zone(cell, a);
+        }
+        let found = self.launcher_matches().len() as i32;
+        if !q.is_empty() {
+            let y = panel.y + 84 + (found + 4) / 5 * 108 + if found == 0 { 0 } else { 4 };
+            let row = Rect::new(panel.x + 24, y, panel.w - 48, 44);
+            let a = Action::Quick(widgets::Q_SEARCH_WEB);
+            ui.rrect(row, 12, if ui.hot(a) || found == 0 { t.hover } else { t.chip.with_alpha(120) });
+            ui.icon(Icon::Globe, row.x + 14, row.y + 13, 18, t.accent);
+            let label = alloc::format!("Search your files and the web for “{}”", q);
+            let label = ui.fit(Face::Medium, 14, &label, row.w - 56);
+            ui.text_in(Rect::new(row.x + 44, row.y, row.w - 54, row.h), Face::Medium, 14, &label, t.text, 0);
+            ui.zone(row, a);
         }
         let hint = "Enter opens the first match · Esc closes";
         ui.text_in(Rect::new(panel.x, panel.b() - 34, panel.w, 20), Face::Regular, 12, hint, t.text3, 1);
@@ -1885,20 +1987,8 @@ impl Shell {
                 items.push(("Home Folder".to_string(), Cmd::GoHome));
             }
         }
-        // position under the title
-        let mut x = 6;
-        if m >= 1 {
-            x = 38 + ui.tw(Face::Semibold, 13, "HydatekOS") + 18;
-            let app_name = match self.top() {
-                Some(i) => self.wins[i].app.kind().name(),
-                None => "Desktop",
-            };
-            x += ui.tw(Face::Semibold, 13, app_name) + 16;
-            for mm in MENUS.iter().take(m as usize - 1) {
-                x += ui.tw(Face::Regular, 13, mm) + 20;
-            }
-            x -= 8;
-        }
+        // under its title
+        let mut x = self.menu_x(ui, m);
         // wide enough for the longest label and its shortcut
         let mut w = 220;
         for (label, _) in &items {
@@ -2002,7 +2092,9 @@ impl Shell {
             // slides in from the right edge
             let p = anim::progress(toast.until.saturating_sub(500), self.motion(anim::POPUP + 8), ui.ticks);
             let dx = (1000 - anim::ease_out(p)) * 340 / 1000;
-            let r = Rect::new(self.w - 336 + dx, BAR_H + 14 + i as i32 * 78, 320, 66);
+            // beside the right-hand cards, not over them
+            let edge = self.widget_columns().1.map_or(self.w, |c| c.x - 4);
+            let r = Rect::new(edge - 336 + dx, BAR_H + 14 + i as i32 * 78, 320, 66);
             ui.shadow(r, 16, 12, 6, 55);
             ui.rrect(r, 16, t.surface);
             if t.dark {

@@ -9,7 +9,7 @@
         │       → crossfade to lock screen → 100 Hz event loop
         ▼
  ┌────────────────────────────── shell/ ──────────────────────────────┐
- │ desktop: menu bar · widgets · window manager · dock · launcher ·   │
+ │ desktop: top bar · cards · window manager · app rail · launcher ·   │
  │          notifications · menus                                     │
  │ mobile:  home screen · app grid · dock · full-screen apps          │
  │ mirrors: mobile screens rendered offscreen at 390x844, scaled in   │

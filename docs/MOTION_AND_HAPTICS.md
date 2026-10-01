@@ -2,7 +2,7 @@
 
 ## Animations
 
-| A window opening (Hydatek+C) | Minimising into the dock (Hydatek+↓) |
+| A window opening (Hydatek+C) | Minimising into the app rail (Hydatek+↓) |
 |---|---|
 | ![Opening](screenshots/anim-open.png) | ![Minimising](screenshots/anim-minimise.png) |
 
@@ -10,8 +10,8 @@
 |---|---|---|
 | A window opens | zooms up from 94% with a small spring, fading in | 220 ms |
 | A window closes | shrinks a little and fades away | 160 ms |
-| Minimise | flies into its dock icon | 260 ms |
-| Back from the dock | grows out of its dock icon | 260 ms |
+| Minimise | flies into its button on the app rail | 260 ms |
+| Back from the app rail | grows out of its button on the rail | 260 ms |
 | Maximise, restore, snap (F11, Hydatek+arrows, double-click) | glides to the new place and size | 200 ms |
 | The start menu, menus, the shortcuts sheet | fade in | 160 ms |
 | Notifications | slide in from the right | 240 ms |

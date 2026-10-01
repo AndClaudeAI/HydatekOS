@@ -12,6 +12,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// Personalisation, and its Desktop tab (where the cards are set up).
+pub const PERSONALISATION: usize = 2;
+pub const TAB_DESKTOP: u8 = 2;
+
 pub const SECTIONS: [&str; 15] = ["Profile", "Accounts", "Personalisation", "Keyboard", "Network", "Bluetooth", "Phone Link", "Lock screen", "Browser", "Display", "Assistant", "Sound & haptics", "Devices", "About", "Install"];
 
 const C_SECTION: u32 = 100;
@@ -55,6 +59,9 @@ pub struct Settings {
     /// Assistant: the API key being typed, the models the key can use (once
     /// asked for), the request asking, and the last message
     claude_key: super::LineEdit,
+    /// the weather card's town and the Focus card's line, being typed
+    town: super::LineEdit,
+    intention: super::LineEdit,
     models: Vec<crate::web::claude::Model>,
     listing: Option<u32>,
     claude_msg: String,
@@ -165,7 +172,8 @@ impl Settings {
             Some(i) => (i.min(SECTIONS.len() - 1), true),
             None => (0, false),
         };
-        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0, ptab: 0, inst_sel: None, inst_bring: true, inst_confirm: false, apply: 0, thumbs: Vec::new(), pics: None }
+        let ptab = sys.settings_tab.take().unwrap_or(0);
+        Settings { sec, name: String::new(), picking: false, picker: Default::default(), chosen: None, acc_name: String::new(), acc_admin: false, acc_confirm: None, acc_msg: String::new(), page, pin: String::new(), password: String::new(), focus: 0, pin_msg: String::new(), claude_key: Default::default(), town: Default::default(), intention: Default::default(), models: Vec::new(), listing: None, claude_msg: String::new(), tester: None, ink: Vec::new(), pad: Rect::new(0, 0, 0, 0), at: (0, 0), inking: false, dev_top: 0, ptab, inst_sel: None, inst_bring: true, inst_confirm: false, apply: 0, thumbs: Vec::new(), pics: None }
     }
 
     /// The Keyboard section: the Gen and Aux keys.
@@ -653,11 +661,11 @@ impl Settings {
             _ => {
                 card(ui, Rect::new(m.x, top, m.w, 250));
                 let inner = Rect::new(m.x + 16, top, m.w - 32, 250);
-                row(ui, inner, top + 6, "Desktop widgets", "The clock, what's next and quick settings");
+                row(ui, inner, top + 6, "Desktop cards", "The clock, quick settings, weather, music, calendar and focus");
                 ui.switch(sw_x, top + 14, look.widgets, Action::App(inst, C_WIDGETS));
                 row(ui, inner, top + 54, "Mobile shell", "Use the HydatekOS Mobile home screen on this device");
                 ui.switch(sw_x, top + 62, sys.mobile_shell, Action::App(inst, C_MOBILE));
-                row(ui, inner, top + 102, "Focus", "Silence Phone Link notifications");
+                row(ui, inner, top + 102, "Do Not Disturb", "Silence notifications (the Focus card does it for 25 minutes)");
                 ui.switch(sw_x, top + 110, sys.focus, Action::App(inst, C_FOCUS));
                 row(ui, inner, top + 150, "Reduce motion", "Windows and menus appear and go without animating");
                 ui.switch(sw_x, top + 158, sys.reduce_motion, Action::App(inst, C_MOTION));
@@ -666,6 +674,28 @@ impl Settings {
                 ui.button(Rect::new(sw_x - 44, top + 204, 30, 26), "-", Action::App(inst, C_PTR_DOWN), false);
                 ui.text_in(Rect::new(sw_x - 12, top + 204, 20, 26), Face::Semibold, 13, &ps, t.text, 1);
                 ui.button(Rect::new(sw_x + 12, top + 204, 30, 26), "+", Action::App(inst, C_PTR_UP), false);
+                // the desktop's cards
+                let c2 = Rect::new(m.x, top + 262, m.w, 200);
+                card(ui, c2);
+                let inner = Rect::new(m.x + 16, c2.y, m.w - 32, c2.h);
+                let wx = &sys.weather;
+                let state = match (&wx.status, wx.now, &wx.place) {
+                    (crate::web::weather::Status::Off, _, _) => String::from("Your town, for the weather card (from Open-Meteo, no account needed)"),
+                    (_, Some(n), Some(p)) => format!("{}: {}°C, {}", p.name, n.temp, crate::web::weather::describe(n.code)),
+                    (crate::web::weather::Status::Unknown, _, _) => String::from("That town wasn't found. Try its name in English"),
+                    (crate::web::weather::Status::Failed(e), _, _) => format!("Not reached yet: {}", e),
+                    _ if sys.net.ip.is_none() => String::from("Shown once the computer is online"),
+                    _ => String::from("Looking it up…"),
+                };
+                row(ui, inner, c2.y + 6, "Weather", &state);
+                let fw = (inner.w - 90).min(320);
+                let town_shown = if self.focus == C_TOWN { self.town.clone() } else { super::LineEdit::new(wx.town.clone()) };
+                ui.line(Rect::new(inner.x, c2.y + 52, fw, 32), &town_shown, "e.g. Owerri", self.focus == C_TOWN, Action::App(inst, C_TOWN));
+                ui.button(Rect::new(inner.x + fw + 10, c2.y + 52, 70, 32), "Save", Action::App(inst, C_TOWN_SAVE), self.focus == C_TOWN);
+                row(ui, inner, c2.y + 98, "Focus card", "Its line, and a 25-minute session (Do Not Disturb) when you click it");
+                let line_shown = if self.focus == C_INTENT { self.intention.clone() } else { super::LineEdit::new(sys.intention.clone()) };
+                ui.line(Rect::new(inner.x, c2.y + 146, fw, 32), &line_shown, crate::sys::INTENTION, self.focus == C_INTENT, Action::App(inst, C_INTENT));
+                ui.button(Rect::new(inner.x + fw + 10, c2.y + 146, 70, 32), "Save", Action::App(inst, C_INTENT_SAVE), self.focus == C_INTENT);
             }
         }
     }
@@ -1210,6 +1240,10 @@ const C_TOD: u32 = 1570;
 const C_MODE: u32 = 1580;
 const C_ACC_WALL: u32 = 1590;
 const C_WIDGETS: u32 = 1591;
+const C_TOWN: u32 = 1592;
+const C_TOWN_SAVE: u32 = 1593;
+const C_INTENT: u32 = 1594;
+const C_INTENT_SAVE: u32 = 1595;
 const C_PIC: u32 = 1600;
 const C_PHOTO: u32 = 1620;
 const C_RES: u32 = 1700;
@@ -1652,7 +1686,7 @@ impl App for Settings {
 
     fn action(&mut self, code: u32, _double: bool, sys: &mut Sys) {
         let was = self.focus;
-        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN, C_CLAUDE_KEY].contains(&code) { code } else { 0 };
+        self.focus = if [C_PIN_FIELD, C_PW_FIELD, C_NAME_FIELD, C_NAME_SAVE, C_ACC_NAME, C_ACC_ADMIN, C_CLAUDE_KEY, C_TOWN, C_INTENT].contains(&code) { code } else { 0 };
         if self.focus == C_ACC_ADMIN {
             self.focus = C_ACC_NAME;
         }
@@ -1772,6 +1806,31 @@ impl App for Settings {
             }
             C_WIDGETS => {
                 sys.look.widgets = !sys.look.widgets;
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_TOWN => {
+                if was != C_TOWN {
+                    self.town.set(sys.weather.town.clone());
+                }
+                return;
+            }
+            C_INTENT => {
+                if was != C_INTENT {
+                    self.intention.set(sys.intention.clone());
+                }
+                return;
+            }
+            C_TOWN_SAVE => {
+                let town = String::from(self.town.text.trim());
+                let crate::sys::Sys { weather, web, .. } = sys;
+                weather.set_town(&town, web);
+                sys.reqs.push(Req::SaveSettings);
+                return;
+            }
+            C_INTENT_SAVE => {
+                let line = self.intention.text.trim();
+                sys.intention = if line.is_empty() { String::from(crate::sys::INTENTION) } else { line.chars().take(80).collect() };
                 sys.reqs.push(Req::SaveSettings);
                 return;
             }
@@ -2107,6 +2166,20 @@ impl App for Settings {
             }
             return;
         }
+        if self.focus == C_TOWN || self.focus == C_INTENT {
+            let (e, save) = if self.focus == C_TOWN { (&mut self.town, C_TOWN_SAVE) } else { (&mut self.intention, C_INTENT_SAVE) };
+            match k {
+                Key::Enter => {
+                    self.focus = 0;
+                    self.action(save, false, sys);
+                }
+                Key::Esc => self.focus = 0,
+                _ => {
+                    e.key_sys(k, gen, sys);
+                }
+            }
+            return;
+        }
         if self.focus == C_ACC_NAME {
             match k {
                 Key::Char(c) if !c.is_control() && self.acc_name.chars().count() < crate::profile::NAME_MAX => self.acc_name.push(c),
@@ -2193,6 +2266,9 @@ impl App for Settings {
         if let Some(i) = sys.settings_page.take() {
             self.sec = i.min(SECTIONS.len() - 1);
             self.page = true;
+            if let Some(tab) = sys.settings_tab.take() {
+                self.ptab = tab;
+            }
         }
     }
 

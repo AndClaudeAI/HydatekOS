@@ -55,7 +55,7 @@ Windows, macOS or Linux.
   the graphics (Intel, AMD, NVIDIA, Qualcomm Adreno…). Details:
   [docs/HARDWARE.md](docs/HARDWARE.md).
 - **Motion and haptics:** windows zoom open, fade away when closed, fly into
-  the dock when minimised and glide when maximised or snapped; the start menu,
+  the app rail when minimised and glide when maximised or snapped; the start menu,
   menus and notifications animate in. Haptic feedback taps for keys and
   switches and buzzes for mistakes, played on a paired Android phone's motor;
   Settings › Sound & haptics shows each pattern. Details:
@@ -69,7 +69,7 @@ Windows, macOS or Linux.
 - **Claude, the assistant:** HydatekOS's assistant is Claude, made by Anthropic.
   The setup assistant introduces it and takes your Anthropic API key, or you can
   add the key later in Settings › Assistant. Then ask Claude anything from its app,
-  first in the dock. Requests go straight to Anthropic's API over HydatekOS's own
+  on the app rail. Requests go straight to Anthropic's API over HydatekOS's own
   TLS, carrying only what you type. It uses the newest Opus model your key can
   use. Details: [docs/ASSISTANT.md](docs/ASSISTANT.md).
 - **Accounts:** several people can share the computer, each with their own home
@@ -99,9 +99,11 @@ Windows, macOS or Linux.
   portrait touch screens, and from the keyboard button in the field on desktops. Switch between them under the keypad; set them up
   in Settings › Lock screen. The screen also locks after idle time, from the logo
   menu, or with **F12**.
-- **Desktop shell:** menu bar with working menus, clock and "Up next" widget, quick
-  toggles, a dock with running-app indicators and tooltips, an app launcher with search,
-  and notifications.
+- **Desktop shell** ([docs/DESKTOP.md](docs/DESKTOP.md)): a top bar with working menus
+  and a search box for apps, files and the web; an app rail down the left with
+  running-app marks and tooltips; and cards on the desktop: the clock with what's up
+  next, quick settings with the weather, a line for the day, a music player, the month
+  and a Focus timer. There's also an app launcher, and notifications.
 - **Window manager:** overlapping windows with drag, resize, maximise (double-click the
   header), minimise, close, focus and soft shadows.
 - **Mobile shell:** the phone home screen from the design (clock, Up next card, app grid,
@@ -149,7 +151,7 @@ Windows, macOS or Linux.
 - **Persistent storage:** your files, settings and calendar live in `\HYDATEK\` on the
   boot disk and survive reboots.
 - **Wallpaper and personalisation:** a dynamic theme. The accent, windows,
-  sidebars, lines, menu bar and dock all take their colours from the
+  sidebars, lines, top bar and app rail all take their colours from the
   wallpaper, and ease to new ones when it changes. There are ten photographs. There are also seven scenes drawn at your screen's own size
   (Dune, Lagoon, Aurora, Hills, Mesa, Bloom, Harmattan) whose skies can follow the
   time of day, plus solid colours, gradients and your own pictures (fill, fit,
@@ -233,8 +235,8 @@ The install guide also covers putting HydatekOS next to another OS by hand.
 
 | Action | How |
 |---|---|
-| Open any app | Tap the **Hydatek key**, the grid button in the dock, the search icon in the menu bar, **Gen+Space** or **F1** |
-| Ask Claude | The ✳ button first in the dock, or **Gen+Space** and type *Claude* |
+| Open any app | Tap the **Hydatek key**, the grid button on the app rail, the search box in the top bar, **Gen+Space** or **F1** |
+| Ask Claude | The ✳ button on the app rail, or **Gen+Space** and type *Claude* |
 | Move / maximise a window | Drag the header / double-click it |
 | Resize a window | Drag the bottom-right corner |
 | Close the front window | **Gen+W** or the orange button |

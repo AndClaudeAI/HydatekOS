@@ -81,7 +81,7 @@ Windows key is on Windows:
 | Hydatek+← / → | Snap the front window to the left / right half of the screen |
 | Hydatek+Tab | Next window (with Shift, the one before) |
 | Hydatek+X | The HydatekOS menu: profile, lock, sign out, restart, shut down |
-| Hydatek+1 … 9 | The dock's apps, in order (Hydatek+1 is Claude) |
+| Hydatek+1 … 9 | The app rail's apps, in order (Hydatek+1 is Claude) |
 | Hydatek+/ | Keyboard shortcuts |
 
 A tap only counts when the key is let go without another key pressed with it,
@@ -133,7 +133,7 @@ touch screens.
 | F2 | Rename (Files) / edit the cell (Hyda Grids) |
 | F5 | Reload (Browser) / start the slideshow (Hyda Slides) |
 | Esc | Close a menu, dialog or the launcher; clear a box |
-| Volume up / down, Mute | Change the volume, shown above the dock |
+| Volume up / down, Mute | Change the volume, shown near the bottom of the screen |
 | Brightness up / down | Dim or brighten the screen (10% to 100%) |
 | Sleep | Lock the screen (HydatekOS has no sleep states yet) |
 | Caps Lock | Password boxes say "Caps Lock is on" when it is |

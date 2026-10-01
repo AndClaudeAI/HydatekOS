@@ -63,6 +63,12 @@ pub struct NetStatus {
     pub tx: u64,
 }
 
+/// The Focus card's line until it's changed.
+/// How many files Recent keeps.
+pub const RECENT_MAX: usize = 30;
+
+pub const INTENTION: &str = "Build the things you care about.";
+
 pub struct Sys {
     pub dark: bool,
     pub accent: usize,
@@ -112,6 +118,8 @@ pub struct Sys {
     pub avatar: crate::gfx::Canvas,
     /// a section Settings should show when it next draws
     pub settings_page: Option<usize>,
+    /// and the tab of it (Personalisation's)
+    pub settings_tab: Option<u8>,
     /// the accounts on this computer, and who is signed in
     pub accounts: crate::accounts::Accounts,
     pub user: String,
@@ -172,6 +180,15 @@ pub struct Sys {
     /// screen brightness 10-100 (a software dimmer until there are display
     /// drivers)
     pub brightness: u8,
+    /// the desktop's weather card (web/weather.rs)
+    pub weather: crate::web::weather::Weather,
+    /// what's playing: shared by Music and the desktop's player card
+    pub player: crate::apps::music::Player,
+    /// the line on the Focus card, and when a focus session ends (ms)
+    pub intention: String,
+    pub focus_until: Option<u64>,
+    /// files opened lately, newest first: (path, when, in minutes; see stamp)
+    pub recent: Vec<(String, u64)>,
 }
 
 /// A PIN or password: (salt, stretched hash).
@@ -225,6 +242,30 @@ pub fn weekday(y: i32, m: i32, d: i32) -> usize {
     ((y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d).rem_euclid(7)) as usize
 }
 
+/// Days from 1 January 2000 to y-m-d (Howard Hinnant's days_from_civil).
+pub fn days_since_2000(y: i32, m: i32, d: i32) -> i32 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 730425
+}
+
+/// The date `days` after 1 January 2000.
+pub fn civil_from_days(days: i32) -> (i32, i32, i32) {
+    let z = days + 730425;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
 pub fn days_in_month(y: i32, m: i32) -> i32 {
     match m {
         2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
@@ -271,6 +312,7 @@ impl Sys {
             photo: None,
             avatar: crate::gfx::Canvas::new(1, 1),
             settings_page: None,
+            settings_tab: None,
             accounts: Default::default(),
             user: String::from(crate::accounts::FIRST),
             people: Vec::new(),
@@ -298,6 +340,11 @@ impl Sys {
             install_targets: Vec::new(),
             install_state: crate::install::State::Idle,
             install_request: None,
+            weather: Default::default(),
+            player: Default::default(),
+            intention: String::from(INTENTION),
+            focus_until: None,
+            recent: Vec::new(),
             battery: None,
             lux: None,
             auto_brightness: true,
@@ -362,6 +409,62 @@ impl Sys {
         self.load_events();
         self.load_search();
         self.load_assistant();
+        self.load_recent();
+    }
+
+    fn load_recent(&mut self) {
+        self.recent.clear();
+        let Some(data) = self.fs.read_raw(&self.sys_file("recent.txt")) else { return };
+        for line in String::from_utf8_lossy(&data).lines() {
+            if let Some((when, path)) = line.split_once(' ') {
+                if let Ok(w) = when.parse() {
+                    self.recent.push((String::from(path), w));
+                }
+            }
+        }
+    }
+
+    /// A file was opened: it goes to the top of Recent (Files).
+    pub fn note_recent(&mut self, path: &str) {
+        if self.fs.is_dir(path) {
+            return;
+        }
+        let now = self.stamp();
+        self.recent.retain(|r| r.0 != path);
+        self.recent.insert(0, (String::from(path), now));
+        self.recent.truncate(RECENT_MAX);
+        let text: String = self.recent.iter().map(|(p, w)| format!("{} {}\n", w, p)).collect();
+        let f = self.sys_file("recent.txt");
+        self.fs.write_raw(&f, text.as_bytes());
+    }
+
+    /// Now, in minutes since 1 January 2000.
+    pub fn stamp(&self) -> u64 {
+        let t = self.now;
+        days_since_2000(t.year as i32, t.month as i32, t.day as i32) as u64 * 1440 + self.minutes() as u64
+    }
+
+    /// "Just now", "2h ago", "Yesterday", "3 Oct": how long ago `stamp` was.
+    pub fn ago(&self, stamp: u64) -> String {
+        let now = self.stamp();
+        let mins = now.saturating_sub(stamp);
+        let today_start = now - self.minutes() as u64;
+        if mins < 2 {
+            String::from("Just now")
+        } else if mins < 60 {
+            format!("{} min ago", mins)
+        } else if stamp >= today_start {
+            format!("{}h ago", mins / 60)
+        } else if stamp + 1440 >= today_start {
+            String::from("Yesterday")
+        } else {
+            let (y, m, d) = civil_from_days((stamp / 1440) as i32);
+            if y == self.now.year as i32 {
+                format!("{} {}", d, &MONTHS[(m - 1) as usize][..3])
+            } else {
+                format!("{} {} {}", d, &MONTHS[(m - 1) as usize][..3], y)
+            }
+        }
     }
 
     /// Forget the signed-in account's things (before loading another's).
@@ -369,6 +472,10 @@ impl Sys {
         self.dark = false;
         self.accent = 0;
         self.focus = false;
+        self.focus_until = None;
+        self.recent.clear();
+        self.intention = String::from(INTENTION);
+        self.weather = Default::default();
         self.mobile_shell = false;
         self.pointer_speed = 3;
         self.search_engine = String::from(crate::web::engines::HYDA);
@@ -585,6 +692,7 @@ impl Sys {
         let had_mode = text.lines().any(|l| l.starts_with("thememode="));
         // and from before dynamic colour: the accent picked stays picked
         let had_accent = text.lines().any(|l| l.starts_with("accentfrom="));
+        let (mut town, mut place) = (String::new(), None);
         for line in text.lines() {
             let mut kv = line.splitn(2, '=');
             let (k, v) = (kv.next().unwrap_or(""), kv.next().unwrap_or("").trim());
@@ -611,10 +719,15 @@ impl Sys {
                 "hstrength" => self.haptics.strength = crate::haptics::Strength::from_id(v),
                 "hphone" => self.haptics.phone = b,
                 "autobright" => self.auto_brightness = b,
+                "weather" => town = String::from(v),
+                "weatherat" => place = crate::web::weather::parse_at(v),
+                "weatherapi" => self.weather.base = String::from(v),
+                "intention" => self.intention = String::from(v),
                 "brightness" => self.brightness = v.parse::<u8>().unwrap_or(100).clamp(MIN_BRIGHTNESS, 100),
                 _ => {}
             }
         }
+        self.weather.restore(&town, place);
         if !had_mode {
             self.look.mode = if self.dark { crate::personal::Mode::Dark } else { crate::personal::Mode::Light };
         }
@@ -647,7 +760,7 @@ impl Sys {
             self.haptics.phone as u8,
             self.auto_brightness as u8
         );
-        let s = s + &self.look.save();
+        let s = s + &self.look.save() + &self.weather.save() + &format!("intention={}\n", self.intention);
         let f = self.sys_file("settings.txt");
         self.fs.write_raw(&f, s.as_bytes());
     }
@@ -759,13 +872,46 @@ impl Sys {
     }
 
     /// Run the crawler and save the index now and then (every tick).
-    pub fn web_tick(&mut self) {
+    /// Web work in the background: Hyda Search's crawler and the weather.
+    /// True when the weather card changed.
+    pub fn web_tick(&mut self) -> bool {
+        let found = self.weather.place.is_some();
+        let changed = self.weather.poll(&mut self.web, crate::arch::ms(), self.net.ip.is_some());
+        if changed && !found && self.weather.place.is_some() {
+            self.save_settings();
+        }
+        // a focus session ending
+        if self.focus_until.map_or(false, |t| crate::arch::ms() >= t) {
+            self.focus_until = None;
+            self.focus = false;
+            self.toast("Focus session over", "Notifications are back on.");
+            self.save_settings();
+        }
+        self.player.tick();
         let now = self.ticks;
         self.search.tick(&mut self.web, now);
         if let Some(data) = self.search.to_save(now) {
             let f = self.sys_file("search.hydx");
             self.fs.write_raw(&f, &data);
         }
+        changed
+    }
+
+    /// Start a focus session of `mins` minutes (Do Not Disturb until then),
+    /// or end the one running.
+    pub fn toggle_focus_session(&mut self, mins: u64) {
+        if self.focus_until.take().is_some() {
+            self.focus = false;
+        } else {
+            self.focus_until = Some(crate::arch::ms() + mins * 60_000);
+            self.focus = true;
+        }
+        self.save_settings();
+    }
+
+    /// Minutes left in the focus session, rounded up.
+    pub fn focus_left(&self) -> Option<u64> {
+        self.focus_until.map(|t| (t.saturating_sub(crate::arch::ms()) + 59_999) / 60_000)
     }
 
     // ---- lock-screen sign-in: PIN, password, phone fingerprint ----------------
@@ -1121,7 +1267,7 @@ impl Sys {
 
     pub fn date_short(&self) -> String {
         let t = self.now;
-        format!("{} {} {}", &DAYS[weekday(t.year as i32, t.month as i32, t.day as i32)][..3], t.day, &MONTHS[(t.month as usize).max(1) - 1][..3])
+        format!("{}, {} {}", &DAYS[weekday(t.year as i32, t.month as i32, t.day as i32)][..3], t.day, &MONTHS[(t.month as usize).max(1) - 1][..3])
     }
 }
 

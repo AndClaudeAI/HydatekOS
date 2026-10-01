@@ -1360,7 +1360,8 @@ impl App for Browser {
     }
 
     fn open_path(&mut self, p: &str, sys: &mut Sys) {
-        let u = format!("hydatek://view?path={}", url::encode(p));
+        // a HydatekOS page (Hyda Search from the top bar), or a file to view
+        let u = if p.starts_with("hydatek://") { String::from(p) } else { format!("hydatek://view?path={}", url::encode(p)) };
         self.go(sys, &u, true);
     }
 

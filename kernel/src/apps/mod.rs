@@ -110,7 +110,7 @@ impl AppKind {
     /// Default window size (logical units).
     pub fn size(self) -> (i32, i32) {
         match self {
-            AppKind::Files => (640, 400),
+            AppKind::Files => (620, 470),
             AppKind::Settings => (700, 590),
             AppKind::Terminal => (600, 380),
             AppKind::PhoneLink => (760, 500),

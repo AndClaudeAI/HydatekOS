@@ -125,7 +125,7 @@ screen:
   assistant's buttons. Dune gives terracotta, Summit, Peak and Gold Vein give
   gold, Jetty gives coral, Valley gives peach, and Wave, Skyline and Dew give
   their own blues and teals.
-- **Windows, sidebars, buttons, lines, the menu bar and the dock** become
+- **Windows, sidebars, buttons, lines, the top bar and the app rail** become
   tones of the wallpaper's main colour. They keep the lightness of the plain
   theme, so the layout reads the same.
 - **Secondary text** (captions, hints) takes the same hue, and is checked to
@@ -155,9 +155,10 @@ that was picked in them.
 
 ## Desktop
 
-**Desktop widgets** shows or hides the clock, *Up next* and the quick settings
-cards on the desktop. The mobile shell, Focus, reduced motion and pointer speed
-are here too.
+**Desktop cards** shows or hides the cards on the desktop
+([DESKTOP.md](DESKTOP.md)). Under it are your town for the weather card and the
+line on the Focus card. The mobile shell, Do Not Disturb, reduced motion and
+pointer speed are here too.
 
 ## The lock screen
 

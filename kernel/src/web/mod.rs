@@ -13,6 +13,7 @@ pub mod json;
 pub mod render;
 pub mod search;
 pub mod url;
+pub mod weather;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

@@ -19,7 +19,7 @@ document's properties. Files you open keep the author they came with
 
 ## Hyda Scripts
 
-Open it from the dock, the app launcher (**F1**, type "scripts"), or by
+Open it from the app rail, the app launcher (**F1**, type "scripts"), or by
 double-clicking a `.hyds` (or `.docx`) file in Files. On a phone-shaped screen it opens full
 screen from Files, with the page fitted to the width.
 
@@ -117,7 +117,7 @@ end 44f68f84                    CRC-32 of every byte before this line
 
 ![Hyda Grids](screenshots/hyda-grids.png)
 
-Hyda Grids is the spreadsheet. Open it from the dock, the app launcher (**F1**,
+Hyda Grids is the spreadsheet. Open it from the app rail, the app launcher (**F1**,
 type "grids"), or by double-clicking a `.hydg` (or `.xlsx` / `.csv`) file in Files.
 A starter sheet, *Budget*, is in Documents.
 
@@ -214,7 +214,7 @@ end f80f9715                    CRC-32 of every byte before this line
 
 ![Hyda Slides](screenshots/hyda-slides.png)
 
-Hyda Slides makes presentations. Open it from the dock, the app launcher (**F1**,
+Hyda Slides makes presentations. Open it from the app rail, the app launcher (**F1**,
 type "slides"), or by double-clicking a `.hydp` (or `.pptx`) file in Files. A
 sample presentation, *Meet HydatekOS*, is in Documents › Presentations.
 

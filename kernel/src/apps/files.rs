@@ -1,9 +1,9 @@
 //! Files: browse, open, create, rename and bin files on the HydatekOS disk.
 
-use super::{side_item, App, AppKind, LineEdit, HEADER};
+use super::{App, AppKind, LineEdit, HEADER};
 use crate::font::Face;
 use crate::fs::{basename, join};
-use crate::gfx::Rect;
+use crate::gfx::{Color, Rect};
 use crate::icons::Icon;
 use crate::sys::{Req, Sys};
 use crate::ui::{Action, Key, Ui};
@@ -36,6 +36,12 @@ pub const C_OPEN: u32 = 16;
 pub const C_SEND_PHONE: u32 = 17;
 pub const C_SET_WALL: u32 = 19;
 const C_PLACE: u32 = 100;
+/// Recent, in the sidebar (after the places and devices)
+const C_RECENT_PLACE: u32 = C_PLACE + 8;
+/// + a file in the Home folder's Recent list
+const C_RECENT: u32 = 200;
+/// the virtual folder of files opened lately
+const RECENT: &str = "recent:";
 const C_ITEM: u32 = 1000;
 
 enum Focus {
@@ -79,7 +85,7 @@ pub fn file_icon(name: &str, dir: bool) -> Icon {
 
 impl Files {
     pub fn new() -> Files {
-        Files { cols: 1, path: "/home/Documents".to_string(), back: vec![], fwd: vec![], sel: None, search: LineEdit::default(), focus: Focus::None, scroll: 0, items: vec![] }
+        Files { cols: 1, path: "/home".to_string(), back: vec![], fwd: vec![], sel: None, search: LineEdit::default(), focus: Focus::None, scroll: 0, items: vec![] }
     }
 
     fn go(&mut self, p: &str) {
@@ -100,6 +106,9 @@ impl Files {
         if self.path == "/" {
             return "This laptop".to_string();
         }
+        if self.path == RECENT {
+            return "Recent".to_string();
+        }
         for (n, p) in PLACES {
             if p == self.path {
                 return n.to_string();
@@ -115,6 +124,9 @@ impl Files {
             } else {
                 vec![]
             }
+        } else if self.path == RECENT {
+            // full paths, of files that are still there
+            sys.recent.iter().filter(|r| sys.fs.exists(&r.0)).map(|r| (r.0.clone(), false, 0)).collect()
         } else {
             sys.fs.list(&self.path)
         };
@@ -127,6 +139,9 @@ impl Files {
     fn selected_path(&self) -> Option<String> {
         let i = self.sel?;
         let it = self.items.get(i)?;
+        if self.path == RECENT {
+            return Some(it.0.clone());
+        }
         Some(join(&self.path, &it.0))
     }
 
@@ -143,7 +158,7 @@ impl Files {
             }
             return;
         }
-        let p = join(&self.path, &it.0);
+        let p = if self.path == RECENT { it.0.clone() } else { join(&self.path, &it.0) };
         if it.1 {
             self.go(&p);
         } else {
@@ -152,6 +167,9 @@ impl Files {
     }
 
     fn delete(&mut self, sys: &mut Sys) {
+        if self.path == RECENT {
+            return;
+        }
         let Some(p) = self.selected_path() else { return };
         if self.path == "/trash" {
             sys.fs.remove(&p);
@@ -173,7 +191,7 @@ impl App for Files {
         self.refresh(sys);
         let t = ui.t;
         let compact = super::compact(r);
-        let side_w = if compact { 0 } else { 150 };
+        let side_w = if compact { 0 } else { 170 };
         // Header
         ui.rect(Rect::new(r.x, r.y + HEADER, r.w, 1), t.line);
         let b = Rect::new(r.x + 14, r.y + 8, 28, 28);
@@ -239,19 +257,26 @@ impl App for Files {
         let side = Rect::new(r.x, r.y + HEADER + 1, side_w, r.h - HEADER - 1);
         if !compact {
             super::panel(ui, r, side, t.sidebar);
-            let mut y = side.y + 14;
-            ui.label(side.x + 16, y + 10, 10, "PLACES", t.text2);
+            let mut y = side.y + 10;
+            let iw = side_w - 16;
+            // Home and Recent, then the places, then devices
+            let item = |ui: &mut Ui, y: &mut i32, icon: Icon, n: &str, on: bool, code: u32| {
+                side_icon_item(ui, Rect::new(side.x + 8, *y, iw, 30), icon, n, on, Action::App(inst, code));
+                *y += 31;
+            };
+            item(ui, &mut y, Icon::Home, "Home", self.path == PLACES[0].1, C_PLACE);
+            item(ui, &mut y, Icon::Clock, "Recent", self.path == RECENT, C_RECENT_PLACE);
+            y += 10;
+            ui.label(side.x + 16, y + 10, 10, "PLACES", t.text3);
             y += 20;
-            for (i, (n, p)) in PLACES.iter().enumerate() {
-                side_item(ui, Rect::new(side.x + 8, y, side_w - 16, 26), n, self.path == *p, Action::App(inst, C_PLACE + i as u32));
-                y += 27;
+            for (i, (n, p)) in PLACES.iter().enumerate().skip(1) {
+                item(ui, &mut y, place_icon(n), n, self.path == *p, C_PLACE + i as u32);
             }
-            y += 12;
-            ui.label(side.x + 16, y + 10, 10, "DEVICES", t.text2);
+            y += 10;
+            ui.label(side.x + 16, y + 10, 10, "DEVICES", t.text3);
             y += 20;
             for (i, (n, p)) in DEVICES.iter().enumerate() {
-                side_item(ui, Rect::new(side.x + 8, y, side_w - 16, 26), n, self.path == *p, Action::App(inst, C_PLACE + 6 + i as u32));
-                y += 27;
+                item(ui, &mut y, if i == 0 { Icon::Laptop } else { Icon::Phone }, n, self.path == *p, C_PLACE + 6 + i as u32);
             }
 
         }
@@ -264,25 +289,44 @@ impl App for Files {
         self.cols = cols as usize;
         let cw = (area.w - 24) / cols;
         let rows = (self.items.len() as i32 + cols - 1) / cols;
-        let max_scroll = (rows * 118 + 24 - (area.h - 30)).max(0);
+        // Home shows its folders, then the files opened lately
+        let home = self.path == PLACES[0].1 && self.search.text.is_empty() && !compact;
+        let head = if home { 30 } else { 0 };
+        let recent: Vec<&(String, u64)> = if home { sys.recent.iter().filter(|r| sys.fs.exists(&r.0)).take(6).collect() } else { vec![] };
+        let recent_h = if recent.is_empty() { 0 } else { 56 + recent.len() as i32 * 40 };
+        let max_scroll = (head + rows * 118 + 24 + recent_h - (area.h - 30)).max(0);
         self.scroll = self.scroll.clamp(0, max_scroll);
+        if home {
+            ui.text(area.x + 24, area.y + 30 - self.scroll, Face::Semibold, 14, "Folders", t.text);
+        }
         for (i, (name, dir, _)) in self.items.iter().enumerate() {
             let (cx, cy) = (i as i32 % cols, i as i32 / cols);
-            let cell = Rect::new(area.x + 12 + cx * cw, area.y + 20 + cy * 118 - self.scroll, cw, 112);
+            let cell = Rect::new(area.x + 12 + cx * cw, area.y + 20 + head + cy * 118 - self.scroll, cw, 112);
             let a = Action::App(inst, C_ITEM + i as u32);
-            let tile = Rect::new(cell.x + (cw - 54) / 2, cell.y + 12, 54, 54);
+            let tile = Rect::new(cell.x + (cw - 54) / 2, cell.y + 10, 54, 54);
             let sel = self.sel == Some(i);
             if sel || ui.hot(a) {
-                ui.rrect(Rect::new(cell.x + 6, cell.y + 4, cw - 12, 104), 12, if sel { t.accent.with_alpha(36) } else { t.hover });
+                ui.rrect(Rect::new(cell.x + 6, cell.y + 2, cw - 12, 108), 12, if sel { t.accent.with_alpha(36) } else { t.hover });
             }
-            ui.rrect(tile, 14, t.tile);
-            let ic = file_icon(name, *dir);
-            ui.icon_in(ic, tile, 22, if *dir { t.accent } else { t.text });
+            let shown = if self.path == RECENT { basename(name) } else { name.as_str() };
+            if *dir {
+                let (glyph, col) = folder_style(&t, shown);
+                folder(ui, tile, glyph, col);
+            } else {
+                ui.rrect(tile, 14, t.tile);
+                let (ic, col) = file_style(&t, shown);
+                ui.icon_in(ic, tile, 22, col);
+            }
             let label = match &self.focus {
                 Focus::Rename(s) if sel => s.text.clone(),
-                _ => ui.fit(Face::Regular, 13, display_name(name), cw - 12),
+                _ => ui.fit(if *dir { Face::Medium } else { Face::Regular }, 13, display_name(shown), cw - 12),
             };
-            let lr = Rect::new(cell.x + 4, cell.y + 74, cw - 8, 22);
+            if *dir && self.path != "phone:" {
+                let n = sys.fs.list(&join(&self.path, name)).len();
+                let count = format!("{} item{}", n, if n == 1 { "" } else { "s" });
+                ui.text_in(Rect::new(cell.x + 4, cell.y + 92, cw - 8, 16), Face::Regular, 12, &count, t.text2, 1);
+            }
+            let lr = Rect::new(cell.x + 4, cell.y + 70, cw - 8, 22);
             if let (Focus::Rename(e), true) = (&self.focus, sel) {
                 ui.rrect(lr, 6, t.surface);
                 ui.stroke(lr, 6, 1, t.accent);
@@ -292,12 +336,52 @@ impl App for Files {
                     ui.rect(Rect::new(lr.x + (lr.w - w) / 2 + cx, lr.y + 4, 1, 14), t.text);
                 }
             } else {
-                ui.text_in(lr, Face::Regular, 13, &label, t.text, 1);
+                ui.text_in(lr, if *dir { Face::Medium } else { Face::Regular }, 13, &label, t.text, 1);
             }
             ui.zone(cell.inset(4), a);
         }
+        if !recent.is_empty() {
+            let mut y = area.y + 20 + head + rows * 118 + 10 - self.scroll;
+            ui.rect(Rect::new(area.x + 24, y, area.w - 48, 1), t.line);
+            y += 30;
+            ui.text(area.x + 24, y, Face::Semibold, 14, "Recent files", t.text);
+            let a = Action::App(inst, C_RECENT_PLACE);
+            let va = "View all";
+            let vw = ui.tw(Face::Medium, 12, va);
+            let vr = Rect::new(area.r() - 24 - vw - 22, y - 16, vw + 22, 22);
+            ui.text(vr.x, y - 1, Face::Medium, 12, va, t.accent);
+            ui.icon(Icon::ChevronRight, vr.r() - 14, y - 12, 12, t.accent);
+            ui.zone(vr, a);
+            y += 14;
+            let wide = area.w - 48;
+            for (i, (p, when)) in recent.iter().enumerate() {
+                let row = Rect::new(area.x + 16, y, area.w - 32, 38);
+                let a = Action::App(inst, C_RECENT + i as u32);
+                if ui.hot(a) {
+                    ui.rrect(row, 10, t.hover);
+                }
+                let name = basename(p);
+                let (ic, col) = file_style(&t, name);
+                let chip = Rect::new(row.x + 8, row.y + 7, 24, 24);
+                ui.rrect(chip, 7, col);
+                ui.icon_in(ic, chip, 14, Color::rgb(0xFFFFFF));
+                let nw = wide * 45 / 100;
+                let n = ui.fit(Face::Medium, 13, display_name(name), nw - 40);
+                ui.text(row.x + 44, row.y + 24, Face::Medium, 13, &n, t.text);
+                let parent = p.rsplit_once('/').map_or("", |(d, _)| d);
+                let folder_name = if parent == "/home" { "Home" } else { basename(parent) };
+                let f = ui.fit(Face::Regular, 12, folder_name, wide * 30 / 100 - 8);
+                ui.text(row.x + 8 + nw, row.y + 24, Face::Regular, 12, &f, t.text2);
+                let ago = sys.ago(*when);
+                ui.text(row.x + 8 + nw + wide * 30 / 100, row.y + 24, Face::Regular, 12, &ago, t.text2);
+                ui.zone(row, a);
+                y += 40;
+            }
+        }
         if self.items.is_empty() {
-            let msg = if self.path == "phone:" && !sys.link.paired {
+            let msg = if self.path == RECENT {
+                "Files you open show up here"
+            } else if self.path == "phone:" && !sys.link.paired {
                 "Pair your phone in Phone Link to browse its photos"
             } else if !self.search.text.is_empty() {
                 "No matching items"
@@ -407,6 +491,12 @@ impl App for Files {
                         sys.fs.rename(&p, &dst);
                         sys.toast("Files", "Restored to Documents");
                     }
+                }
+            }
+            C_RECENT_PLACE => self.go(RECENT),
+            c if (C_RECENT..C_RECENT + 16).contains(&c) => {
+                if let Some((p, _)) = sys.recent.get((c - C_RECENT) as usize) {
+                    sys.reqs.push(Req::OpenPath(p.clone()));
                 }
             }
             c if (C_PLACE..C_PLACE + 8).contains(&c) => {
@@ -520,4 +610,95 @@ impl App for Files {
     fn open_path(&mut self, path: &str, _sys: &mut Sys) {
         self.go(path);
     }
+}
+
+/// A sidebar entry with its icon.
+fn side_icon_item(ui: &mut Ui, r: Rect, icon: Icon, label: &str, selected: bool, a: Action) {
+    let t = ui.t;
+    let (ink, face) = if selected { (t.on_accent, Face::Semibold) } else { (t.text, Face::Regular) };
+    if selected {
+        ui.rrect(r, 9, t.accent);
+    } else if ui.hot(a) {
+        ui.rrect(r, 9, t.hover);
+    }
+    ui.icon(icon, r.x + 10, r.y + (r.h - 16) / 2, 16, if selected { t.on_accent } else { t.text2 });
+    ui.text_in(Rect::new(r.x + 36, r.y, r.w - 40, r.h), face, 13, label, ink, 0);
+    ui.zone(r, a);
+}
+
+fn place_icon(name: &str) -> Icon {
+    match name {
+        "Documents" => Icon::Doc,
+        "Pictures" => Icon::Image,
+        "Downloads" => Icon::Download,
+        "Shared" => Icon::Link,
+        "Bin" => Icon::Trash,
+        _ => Icon::Folder,
+    }
+}
+
+/// A folder's picture and colour, by its name: warm for the everyday ones,
+/// plum and slate for the rest, so a folder looks the same wherever it shows.
+fn folder_style(t: &crate::theme::Theme, name: &str) -> (Icon, Color) {
+    let lower = name.to_ascii_lowercase();
+    let warm = t.accent;
+    let light = t.accent.mix(t.sun, 110);
+    let plum = Color::rgb(0x6E4462).mix(t.accent, 40);
+    let violet = Color::rgb(0x6A5280);
+    let navy = t.dune3.mix(Color::rgb(0x2B2A48), 128);
+    let slate = Color::rgb(0x5D6079);
+    let k = |w: &str| lower.contains(w);
+    if k("desktop") {
+        (Icon::Monitor, warm)
+    } else if k("document") || k("school") || k("invoice") {
+        (Icon::Doc, plum)
+    } else if k("download") {
+        (Icon::Download, warm)
+    } else if k("picture") || k("photo") || k("image") {
+        (Icon::Image, light)
+    } else if k("music") || k("audio") {
+        (Icon::Music, violet)
+    } else if k("video") || k("movie") {
+        (Icon::Video, slate)
+    } else if k("project") || k("work") {
+        (Icon::Folder, navy)
+    } else if k("archive") || k("backup") || k("old") {
+        (Icon::Archive, slate)
+    } else if k("shared") {
+        (Icon::Link, light)
+    } else if k("present") || k("slide") {
+        (Icon::Slides, warm)
+    } else {
+        let pick = [warm, plum, navy, light, violet, slate];
+        let h = name.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+        (Icon::Folder, pick[h as usize % pick.len()])
+    }
+}
+
+/// A file's icon and its colour (the Recent list shows them on a chip).
+fn file_style(t: &crate::theme::Theme, name: &str) -> (Icon, Color) {
+    let ic = file_icon(name, false);
+    let lower = name.to_ascii_lowercase();
+    let col = match ic {
+        Icon::Scripts => Color::rgb(0x2F5DA8),
+        Icon::Sheet => Color::rgb(0x2E7D4F),
+        Icon::Slides => Color::rgb(0xC0562B),
+        _ if [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].iter().any(|e| lower.ends_with(e)) => Color::rgb(0x6B47B8),
+        Icon::Image => Color::rgb(0x6B47B8),
+        _ => t.accent,
+    };
+    let ic = if col == Color::rgb(0x6B47B8) { Icon::Image } else { ic };
+    (ic, col)
+}
+
+/// A folder drawn filled, in `col`, with `glyph` on its front.
+fn folder(ui: &mut Ui, r: Rect, glyph: Icon, col: Color) {
+    let back = col.mix(Color::rgb(0x000000), 50);
+    let (x, y, w, h) = (r.x + 1, r.y + 5, r.w - 2, r.h - 8);
+    ui.rrect(Rect::new(x, y, w * 2 / 5, 12), 5, back);
+    ui.rrect(Rect::new(x, y + 5, w, h - 5), 8, back);
+    let front = Rect::new(x, y + 11, w, h - 11);
+    ui.rrect(front, 8, col);
+    ui.rect(Rect::new(front.x + 6, front.y, front.w - 12, 1), col.mix(Color::rgb(0xFFFFFF), 70));
+    ui.icon_in(glyph, front, 18, Color::rgba(0xFFFFFF, 235));
 }

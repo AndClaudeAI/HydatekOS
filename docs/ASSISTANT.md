@@ -1,7 +1,7 @@
 # Claude, the HydatekOS assistant
 
 HydatekOS's assistant is **Claude**, made by Anthropic. HydatekOS doesn't use or
-offer any other assistant. Claude answers in its own app (first in the dock, or
+offer any other assistant. Claude answers in its own app (on the app rail, or
 **Gen+Space** and type *Claude*). It can explain how to do things in HydatekOS,
 write and rewrite text, plan, summarise and answer questions.
 
